@@ -1,0 +1,12 @@
+{
+  "projectId": "revida-social-network",
+  "appId": "1:162859411258:web:aa9245b82a9e599c9c1203",
+  "apiKey": "AIzaSyAjLgodmYaA44CJcyaAhbPYnTMWyqWk7I0",
+  "authDomain": "revida-social-network.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-3424bd97-b7f6-47ad-860c-3a66747d5928",
+  "storageBucket": "revida-social-network.firebasestorage.app",
+  "messagingSenderId": "162859411258",
+  "measurementId": "",
+  "oAuthClientId": "162859411258-r0a2ksh9e7rtv4fpom7quor284g3qfdb.apps.googleusercontent.com",
+  "recaptchaSiteKey": ""
+}

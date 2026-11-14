@@ -1,0 +1,6 @@
+{
+  "name": "Baraza — Jukwaa la Mijadala",
+  "description": "Mfumo wa kisasa wa mijadala unaoruhusu watumiaji kuchapisha mada, kujibu kwa mpangilio, kupiga kura, na kushiriki kwa usalama na ufanisi.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

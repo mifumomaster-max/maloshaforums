@@ -1,0 +1,484 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Global Helpers
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.email == 'mifumomaster@gmail.com' && request.auth.token.email_verified == true) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // 3. Entity Validation Blueprints
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll([
+          'uid', 'displayName', 'photoURL', 'bio', 'role',
+          'topicsCount', 'repliesCount', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'displayName', 'photoURL', 'bio', 'role', 'verificationBadge',
+          'topicsCount', 'repliesCount', 'createdAt', 'updatedAt'
+        ])
+        && data.uid is string && data.uid == userId && data.uid.size() >= 1 && data.uid.size() <= 128
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && data.photoURL is string && data.photoURL.size() <= 500
+        && data.bio is string && data.bio.size() <= 300
+        && data.role in ['member', 'moderator']
+        && (!('verificationBadge' in data) || (data.verificationBadge is string && data.verificationBadge in ['none', 'individual', 'organization', 'government', 'owner']))
+        && data.topicsCount is int && data.topicsCount >= 0
+        && data.repliesCount is int && data.repliesCount >= 0
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPrivateInfo(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'createdAt', 'updatedAt'])
+        && data.uid is string && data.uid == userId && data.uid.size() >= 1 && data.uid.size() <= 128
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTagsList(tags) {
+      return tags is list
+        && tags.size() <= 5
+        && (tags.size() == 0 || (tags[0] is string && tags[0].size() >= 1 && tags[0].size() <= 30));
+    }
+
+    function isValidTopic(data) {
+      return data.keys().hasAll([
+          'title', 'body', 'category', 'tags', 'authorId', 'authorName', 'authorPhoto',
+          'status', 'isPinned', 'repliesCount', 'upvotesCount', 'acceptedReplyId',
+          'createdAt', 'updatedAt', 'lastActivityAt'
+        ])
+        && data.keys().hasOnly([
+          'title', 'body', 'category', 'tags', 'authorId', 'authorName', 'authorPhoto',
+          'status', 'isPinned', 'repliesCount', 'upvotesCount', 'acceptedReplyId',
+          'company', 'location', 'jobType', 'deadline', 'applyInfo', 'coverImage',
+          'createdAt', 'updatedAt', 'lastActivityAt'
+        ])
+        && data.title is string && data.title.size() <= 140
+        && data.body is string && data.body.size() <= 8000
+        && (
+          (data.title.size() >= 5 && data.body.size() >= 10) ||
+          (data.category == 'Kijiweni' && 'coverImage' in data && data.coverImage is string && data.coverImage.size() >= 10 && data.coverImage.size() <= 500)
+        )
+        && data.category in [
+          'Kijiweni', 'Fursa', 'Makala',
+          'Habari na Hoja', 'Jukwaa la Siasa', 'Jamii Intelligence',
+          'Biashara & Uchumi', 'Mahusiano (MMU)', 'Teknolojia & Sayansi',
+          'Elimu & Ajira', 'Michezo & Burudani',
+          'Teknolojia', 'Biashara', 'Elimu', 'Jamii', 'Sayansi', 'Michezo'
+        ]
+        && isValidTagsList(data.tags)
+        && data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80
+        && data.authorPhoto is string && data.authorPhoto.size() <= 500
+        && data.status in ['open', 'locked', 'archived']
+        && data.isPinned is bool
+        && data.repliesCount is int && data.repliesCount >= 0
+        && data.upvotesCount is int && data.upvotesCount >= 0
+        && data.acceptedReplyId is string && data.acceptedReplyId.size() <= 128
+        && (!('company' in data) || (data.company is string && data.company.size() <= 100))
+        && (!('location' in data) || (data.location is string && data.location.size() <= 100))
+        && (!('jobType' in data) || (data.jobType is string && data.jobType.size() <= 40))
+        && (!('deadline' in data) || (data.deadline is string && data.deadline.size() <= 60))
+        && (!('applyInfo' in data) || (data.applyInfo is string && data.applyInfo.size() <= 300))
+        && (!('coverImage' in data) || (data.coverImage is string && data.coverImage.size() <= 500))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.lastActivityAt is timestamp;
+    }
+
+    function isValidReply(data, topicId) {
+      return data.keys().hasAll([
+          'topicId', 'authorId', 'authorName', 'authorPhoto', 'body',
+          'parentReplyId', 'isAcceptedAnswer', 'upvotesCount', 'isDeleted',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'topicId', 'authorId', 'authorName', 'authorPhoto', 'body',
+          'parentReplyId', 'isAcceptedAnswer', 'upvotesCount', 'isDeleted',
+          'createdAt', 'updatedAt'
+        ])
+        && data.topicId is string && data.topicId == topicId && data.topicId.size() <= 128
+        && data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80
+        && data.authorPhoto is string && data.authorPhoto.size() <= 500
+        && data.body is string && data.body.size() >= 2 && data.body.size() <= 4000
+        && data.parentReplyId is string && data.parentReplyId.size() <= 128
+        && data.isAcceptedAnswer is bool
+        && data.upvotesCount is int && data.upvotesCount >= 0
+        && data.isDeleted is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidVote(data, userId) {
+      return data.keys().hasAll(['userId', 'createdAt'])
+        && data.keys().hasOnly(['userId', 'createdAt'])
+        && data.userId is string && data.userId == userId && data.userId.size() >= 1 && data.userId.size() <= 128
+        && data.createdAt is timestamp;
+    }
+
+    function isValidReport(data) {
+      return data.keys().hasAll([
+          'reporterId', 'targetType', 'targetId', 'topicId',
+          'reason', 'details', 'status', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'reporterId', 'targetType', 'targetId', 'topicId',
+          'reason', 'details', 'status', 'createdAt'
+        ])
+        && data.reporterId is string && data.reporterId.size() >= 1 && data.reporterId.size() <= 128
+        && data.targetType in ['topic', 'reply']
+        && data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128
+        && data.topicId is string && data.topicId.size() >= 1 && data.topicId.size() <= 128
+        && data.reason in ['spam', 'harassment', 'misinformation', 'unlawful', 'other']
+        && data.details is string && data.details.size() <= 500
+        && data.status in ['pending', 'reviewed', 'dismissed']
+        && data.createdAt is timestamp;
+    }
+
+    // 4. Admins Collection
+    match /admins/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (userId == request.auth.uid || isAdmin());
+      allow list, create, update, delete: if false;
+    }
+
+    // 5. Public User Profiles + Isolated PII Subcollection
+    match /users/{userId} {
+      allow get: if isValidId(userId);
+      allow list: if isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+
+      allow create: if isSignedIn()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && (incoming().role == 'member' || isAdmin())
+        && (!('verificationBadge' in incoming()) || incoming().verificationBadge == 'none' || isAdmin())
+        && incoming().topicsCount == 0
+        && incoming().repliesCount == 0
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isSignedIn()
+        && isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            isOwner(userId) &&
+            incoming().role == existing().role &&
+            (
+              (!('verificationBadge' in incoming()) && !('verificationBadge' in existing())) ||
+              ('verificationBadge' in existing() && 'verificationBadge' in incoming() && incoming().verificationBadge == existing().verificationBadge) ||
+              (!('verificationBadge' in existing()) && 'verificationBadge' in incoming() && incoming().verificationBadge == 'none')
+            ) &&
+            (
+              incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'bio', 'updatedAt']) ||
+              (
+                incoming().diff(existing()).affectedKeys().hasOnly(['topicsCount', 'updatedAt']) &&
+                (incoming().topicsCount == existing().topicsCount + 1 || incoming().topicsCount == existing().topicsCount - 1)
+              ) ||
+              (
+                incoming().diff(existing()).affectedKeys().hasOnly(['repliesCount', 'updatedAt']) &&
+                (incoming().repliesCount == existing().repliesCount + 1 || incoming().repliesCount == existing().repliesCount - 1)
+              )
+            )
+          )
+        );
+
+      allow delete: if isAdmin() && isValidId(userId);
+
+      match /private/{docId} {
+        allow get: if isValidId(userId) && docId == 'info' && (isOwner(userId) || isAdmin());
+        allow list: if false;
+
+        allow create: if isSignedIn()
+          && isValidId(userId)
+          && docId == 'info'
+          && isOwner(userId)
+          && isValidPrivateInfo(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+
+        allow update: if isSignedIn()
+          && isValidId(userId)
+          && docId == 'info'
+          && isOwner(userId)
+          && isValidPrivateInfo(incoming(), userId)
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'updatedAt']);
+
+        allow delete: if (isOwner(userId) || isAdmin()) && isValidId(userId) && docId == 'info';
+      }
+    }
+
+    // 6. Forum Topics & Subcollections
+    match /topics/{topicId} {
+      allow get: if isValidId(topicId)
+        && (existing().status in ['open', 'locked'] || isAdmin() || (isSignedIn() && existing().authorId == request.auth.uid));
+
+      allow list: if resource.data.status in ['open', 'locked']
+        || isAdmin()
+        || (isSignedIn() && resource.data.authorId == request.auth.uid);
+
+      allow create: if isSignedIn()
+        && isValidId(topicId)
+        && isValidTopic(incoming())
+        && incoming().authorId == request.auth.uid
+        && incoming().status == 'open'
+        && (incoming().isPinned == false || isAdmin())
+        && incoming().repliesCount == 0
+        && incoming().upvotesCount == 0
+        && incoming().acceptedReplyId == ''
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && incoming().lastActivityAt == request.time;
+
+      allow update: if isSignedIn()
+        && isValidId(topicId)
+        && isValidTopic(incoming())
+        && incoming().authorId == existing().authorId
+        && incoming().createdAt == existing().createdAt
+        && (existing().status != 'archived' || isAdmin())
+        && (
+          // Action 1: Admin Moderation
+          (
+            isAdmin() &&
+            incoming().updatedAt == request.time
+          ) ||
+          // Action 2: Author Content Edit
+          (
+            existing().authorId == request.auth.uid &&
+            existing().status == 'open' &&
+            incoming().updatedAt == request.time &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'body', 'category', 'tags',
+              'company', 'location', 'jobType', 'deadline', 'applyInfo', 'coverImage',
+              'updatedAt'
+            ])
+          ) ||
+          // Action 3: Author Lock / Archive
+          (
+            existing().authorId == request.auth.uid &&
+            existing().status in ['open', 'locked'] &&
+            incoming().status in ['open', 'locked', 'archived'] &&
+            incoming().updatedAt == request.time &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          ) ||
+          // Action 4: Author Accepts Best Reply
+          (
+            existing().authorId == request.auth.uid &&
+            incoming().updatedAt == request.time &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['acceptedReplyId', 'updatedAt'])
+          ) ||
+          // Action 5: Reply Activity Counter Sync
+          (
+            existing().status == 'open' &&
+            incoming().updatedAt == request.time &&
+            incoming().lastActivityAt == request.time &&
+            (incoming().repliesCount == existing().repliesCount + 1 || incoming().repliesCount == existing().repliesCount - 1) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['repliesCount', 'lastActivityAt', 'updatedAt'])
+          ) ||
+          // Action 6: Atomic Upvote Sync
+          (
+            existing().status in ['open', 'locked'] &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['upvotesCount']) &&
+            (
+              (
+                incoming().upvotesCount == existing().upvotesCount + 1 &&
+                !exists(/databases/$(database)/documents/topics/$(topicId)/votes/$(request.auth.uid)) &&
+                existsAfter(/databases/$(database)/documents/topics/$(topicId)/votes/$(request.auth.uid))
+              ) ||
+              (
+                incoming().upvotesCount == existing().upvotesCount - 1 &&
+                exists(/databases/$(database)/documents/topics/$(topicId)/votes/$(request.auth.uid)) &&
+                !existsAfter(/databases/$(database)/documents/topics/$(topicId)/votes/$(request.auth.uid))
+              )
+            )
+          )
+        );
+
+      allow delete: if isSignedIn()
+        && isValidId(topicId)
+        && (existing().authorId == request.auth.uid || isAdmin());
+
+      // Topic Votes
+      match /votes/{userId} {
+        allow get: if isSignedIn() && isValidId(topicId) && isValidId(userId) && userId == request.auth.uid;
+        allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+
+        allow create: if isSignedIn()
+          && isValidId(topicId)
+          && isValidId(userId)
+          && userId == request.auth.uid
+          && isValidVote(incoming(), userId)
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/topics/$(topicId));
+
+        allow update: if false;
+        allow delete: if isSignedIn() && isValidId(topicId) && isValidId(userId) && userId == request.auth.uid;
+      }
+
+      // Topic Replies Subcollection
+      match /replies/{replyId} {
+        allow get: if isValidId(topicId)
+          && isValidId(replyId)
+          && (existing().isDeleted == false || isAdmin() || (isSignedIn() && existing().authorId == request.auth.uid));
+
+        allow list: if resource.data.isDeleted == false
+          || isAdmin()
+          || (isSignedIn() && resource.data.authorId == request.auth.uid);
+
+        allow create: if isSignedIn()
+          && isValidId(topicId)
+          && isValidId(replyId)
+          && isValidReply(incoming(), topicId)
+          && incoming().authorId == request.auth.uid
+          && incoming().isAcceptedAnswer == false
+          && incoming().upvotesCount == 0
+          && incoming().isDeleted == false
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/topics/$(topicId))
+          && get(/databases/$(database)/documents/topics/$(topicId)).data.status == 'open'
+          && getAfter(/databases/$(database)/documents/topics/$(topicId)).data.repliesCount ==
+             get(/databases/$(database)/documents/topics/$(topicId)).data.repliesCount + 1;
+
+        allow update: if isSignedIn()
+          && isValidId(topicId)
+          && isValidId(replyId)
+          && isValidReply(incoming(), topicId)
+          && incoming().topicId == existing().topicId
+          && incoming().authorId == existing().authorId
+          && incoming().createdAt == existing().createdAt
+          && (
+            // Action 1: Admin Moderation
+            (
+              isAdmin() &&
+              incoming().updatedAt == request.time
+            ) ||
+            // Action 2: Author Reply Edit
+            (
+              existing().authorId == request.auth.uid &&
+              existing().isDeleted == false &&
+              get(/databases/$(database)/documents/topics/$(topicId)).data.status == 'open' &&
+              incoming().updatedAt == request.time &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['body', 'updatedAt'])
+            ) ||
+            // Action 3: Author Soft Delete
+            (
+              existing().authorId == request.auth.uid &&
+              existing().isDeleted == false &&
+              incoming().isDeleted == true &&
+              incoming().updatedAt == request.time &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['isDeleted', 'body', 'updatedAt'])
+            ) ||
+            // Action 4: Topic Author Accepts / Unaccepts Reply
+            (
+              get(/databases/$(database)/documents/topics/$(topicId)).data.authorId == request.auth.uid &&
+              incoming().updatedAt == request.time &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['isAcceptedAnswer', 'updatedAt'])
+            ) ||
+            // Action 5: Atomic Reply Upvote Sync
+            (
+              existing().isDeleted == false &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['upvotesCount']) &&
+              (
+                (
+                  incoming().upvotesCount == existing().upvotesCount + 1 &&
+                  !exists(/databases/$(database)/documents/topics/$(topicId)/replies/$(replyId)/votes/$(request.auth.uid)) &&
+                  existsAfter(/databases/$(database)/documents/topics/$(topicId)/replies/$(replyId)/votes/$(request.auth.uid))
+                ) ||
+                (
+                  incoming().upvotesCount == existing().upvotesCount - 1 &&
+                  exists(/databases/$(database)/documents/topics/$(topicId)/replies/$(replyId)/votes/$(request.auth.uid)) &&
+                  !existsAfter(/databases/$(database)/documents/topics/$(topicId)/replies/$(replyId)/votes/$(request.auth.uid))
+                )
+              )
+            )
+          );
+
+        allow delete: if isSignedIn()
+          && isValidId(topicId)
+          && isValidId(replyId)
+          && (existing().authorId == request.auth.uid || isAdmin());
+
+        // Reply Votes
+        match /votes/{userId} {
+          allow get: if isSignedIn() && isValidId(topicId) && isValidId(replyId) && isValidId(userId) && userId == request.auth.uid;
+          allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+
+          allow create: if isSignedIn()
+            && isValidId(topicId)
+            && isValidId(replyId)
+            && isValidId(userId)
+            && userId == request.auth.uid
+            && isValidVote(incoming(), userId)
+            && incoming().createdAt == request.time
+            && exists(/databases/$(database)/documents/topics/$(topicId)/replies/$(replyId));
+
+          allow update: if false;
+          allow delete: if isSignedIn() && isValidId(topicId) && isValidId(replyId) && isValidId(userId) && userId == request.auth.uid;
+        }
+      }
+    }
+
+    // 7. Moderation Reports
+    match /reports/{reportId} {
+      allow get: if isSignedIn() && isValidId(reportId) && (isAdmin() || existing().reporterId == request.auth.uid);
+      allow list: if isSignedIn() && (isAdmin() || resource.data.reporterId == request.auth.uid);
+
+      allow create: if isSignedIn()
+        && isValidId(reportId)
+        && isValidReport(incoming())
+        && incoming().reporterId == request.auth.uid
+        && incoming().status == 'pending'
+        && incoming().createdAt == request.time
+        && exists(/databases/$(database)/documents/topics/$(incoming().topicId));
+
+      allow update: if isAdmin()
+        && isValidId(reportId)
+        && isValidReport(incoming())
+        && incoming().reporterId == existing().reporterId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status']);
+
+      allow delete: if isAdmin() && isValidId(reportId);
+    }
+  }
+}

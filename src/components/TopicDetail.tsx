@@ -1,0 +1,838 @@
+import React, { useEffect, useState } from 'react';
+import {
+  ArrowLeft,
+  Briefcase,
+  Building2,
+  Calendar,
+  CheckCircle2,
+  ChevronRight,
+  Clock,
+  Edit3,
+  ExternalLink,
+  Flag,
+  Heart,
+  Lock,
+  MapPin,
+  MessageCircle,
+  Pin,
+  Share2,
+  Trash2,
+  Unlock,
+} from 'lucide-react';
+import {
+  Topic,
+  getMakalaSection,
+  normalizeBoardCategory,
+  resolveMakalaCover,
+} from '../types';
+import { estimateReadMinutes } from '../utils/formatters';
+import { useLanguage } from '../context/LanguageContext';
+import { Avatar } from './Avatar';
+import { LinkedText, RichText, extractFirstUrl } from './RichText';
+import { FacebookCommentsThread } from './FacebookCommentsThread';
+import { AuthorVerificationBadge } from './VerificationBadge';
+
+interface TopicDetailProps {
+  topic: Topic;
+  latestMakala?: Topic[];
+  onOpenTopic?: (topicId: string) => void;
+  userUid: string | null;
+  userDisplayName: string;
+  userPhoto: string;
+  isAdmin: boolean;
+  hasVotedTopic: boolean;
+  onBack: () => void;
+  onSelectBoard: (board: Topic['category']) => void;
+  onToggleTopicVote: (topic: Topic) => void;
+  onShareTopic: (topic: Topic) => void;
+  onEditTopic: (topic: Topic) => void;
+  onToggleLock: (topic: Topic) => void;
+  onTogglePin: (topic: Topic) => void;
+  onDeleteTopic: (topic: Topic) => void;
+  onOpenReport: (targetType: 'topic' | 'reply', targetId: string) => void;
+  onSignIn: () => void;
+  onToast: (message: string, kind?: 'success' | 'error') => void;
+  onRequestConfirm: (opts: {
+    title: string;
+    message: string;
+    confirmLabel: string;
+    destructive: boolean;
+    action: () => Promise<void>;
+  }) => void;
+}
+
+export const TopicDetail: React.FC<TopicDetailProps> = ({
+  topic,
+  latestMakala = [],
+  onOpenTopic,
+  userUid,
+  userDisplayName,
+  userPhoto,
+  isAdmin,
+  hasVotedTopic,
+  onBack,
+  onSelectBoard,
+  onToggleTopicVote,
+  onShareTopic,
+  onEditTopic,
+  onToggleLock,
+  onTogglePin,
+  onDeleteTopic,
+  onOpenReport,
+  onSignIn,
+  onToast,
+  onRequestConfirm,
+}) => {
+  const { tr, formatTime, getBoardLabel, getJobTypeLabel, getMakalaSectionLabel } = useLanguage();
+  const [coverFailed, setCoverFailed] = useState(false);
+
+  useEffect(() => {
+    setCoverFailed(false);
+  }, [topic.id, topic.coverImage]);
+
+  const isTopicAuthor = userUid !== null && topic.authorId === userUid;
+  const canManageTopic = isTopicAuthor || isAdmin;
+  const normalizedBoard = normalizeBoardCategory(topic.category);
+  const isMakala = normalizedBoard === 'Makala';
+  const isFursa = normalizedBoard === 'Fursa';
+  const isKijiweni = normalizedBoard === 'Kijiweni';
+  const readMinutes = estimateReadMinutes(topic.body);
+
+  const otherLatestMakala = latestMakala.filter((item) => item.id !== topic.id).slice(0, 6);
+  const makalaSection = getMakalaSection(topic.tags);
+
+  return (
+    <div className={`mx-auto px-3.5 py-4 sm:px-6 sm:py-6 ${isMakala ? 'max-w-6xl' : 'max-w-4xl'}`}>
+      {/* Mobile Back Button + Desktop Breadcrumb */}
+      <div className="mb-3 flex items-center justify-between sm:mb-4">
+        <button
+          type="button"
+          onClick={onBack}
+          className="inline-flex min-h-[40px] items-center gap-1.5 text-xs font-semibold text-[#1D4E89] hover:underline md:hidden"
+        >
+          <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+          <span>{tr('Rudi Nyuma', 'Back')}</span>
+        </button>
+
+        <nav
+          aria-label={tr('Njia ya chapisho', 'Breadcrumb')}
+          className="hidden md:flex flex-wrap items-center gap-1.5 text-xs text-slate-600"
+        >
+          <button
+            type="button"
+            onClick={onBack}
+            className="font-medium text-[#1D4E89] hover:underline"
+          >
+            {tr('Mada Zote', 'All Topics')}
+          </button>
+          <ChevronRight className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
+          <button
+            type="button"
+            onClick={() => onSelectBoard(normalizedBoard)}
+            className="font-medium text-[#1D4E89] hover:underline"
+          >
+            {getBoardLabel(normalizedBoard)}
+          </button>
+          <ChevronRight className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
+          <span className="max-w-md truncate text-slate-800">
+            {topic.title.trim() || tr('Chapisho la Picha', 'Photo Post')}
+          </span>
+        </nav>
+      </div>
+
+      {/* Main Content Presentation */}
+      {isMakala ? (
+        /* ── MAKALA: BBC News Swahili Reader & Latest News Sidebar ─────────────── */
+        <div className="space-y-6">
+          {/* BBC Crimson Top Strip */}
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-[#B80000] px-4 py-3 text-white sm:px-6">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1" aria-hidden="true">
+                {['M', 'A', 'L', 'O', 'S', 'H', 'A'].map((letter, idx) => (
+                  <span
+                    key={idx}
+                    className="inline-flex h-6 w-5 items-center justify-center bg-white font-sans text-xs font-black text-[#B80000]"
+                  >
+                    {letter}
+                  </span>
+                ))}
+              </div>
+              <span className="border-l border-white/30 pl-3 text-xs font-black tracking-wide uppercase">
+                {tr('Makala', 'Articles')} · {getMakalaSectionLabel(makalaSection)}
+              </span>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => onSelectBoard('Makala')}
+              className="text-xs font-bold text-white/95 underline-offset-4 hover:underline whitespace-nowrap shrink-0"
+            >
+              {tr('Makala Zote Mpya →', 'All Latest Articles →')}
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 lg:items-start">
+            {/* Main Essay Column (8 cols) */}
+            <div className="space-y-5 lg:col-span-8">
+              <article className="overflow-hidden border border-slate-200 bg-white">
+                <div className="px-5 py-6 sm:px-8 sm:py-8">
+                  <div className="mb-2 flex items-center gap-2 text-xs font-bold text-[#B80000] uppercase">
+                    <span>{getMakalaSectionLabel(makalaSection)}</span>
+                  </div>
+
+                  <h1 className="font-display text-2xl font-bold leading-tight text-slate-950 sm:text-4xl [text-wrap:balance]">
+                    {topic.title}
+                  </h1>
+
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-y border-slate-200 py-3 text-xs text-slate-600">
+                    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                      <span className="inline-flex items-center gap-1.5 font-bold text-slate-900">
+                        <Avatar name={topic.authorName} photoURL={topic.authorPhoto} size="sm" />
+                        <span>
+                          {tr('Na', 'By')} {topic.authorName}
+                        </span>
+                        <AuthorVerificationBadge uid={topic.authorId} size="xs" />
+                      </span>
+                      <span aria-hidden="true">·</span>
+                      <span>{formatTime(topic.createdAt)}</span>
+                      <span aria-hidden="true">·</span>
+                      <span className="inline-flex items-center gap-1">
+                        <Clock className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
+                        <span>
+                          {tr(
+                            `Dakika ${readMinutes} za kusoma`,
+                            `${readMinutes} min read`
+                          )}
+                        </span>
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onShareTopic(topic)}
+                        className="inline-flex min-h-[34px] items-center gap-1 border border-slate-200 bg-white px-2.5 py-1 font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>{tr('Shiriki', 'Share')}</span>
+                      </button>
+                      {canManageTopic && topic.status === 'open' && (
+                        <button
+                          type="button"
+                          onClick={() => onEditTopic(topic)}
+                          className="inline-flex min-h-[34px] items-center gap-1 border border-slate-200 px-2.5 py-1 font-medium text-slate-700 hover:bg-slate-50"
+                        >
+                          <Edit3 className="h-3 w-3" aria-hidden="true" />
+                          <span>{tr('Hariri', 'Edit')}</span>
+                        </button>
+                      )}
+                      {canManageTopic && (
+                        <button
+                          type="button"
+                          onClick={() => onDeleteTopic(topic)}
+                          className="inline-flex min-h-[34px] items-center gap-1 border border-red-200 px-2.5 py-1 font-medium text-red-700 hover:bg-red-50"
+                        >
+                          <Trash2 className="h-3 w-3" aria-hidden="true" />
+                          <span>{tr('Futa', 'Delete')}</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {topic.coverImage && !coverFailed && (
+                    <figure className="my-6 overflow-hidden border border-slate-200 bg-slate-100">
+                      <img
+                        src={resolveMakalaCover(topic.coverImage)}
+                        alt={topic.title}
+                        referrerPolicy="no-referrer"
+                        onError={() => setCoverFailed(true)}
+                        className="aspect-[16/9] w-full object-cover"
+                      />
+                      <figcaption className="border-t border-slate-200 bg-[#F6F6F6] px-4 py-2 text-xs text-slate-600">
+                        {tr('Picha', 'Photo')}: Malosha Forums · {topic.title}
+                      </figcaption>
+                    </figure>
+                  )}
+
+                  <div className="mx-auto max-w-prose py-2">
+                    <RichText
+                      content={topic.body}
+                      className="[&>p:first-of-type]:first-letter:float-left [&>p:first-of-type]:first-letter:mr-3 [&>p:first-of-type]:first-letter:mt-1 [&>p:first-of-type]:first-letter:font-display [&>p:first-of-type]:first-letter:text-5xl [&>p:first-of-type]:first-letter:font-bold [&>p:first-of-type]:first-letter:text-[#B80000]"
+                    />
+                  </div>
+
+                  {topic.tags.length > 0 && (
+                    <div className="mt-6 border-t border-slate-100 pt-3 text-xs text-slate-500">
+                      {tr('Mada husika:', 'Tags:')} {topic.tags.map((t) => `#${t}`).join(' ')}
+                    </div>
+                  )}
+
+                  <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4 text-xs">
+                    <div className="flex items-center gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => onToggleTopicVote(topic)}
+                        aria-pressed={hasVotedTopic}
+                        className={`inline-flex min-h-[40px] items-center gap-1.5 border px-3.5 py-1.5 font-semibold transition-colors ${
+                          hasVotedTopic
+                            ? 'border-rose-300 bg-rose-50 text-rose-700'
+                            : 'border-slate-300 bg-white text-slate-800 hover:bg-slate-50'
+                        }`}
+                      >
+                        <Heart
+                          className={`h-4 w-4 ${hasVotedTopic ? 'fill-rose-600 text-rose-600' : ''}`}
+                          aria-hidden="true"
+                        />
+                        <span>{tr('Penda', 'Like')}</span>
+                        <span className="font-mono tabular-nums">({topic.upvotesCount})</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => onShareTopic(topic)}
+                        className="inline-flex min-h-[40px] items-center gap-1.5 border border-slate-300 bg-white px-3.5 py-1.5 font-semibold text-slate-800 hover:bg-slate-50"
+                      >
+                        <Share2 className="h-4 w-4" aria-hidden="true" />
+                        <span>{tr('Shiriki Makala', 'Share Article')}</span>
+                      </button>
+                    </div>
+
+                    {userUid && !isTopicAuthor && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenReport('topic', topic.id)}
+                        className="inline-flex min-h-[40px] items-center gap-1 text-slate-500 hover:text-red-700"
+                      >
+                        <Flag className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>{tr('Ripoti', 'Report')}</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </article>
+
+              {/* Comments Section Inside Main Column for BBC Reader */}
+              <section
+                id="comments-thread"
+                aria-label={tr('Maoni na majibu', 'Comments and replies')}
+                className="border border-slate-200 bg-white p-4 sm:p-6"
+              >
+                <h2 className="mb-3 font-sans text-sm font-black tracking-wide text-slate-900 uppercase">
+                  {tr('Maoni ya Wasomaji', 'Reader Comments')} ({topic.repliesCount})
+                </h2>
+
+                <FacebookCommentsThread
+                  topic={topic}
+                  userUid={userUid}
+                  userDisplayName={userDisplayName}
+                  userPhoto={userPhoto}
+                  isAdmin={isAdmin}
+                  allowAcceptAnswer={false}
+                  onSignIn={onSignIn}
+                  onOpenReport={onOpenReport}
+                  onToast={onToast}
+                  onRequestConfirm={onRequestConfirm}
+                />
+              </section>
+            </div>
+
+            {/* Right Sidebar (4 cols): Makala Mpya Zaidi */}
+            <aside className="space-y-5 lg:col-span-4">
+              {otherLatestMakala.length > 0 && (
+                <div className="border border-slate-200 bg-white">
+                  <div className="border-b-2 border-[#B80000] bg-[#141414] px-4 py-2.5 text-white">
+                    <h2 className="text-xs font-black tracking-wider uppercase">
+                      {tr('Makala Mpya Zaidi', 'Latest Articles')}
+                    </h2>
+                  </div>
+                  <div className="divide-y divide-slate-200">
+                    {otherLatestMakala.map((item, idx) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => onOpenTopic?.(item.id)}
+                        className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-[#F6F6F6]"
+                      >
+                        <span className="font-display text-lg font-black leading-none text-[#B80000] tabular-nums shrink-0">
+                          {idx + 1}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="line-clamp-2 text-sm font-bold leading-snug text-slate-900 hover:text-[#B80000]">
+                            {item.title}
+                          </p>
+                          <p className="mt-1 text-[11px] text-slate-500">
+                            <span className="font-semibold text-[#B80000]">
+                              {getMakalaSectionLabel(getMakalaSection(item.tags))}
+                            </span>{' '}
+                            · {formatTime(item.createdAt)}
+                          </p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </aside>
+          </div>
+        </div>
+      ) : isKijiweni ? (
+        /* ── KIJIWENI: Clean Facebook-Style Standalone Post Card ───────────────── */
+        <article className="overflow-hidden rounded-xl border border-slate-200 bg-white sm:rounded-lg">
+          <div className="p-4 sm:p-6">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <Avatar name={topic.authorName} photoURL={topic.authorPhoto} size="md" />
+                <div>
+                  <div className="flex flex-wrap items-center gap-x-1.5">
+                    <span className="text-[15px] font-bold text-slate-900">
+                      {topic.authorName}
+                    </span>
+                    <AuthorVerificationBadge uid={topic.authorId} size="sm" />
+                    {topic.isPinned && (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#B45309]">
+                        · <Pin className="h-3 w-3" aria-hidden="true" /> {tr('Maalum', 'Pinned')}
+                      </span>
+                    )}
+                    {topic.status === 'locked' && (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-600">
+                        · <Lock className="h-3 w-3" aria-hidden="true" /> {tr('Imefungwa', 'Locked')}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    {formatTime(topic.createdAt)} · {getBoardLabel('Kijiweni')}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                {canManageTopic && topic.status === 'open' && (
+                  <button
+                    type="button"
+                    onClick={() => onEditTopic(topic)}
+                    className="inline-flex min-h-[34px] items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1 font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    <Edit3 className="h-3 w-3" aria-hidden="true" />
+                    <span>{tr('Hariri', 'Edit')}</span>
+                  </button>
+                )}
+                {canManageTopic && topic.status !== 'archived' && (
+                  <button
+                    type="button"
+                    onClick={() => onToggleLock(topic)}
+                    className="inline-flex min-h-[34px] items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1 font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    {topic.status === 'locked' ? (
+                      <>
+                        <Unlock className="h-3 w-3" aria-hidden="true" />
+                        <span>{tr('Fungua', 'Unlock')}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Lock className="h-3 w-3" aria-hidden="true" />
+                        <span>{tr('Funga', 'Lock')}</span>
+                      </>
+                    )}
+                  </button>
+                )}
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => onTogglePin(topic)}
+                    className="inline-flex min-h-[34px] items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1 font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    <Pin className="h-3 w-3" aria-hidden="true" />
+                    <span>{topic.isPinned ? tr('Ondoa Bandiko', 'Unpin') : tr('Bandika', 'Pin')}</span>
+                  </button>
+                )}
+                {canManageTopic && (
+                  <button
+                    type="button"
+                    onClick={() => onDeleteTopic(topic)}
+                    className="inline-flex min-h-[34px] items-center gap-1 rounded-md border border-red-200 px-2.5 py-1 font-medium text-red-700 hover:bg-red-50"
+                  >
+                    <Trash2 className="h-3 w-3" aria-hidden="true" />
+                    <span>{tr('Futa', 'Delete')}</span>
+                  </button>
+                )}
+                {userUid && !isTopicAuthor && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenReport('topic', topic.id)}
+                    className="inline-flex min-h-[34px] items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1 text-slate-500 hover:text-red-700"
+                  >
+                    <Flag className="h-3 w-3" aria-hidden="true" />
+                    <span>{tr('Ripoti', 'Report')}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {topic.title.trim() && (
+              <h1 className="mt-4 font-sans text-xl font-bold leading-snug text-slate-900 sm:text-2xl [text-wrap:balance]">
+                {topic.title}
+              </h1>
+            )}
+
+            {topic.body.trim() && (
+              <div className={topic.title.trim() ? 'mt-2.5' : 'mt-4'}>
+                <RichText content={topic.body} />
+              </div>
+            )}
+
+            {topic.coverImage && !coverFailed && (
+              <figure className="mt-4 overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
+                <img
+                  src={topic.coverImage}
+                  alt={topic.title.trim() || tr('Picha iliyochapishwa Kijiweni', 'Kijiweni photo post')}
+                  referrerPolicy="no-referrer"
+                  onError={() => setCoverFailed(true)}
+                  className="max-h-[520px] w-full object-cover"
+                />
+              </figure>
+            )}
+
+            {topic.tags.length > 0 && (
+              <p className="mt-3 text-xs text-slate-400">
+                {topic.tags.map((t) => `#${t}`).join(' ')}
+              </p>
+            )}
+
+            <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-xs text-slate-500">
+              <span className="inline-flex items-center gap-1.5 tabular-nums">
+                <Heart
+                  className={`h-3.5 w-3.5 ${
+                    topic.upvotesCount > 0 ? 'fill-rose-600 text-rose-600' : 'text-slate-400'
+                  }`}
+                  aria-hidden="true"
+                />
+                <span>
+                  {topic.upvotesCount === 0
+                    ? tr('Kuwa wa kwanza kupenda', 'Be the first to like')
+                    : topic.upvotesCount === 1
+                      ? tr('Mtu 1 amependa', '1 person liked this')
+                      : tr(
+                          `Watu ${topic.upvotesCount} wamependa`,
+                          `${topic.upvotesCount} people liked this`
+                        )}
+                </span>
+              </span>
+              <span className="tabular-nums">
+                {tr(`Maoni ${topic.repliesCount}`, `${topic.repliesCount} comments`)}
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 border-t border-slate-100 px-3 py-1 text-xs">
+            <button
+              type="button"
+              onClick={() => onToggleTopicVote(topic)}
+              aria-pressed={hasVotedTopic}
+              className={`inline-flex min-h-[42px] items-center justify-center gap-2 rounded-lg font-semibold transition-colors ${
+                hasVotedTopic
+                  ? 'text-rose-600 hover:bg-rose-50/70'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              }`}
+            >
+              <Heart
+                className={`h-4 w-4 ${hasVotedTopic ? 'fill-rose-600 text-rose-600' : ''}`}
+                aria-hidden="true"
+              />
+              <span>{tr('Penda', 'Like')}</span>
+            </button>
+
+            <a
+              href="#comments-thread"
+              className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-lg font-semibold text-[#1D4E89] hover:bg-sky-50"
+            >
+              <MessageCircle className="h-4 w-4" aria-hidden="true" />
+              <span>{tr('Maoni', 'Comments')}</span>
+            </a>
+
+            <button
+              type="button"
+              onClick={() => onShareTopic(topic)}
+              className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-lg font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
+            >
+              <Share2 className="h-4 w-4" aria-hidden="true" />
+              <span>{tr('Shiriki', 'Share')}</span>
+            </button>
+          </div>
+        </article>
+      ) : (
+        /* ── FURSA (and general board) Presentation ────────────────────────────── */
+        <>
+          <div className="mb-4 rounded-xl border border-slate-200 bg-white px-4 py-4 sm:mb-5 sm:rounded-lg sm:px-6 sm:py-5">
+            {(topic.isPinned || topic.status !== 'open' || topic.acceptedReplyId || isFursa) && (
+              <div className="mb-2 flex flex-wrap items-center gap-3 text-xs font-semibold">
+                {isFursa && (
+                  <span className="inline-flex items-center gap-1 text-[#1D4E89]">
+                    <Briefcase className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>{tr('Tangazo la Fursa / Ajira', 'Opportunity / Job Listing')}</span>
+                  </span>
+                )}
+                {topic.isPinned && (
+                  <span className="inline-flex items-center gap-1 text-[#B45309]">
+                    <Pin className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>{tr('Chapisho Maalum', 'Featured Post')}</span>
+                  </span>
+                )}
+                {topic.acceptedReplyId && (
+                  <span className="inline-flex items-center gap-1 text-emerald-800">
+                    <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>{tr('Imewekewa Jibu Rasmi', 'Accepted Answer')}</span>
+                  </span>
+                )}
+                {topic.status === 'locked' && (
+                  <span className="inline-flex items-center gap-1 text-slate-700">
+                    <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>{tr('Imefungwa', 'Locked')}</span>
+                  </span>
+                )}
+              </div>
+            )}
+
+            <h1 className="font-display text-xl font-bold leading-snug text-slate-900 sm:text-3xl [text-wrap:balance]">
+              {topic.title}
+            </h1>
+
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
+              <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                <span className="inline-flex items-center gap-1.5">
+                  <Avatar name={topic.authorName} photoURL={topic.authorPhoto} size="sm" />
+                  <span>
+                    {tr('Mchapishaji:', 'Posted by:')}{' '}
+                    <strong className="text-slate-800">{topic.authorName}</strong>
+                  </span>
+                  <AuthorVerificationBadge uid={topic.authorId} size="xs" />
+                </span>
+                <span aria-hidden="true">·</span>
+                <button
+                  type="button"
+                  onClick={() => onSelectBoard(normalizedBoard)}
+                  className="font-medium text-[#1D4E89] hover:underline"
+                >
+                  {getBoardLabel(normalizedBoard)}
+                </button>
+                <span aria-hidden="true">·</span>
+                <span>{formatTime(topic.createdAt)}</span>
+                {topic.tags.length > 0 && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span>{topic.tags.map((t) => `#${t}`).join(' ')}</span>
+                  </>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {canManageTopic && topic.status === 'open' && (
+                  <button
+                    type="button"
+                    onClick={() => onEditTopic(topic)}
+                    className="inline-flex min-h-[36px] items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1 font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    <Edit3 className="h-3 w-3" aria-hidden="true" />
+                    <span>{tr('Hariri', 'Edit')}</span>
+                  </button>
+                )}
+                {canManageTopic && topic.status !== 'archived' && (
+                  <button
+                    type="button"
+                    onClick={() => onToggleLock(topic)}
+                    className="inline-flex min-h-[36px] items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1 font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    {topic.status === 'locked' ? (
+                      <>
+                        <Unlock className="h-3 w-3" aria-hidden="true" />
+                        <span>{tr('Fungua', 'Unlock')}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Lock className="h-3 w-3" aria-hidden="true" />
+                        <span>{tr('Funga', 'Lock')}</span>
+                      </>
+                    )}
+                  </button>
+                )}
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => onTogglePin(topic)}
+                    className="inline-flex min-h-[36px] items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1 font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    <Pin className="h-3 w-3" aria-hidden="true" />
+                    <span>{topic.isPinned ? tr('Ondoa Bandiko', 'Unpin') : tr('Bandika', 'Pin')}</span>
+                  </button>
+                )}
+                {canManageTopic && (
+                  <button
+                    type="button"
+                    onClick={() => onDeleteTopic(topic)}
+                    className="inline-flex min-h-[36px] items-center gap-1 rounded-md border border-red-200 px-2.5 py-1 font-medium text-red-700 hover:bg-red-50"
+                  >
+                    <Trash2 className="h-3 w-3" aria-hidden="true" />
+                    <span>{tr('Futa', 'Delete')}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {isFursa && (topic.company || topic.location || topic.jobType || topic.deadline) && (
+            <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4 sm:mb-5 sm:rounded-lg sm:p-5">
+              <h2 className="text-xs font-bold tracking-wide text-slate-500 uppercase">
+                {tr('Maelezo ya Fursa', 'Opportunity Details')}
+              </h2>
+              <dl className="mt-3 grid grid-cols-1 gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                {topic.company && (
+                  <div>
+                    <dt className="flex items-center gap-1.5 text-xs text-slate-500">
+                      <Building2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>{tr('Shirika / Mwajiri', 'Company / Organization')}</span>
+                    </dt>
+                    <dd className="mt-1 font-semibold text-slate-900">{topic.company}</dd>
+                  </div>
+                )}
+                {topic.location && (
+                  <div>
+                    <dt className="flex items-center gap-1.5 text-xs text-slate-500">
+                      <MapPin className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>{tr('Mahali', 'Location')}</span>
+                    </dt>
+                    <dd className="mt-1 font-semibold text-slate-900">{topic.location}</dd>
+                  </div>
+                )}
+                {topic.jobType && (
+                  <div>
+                    <dt className="flex items-center gap-1.5 text-xs text-slate-500">
+                      <Briefcase className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>{tr('Aina ya Fursa', 'Opportunity Type')}</span>
+                    </dt>
+                    <dd className="mt-1 font-semibold text-slate-900">
+                      {getJobTypeLabel(topic.jobType)}
+                    </dd>
+                  </div>
+                )}
+                {topic.deadline && (
+                  <div>
+                    <dt className="flex items-center gap-1.5 text-xs text-slate-500">
+                      <Calendar className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>{tr('Mwisho wa Maombi', 'Application Deadline')}</span>
+                    </dt>
+                    <dd className="mt-1 font-semibold text-amber-800">{topic.deadline}</dd>
+                  </div>
+                )}
+              </dl>
+              {topic.applyInfo && (() => {
+                const applyUrl = extractFirstUrl(topic.applyInfo);
+                return (
+                  <div className="mt-4 flex flex-col justify-between gap-2.5 border-t border-slate-100 pt-3 text-xs text-slate-700 sm:flex-row sm:items-center">
+                    <div className="min-w-0">
+                      <strong className="text-slate-900">{tr('Namna ya Kuomba:', 'How to Apply:')} </strong>
+                      <LinkedText text={topic.applyInfo} className="break-words" />
+                    </div>
+                    {applyUrl && (
+                      <a
+                        href={applyUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex min-h-[38px] items-center justify-center gap-1.5 rounded-lg bg-[#1D4E89] px-3.5 py-1.5 font-semibold text-white transition-colors hover:bg-[#163A5F] whitespace-nowrap shrink-0"
+                      >
+                        <span>{tr('Omba Hapa', 'Apply Here')}</span>
+                        <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                      </a>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          <article className="overflow-hidden rounded-xl border border-slate-200 bg-white p-4 sm:rounded-lg sm:p-6">
+            <RichText content={topic.body} />
+
+            {topic.coverImage && !coverFailed && (
+              <figure className="mt-4 overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
+                <img
+                  src={topic.coverImage}
+                  alt={topic.title}
+                  referrerPolicy="no-referrer"
+                  onError={() => setCoverFailed(true)}
+                  className="max-h-[520px] w-full object-cover"
+                />
+              </figure>
+            )}
+
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3 text-xs">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onToggleTopicVote(topic)}
+                  aria-pressed={hasVotedTopic}
+                  className={`inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border px-3.5 py-1.5 font-medium transition-colors ${
+                    hasVotedTopic
+                      ? 'border-rose-300 bg-rose-50 text-rose-700'
+                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <Heart
+                    className={`h-4 w-4 ${hasVotedTopic ? 'fill-rose-600 text-rose-600' : ''}`}
+                    aria-hidden="true"
+                  />
+                  <span>{tr('Penda', 'Like')}</span>
+                  <span className="font-mono tabular-nums">({topic.upvotesCount})</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => onShareTopic(topic)}
+                  className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-1.5 font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>{tr('Shiriki', 'Share')}</span>
+                </button>
+              </div>
+
+              {userUid && !isTopicAuthor && (
+                <button
+                  type="button"
+                  onClick={() => onOpenReport('topic', topic.id)}
+                  className="inline-flex min-h-[40px] items-center gap-1 px-2 text-slate-500 hover:text-red-700"
+                >
+                  <Flag className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>{tr('Ripoti', 'Report')}</span>
+                </button>
+              )}
+            </div>
+          </article>
+        </>
+      )}
+
+      {/* Facebook-Style Threadlike Comments Section (for Kijiweni & Fursa; Makala renders inside its 8-col essay) */}
+      {!isMakala && (
+        <section
+          id="comments-thread"
+          aria-label={tr('Maoni na majibu', 'Comments and replies')}
+          className="mt-4 rounded-xl border border-slate-200 bg-white p-4 sm:mt-5 sm:rounded-lg sm:p-5"
+        >
+          <h2 className="mb-3 font-sans text-sm font-bold text-slate-900">
+            {tr('Maoni', 'Comments')} ({topic.repliesCount})
+          </h2>
+
+          <FacebookCommentsThread
+            topic={topic}
+            userUid={userUid}
+            userDisplayName={userDisplayName}
+            userPhoto={userPhoto}
+            isAdmin={isAdmin}
+            allowAcceptAnswer={!isKijiweni}
+            onSignIn={onSignIn}
+            onOpenReport={onOpenReport}
+            onToast={onToast}
+            onRequestConfirm={onRequestConfirm}
+          />
+        </section>
+      )}
+    </div>
+  );
+};

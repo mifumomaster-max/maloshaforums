@@ -1,0 +1,159 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public forum member profile without PII.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "photoURL": { "type": "string", "maxLength": 500 },
+        "bio": { "type": "string", "maxLength": 300 },
+        "role": { "type": "string", "enum": ["member", "moderator"] },
+        "verificationBadge": {
+          "type": "string",
+          "enum": ["none", "individual", "organization", "government", "owner"],
+          "description": "Account verification tier assigned by platform administrators."
+        },
+        "topicsCount": { "type": "integer" },
+        "repliesCount": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "photoURL", "bio", "role", "topicsCount", "repliesCount", "createdAt", "updatedAt"]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Private user account information (PII isolated from public reads).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "createdAt", "updatedAt"]
+    },
+    "Topic": {
+      "title": "Topic",
+      "description": "A discussion topic posted by a verified forum member.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "minLength": 0, "maxLength": 140, "description": "Required >= 5 chars unless posting an image-only Kijiweni post." },
+        "body": { "type": "string", "minLength": 0, "maxLength": 8000, "description": "Required >= 10 chars unless posting an image-only Kijiweni post." },
+        "category": {
+          "type": "string",
+          "enum": [
+            "Kijiweni", "Fursa", "Makala",
+            "Habari na Hoja", "Jukwaa la Siasa", "Jamii Intelligence",
+            "Biashara & Uchumi", "Mahusiano (MMU)", "Teknolojia & Sayansi",
+            "Elimu & Ajira", "Michezo & Burudani",
+            "Teknolojia", "Biashara", "Elimu", "Jamii", "Sayansi", "Michezo"
+          ]
+        },
+        "tags": { "type": "array", "description": "Up to 5 short topic tags." },
+        "authorId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "authorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "authorPhoto": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "enum": ["open", "locked", "archived"] },
+        "isPinned": { "type": "boolean" },
+        "repliesCount": { "type": "integer" },
+        "upvotesCount": { "type": "integer" },
+        "acceptedReplyId": { "type": "string", "maxLength": 128 },
+        "company": { "type": "string", "maxLength": 100 },
+        "location": { "type": "string", "maxLength": 100 },
+        "jobType": { "type": "string", "maxLength": 40 },
+        "deadline": { "type": "string", "maxLength": 60 },
+        "applyInfo": { "type": "string", "maxLength": 300 },
+        "coverImage": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "lastActivityAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "title", "body", "category", "tags", "authorId", "authorName", "authorPhoto",
+        "status", "isPinned", "repliesCount", "upvotesCount", "acceptedReplyId",
+        "createdAt", "updatedAt", "lastActivityAt"
+      ]
+    },
+    "Reply": {
+      "title": "Reply",
+      "description": "A reply inside a discussion topic.",
+      "type": "object",
+      "properties": {
+        "topicId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "authorId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "authorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "authorPhoto": { "type": "string", "maxLength": 500 },
+        "body": { "type": "string", "minLength": 2, "maxLength": 4000 },
+        "parentReplyId": { "type": "string", "maxLength": 128 },
+        "isAcceptedAnswer": { "type": "boolean" },
+        "upvotesCount": { "type": "integer" },
+        "isDeleted": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "topicId", "authorId", "authorName", "authorPhoto", "body",
+        "parentReplyId", "isAcceptedAnswer", "upvotesCount", "isDeleted",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "Vote": {
+      "title": "Vote",
+      "description": "Single-user upvote record preventing duplicate voting.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "createdAt"]
+    },
+    "Report": {
+      "title": "Report",
+      "description": "Safety moderation report for spam, harassment, or misinformation.",
+      "type": "object",
+      "properties": {
+        "reporterId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "targetType": { "type": "string", "enum": ["topic", "reply"] },
+        "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "topicId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "reason": { "type": "string", "enum": ["spam", "harassment", "misinformation", "unlawful", "other"] },
+        "details": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "enum": ["pending", "reviewed", "dismissed"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["reporterId", "targetType", "targetId", "topicId", "reason", "details", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Public profile for forum members."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Private PII document (docId='info') isolated to owner and admin."
+    },
+    "/topics/{topicId}": {
+      "schema": { "$ref": "#/entities/Topic" },
+      "description": "Forum discussion topics."
+    },
+    "/topics/{topicId}/replies/{replyId}": {
+      "schema": { "$ref": "#/entities/Reply" },
+      "description": "Replies under a discussion topic."
+    },
+    "/topics/{topicId}/votes/{userId}": {
+      "schema": { "$ref": "#/entities/Vote" },
+      "description": "Per-user upvote records on a topic."
+    },
+    "/topics/{topicId}/replies/{replyId}/votes/{userId}": {
+      "schema": { "$ref": "#/entities/Vote" },
+      "description": "Per-user upvote records on a reply."
+    },
+    "/reports/{reportId}": {
+      "schema": { "$ref": "#/entities/Report" },
+      "description": "Content safety reports submitted by verified users."
+    }
+  }
+}
