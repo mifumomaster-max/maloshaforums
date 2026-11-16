@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ImagePlus, Loader2, Newspaper, Send, X } from 'lucide-react';
 import { uploadImageToCloudinary } from '../services/cloudinaryService';
-import { MAKALA_COVERS, MAKALA_SECTIONS } from '../types';
+import { AuthPromptReason, MAKALA_COVERS, MAKALA_SECTIONS } from '../types';
 import { parseTagsInput } from '../utils/formatters';
 import { useLanguage } from '../context/LanguageContext';
 import { Avatar } from './Avatar';
@@ -10,10 +10,12 @@ import { AuthorVerificationBadge } from './VerificationBadge';
 interface MakalaInlineComposerProps {
   expanded: boolean;
   onExpandedChange: (next: boolean) => void;
+  initialSection?: string;
   userUid: string | null;
   userDisplayName: string;
   userPhoto: string;
-  onSignIn: () => void;
+  isSuspended?: boolean;
+  onSignIn: (reason?: AuthPromptReason) => void;
   onSubmitArticle: (data: {
     title: string;
     body: string;
@@ -26,9 +28,11 @@ interface MakalaInlineComposerProps {
 export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
   expanded,
   onExpandedChange,
+  initialSection,
   userUid,
   userDisplayName,
   userPhoto,
+  isSuspended = false,
   onSignIn,
   onSubmitArticle,
   onToast,
@@ -49,6 +53,15 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    if (
+      initialSection &&
+      MAKALA_SECTIONS.some((s) => s.toLowerCase() === initialSection.toLowerCase())
+    ) {
+      setSection(initialSection);
+    }
+  }, [initialSection]);
+
+  useEffect(() => {
     if (expanded && userUid) {
       const timer = window.setTimeout(() => {
         titleInputRef.current?.focus();
@@ -59,7 +72,24 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
 
   const handleExpand = (triggerImagePicker = false) => {
     if (!userUid) {
-      onSignIn();
+      onToast(
+        tr(
+          'Tengeneza akaunti au ingia (kwa Google au Jisajili kawaida) ili kuandika makala.',
+          'Create an account or sign in to write an article.'
+        ),
+        'error'
+      );
+      onSignIn('post');
+      return;
+    }
+    if (isSuspended) {
+      onToast(
+        tr(
+          'Akaunti yako imefungwa na msimamizi — huwezi kuandika makala.',
+          'Your account is suspended — writing articles is disabled.'
+        ),
+        'error'
+      );
       return;
     }
     setError('');
@@ -114,9 +144,10 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userUid) {
-      onSignIn();
+      onSignIn('post');
       return;
     }
+    if (isSuspended) return;
     setError('');
 
     const cleanTitle = title.trim();
@@ -188,15 +219,20 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
             onClick={() => handleExpand(false)}
             className="min-h-[44px] flex-1 border border-slate-200 bg-[#F6F6F6] px-4 py-2 text-left text-sm text-slate-700 transition-colors hover:bg-slate-200/70"
           >
-            {userUid
+            {isSuspended
               ? tr(
-                  'Una habari, ripoti au uchambuzi mpya? Andika makala hapa...',
-                  'Have a news report or in-depth analysis? Write an article here...'
+                  'Akaunti yako imefungwa — huwezi kuandika makala.',
+                  'Your account is suspended — writing articles is disabled.'
                 )
-              : tr(
-                  'Ingia na Google ili uandike makala mpya ya Malosha Forums...',
-                  'Sign in with Google to write a new article on Malosha Forums...'
-                )}
+              : userUid
+                ? tr(
+                    'Una habari, ripoti au uchambuzi mpya? Andika makala hapa...',
+                    'Have a news report or in-depth analysis? Write an article here...'
+                  )
+                : tr(
+                    'Tengeneza akaunti (Google / Jisajili) ili uandike makala mpya...',
+                    'Create an account (Google / Register) to write a new article...'
+                  )}
           </button>
           <button
             type="button"

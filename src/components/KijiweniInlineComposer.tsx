@@ -6,6 +6,7 @@ import {
 } from '../services/cloudinaryService';
 import { parseTagsInput } from '../utils/formatters';
 import { useLanguage } from '../context/LanguageContext';
+import { AuthPromptReason } from '../types';
 import { Avatar } from './Avatar';
 import { AuthorVerificationBadge } from './VerificationBadge';
 
@@ -15,7 +16,8 @@ interface KijiweniInlineComposerProps {
   userUid: string | null;
   userDisplayName: string;
   userPhoto: string;
-  onSignIn: () => void;
+  isSuspended?: boolean;
+  onSignIn: (reason?: AuthPromptReason) => void;
   onSubmitPost: (data: {
     title: string;
     body: string;
@@ -31,6 +33,7 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
   userUid,
   userDisplayName,
   userPhoto,
+  isSuspended = false,
   onSignIn,
   onSubmitPost,
   onToast,
@@ -60,7 +63,24 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
 
   const handleExpand = (triggerImagePicker = false) => {
     if (!userUid) {
-      onSignIn();
+      onToast(
+        tr(
+          'Tengeneza akaunti au ingia (kwa Google au Jisajili kawaida) ili kuchapisha Kijiweni.',
+          'Create an account or sign in to post in Kijiweni.'
+        ),
+        'error'
+      );
+      onSignIn('post');
+      return;
+    }
+    if (isSuspended) {
+      onToast(
+        tr(
+          'Akaunti yako imefungwa na msimamizi — huwezi kuchapisha.',
+          'Your account is suspended — you cannot post.'
+        ),
+        'error'
+      );
       return;
     }
     setError('');
@@ -112,9 +132,10 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userUid) {
-      onSignIn();
+      onSignIn('post');
       return;
     }
+    if (isSuspended) return;
     setError('');
 
     const cleanTitle = title.trim();
@@ -202,15 +223,20 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
             onClick={() => handleExpand(false)}
             className="min-h-[44px] flex-1 rounded-full bg-[#F0F2F5] px-4 py-2 text-left text-sm text-slate-600 transition-colors hover:bg-slate-200/80"
           >
-            {userUid
+            {isSuspended
               ? tr(
-                  `Unawaza nini leo, ${userDisplayName.split(' ')[0]}? Andika hapa...`,
-                  `What's on your mind, ${userDisplayName.split(' ')[0]}? Write here...`
+                  'Akaunti yako imefungwa — huwezi kuchapisha Kijiweni.',
+                  'Your account is suspended — posting is disabled.'
                 )
-              : tr(
-                  'Ingia na Google ili uandike unachowaza Kijiweni...',
-                  'Sign in with Google to share your thoughts on Kijiweni...'
-                )}
+              : userUid
+                ? tr(
+                    `Unawaza nini leo, ${userDisplayName.split(' ')[0]}? Andika hapa...`,
+                    `What's on your mind, ${userDisplayName.split(' ')[0]}? Write here...`
+                  )
+                : tr(
+                    'Tengeneza akaunti (Google / Jisajili) ili uandike unachowaza Kijiweni...',
+                    'Create an account (Google / Register) to share your thoughts on Kijiweni...'
+                  )}
           </button>
           <button
             type="button"

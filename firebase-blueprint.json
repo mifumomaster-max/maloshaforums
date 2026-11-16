@@ -15,6 +15,16 @@
           "enum": ["none", "individual", "organization", "government", "owner"],
           "description": "Account verification tier assigned by platform administrators."
         },
+        "accountStatus": {
+          "type": "string",
+          "enum": ["active", "suspended"],
+          "description": "Account moderation state; suspended accounts cannot perform any actions."
+        },
+        "suspendedReason": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "Optional reason shown when an account is suspended by the platform owner."
+        },
         "topicsCount": { "type": "integer" },
         "repliesCount": { "type": "integer" },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -29,6 +39,7 @@
       "properties": {
         "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
         "email": { "type": "string", "maxLength": 200 },
+        "phoneNumber": { "type": "string", "maxLength": 30 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -124,6 +135,96 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["reporterId", "targetType", "targetId", "topicId", "reason", "details", "status", "createdAt"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "A real-time community group chat message with optional image or document attachment.",
+      "type": "object",
+      "properties": {
+        "senderId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "senderName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "senderPhoto": { "type": "string", "maxLength": 500 },
+        "text": { "type": "string", "maxLength": 2000 },
+        "attachmentType": { "type": "string", "enum": ["none", "image", "document"] },
+        "attachmentUrl": { "type": "string", "maxLength": 500 },
+        "attachmentName": { "type": "string", "maxLength": 140 },
+        "attachmentSize": { "type": "integer" },
+        "attachmentMime": { "type": "string", "maxLength": 120 },
+        "replyToId": { "type": "string", "maxLength": 128 },
+        "replyToSenderName": { "type": "string", "maxLength": 80 },
+        "replyToPreview": { "type": "string", "maxLength": 160 },
+        "isDeleted": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "senderId", "senderName", "senderPhoto", "text",
+        "attachmentType", "attachmentUrl", "attachmentName", "attachmentSize", "attachmentMime",
+        "replyToId", "replyToSenderName", "replyToPreview",
+        "isDeleted", "createdAt", "updatedAt"
+      ]
+    },
+    "MchartNote": {
+      "title": "MchartNote",
+      "description": "Structured community study/announcement note published by the platform owner inside Mchart.",
+      "type": "object",
+      "properties": {
+        "authorId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "authorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "title": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "subtitle": { "type": "string", "maxLength": 220 },
+        "body": { "type": "string", "minLength": 5, "maxLength": 15000 },
+        "summary": { "type": "string", "maxLength": 240 },
+        "fileName": { "type": "string", "minLength": 3, "maxLength": 120 },
+        "wordCount": { "type": "integer" },
+        "isArchived": { "type": "boolean" },
+        "isPinned": { "type": "boolean" },
+        "pdfUrl": { "type": "string", "maxLength": 500 },
+        "pdfFileName": { "type": "string", "maxLength": 140 },
+        "pdfSize": { "type": "integer" },
+        "noteType": { "type": "string", "enum": ["text", "pdf", "mixed"] },
+        "isLocked": { "type": "boolean" },
+        "lockedTargetMode": { "type": "string", "enum": ["all", "selected"] },
+        "lockPrice": { "type": "integer" },
+        "lockCurrency": { "type": "string", "maxLength": 10 },
+        "paymentInstructions": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "authorId", "authorName", "title", "body", "summary",
+        "fileName", "wordCount", "isArchived", "isPinned",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "MchartNoteContent": {
+      "title": "MchartNoteContent",
+      "description": "Protected full body and PDF URL of a locked Mchart note, readable only by unlocked/paid members and owner.",
+      "type": "object",
+      "properties": {
+        "noteId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "body": { "type": "string", "minLength": 5, "maxLength": 15000 },
+        "pdfUrl": { "type": "string", "maxLength": 500 },
+        "pdfFileName": { "type": "string", "maxLength": 140 },
+        "pdfSize": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["noteId", "body", "pdfUrl", "pdfFileName", "pdfSize", "updatedAt"]
+    },
+    "MchartNoteAccess": {
+      "title": "MchartNoteAccess",
+      "description": "Per-user unlock, pending payment confirmation, or specific lock status for an Mchart note.",
+      "type": "object",
+      "properties": {
+        "noteId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "userName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "status": { "type": "string", "enum": ["pending", "unlocked", "locked"] },
+        "paymentReference": { "type": "string", "maxLength": 240 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["noteId", "userId", "userName", "status", "paymentReference", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -154,6 +255,22 @@
     "/reports/{reportId}": {
       "schema": { "$ref": "#/entities/Report" },
       "description": "Content safety reports submitted by verified users."
+    },
+    "/forum_chat_messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Shared community group chat messages."
+    },
+    "/mchart_notes/{noteId}": {
+      "schema": { "$ref": "#/entities/MchartNote" },
+      "description": "Owner-published formatted notes and archived note files for Mchart readers."
+    },
+    "/mchart_notes/{noteId}/content/{docId}": {
+      "schema": { "$ref": "#/entities/MchartNoteContent" },
+      "description": "Protected full body and PDF link (docId='full') for paid/locked Mchart notes."
+    },
+    "/mchart_notes/{noteId}/access/{userId}": {
+      "schema": { "$ref": "#/entities/MchartNoteAccess" },
+      "description": "Per-user payment unlock and specific lock access control records."
     }
   }
 }

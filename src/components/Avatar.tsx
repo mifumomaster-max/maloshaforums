@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { optimizeCloudinaryUrl } from '../services/cloudinaryService';
 import { getInitials } from '../utils/formatters';
 
 interface AvatarProps {
@@ -17,11 +18,15 @@ export const Avatar: React.FC<AvatarProps> = ({ name, photoURL, size = 'md' }) =
         ? 'h-11 w-11 text-sm'
         : 'h-9 w-9 text-xs';
 
-  if (photoURL && !failed) {
+  const optimizedUrl = optimizeCloudinaryUrl(photoURL, 128);
+
+  if (optimizedUrl && !failed) {
     return (
       <img
-        src={photoURL}
+        src={optimizedUrl}
         alt={name}
+        loading="lazy"
+        decoding="async"
         referrerPolicy="no-referrer"
         onError={() => setFailed(true)}
         className={`${sizeClass} shrink-0 rounded-full border border-stone-200 object-cover`}

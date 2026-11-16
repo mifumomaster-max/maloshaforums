@@ -10,12 +10,15 @@ import {
   Share2,
 } from 'lucide-react';
 import {
+  AuthPromptReason,
   MAKALA_SECTIONS,
   SortMode,
   Topic,
   getMakalaSection,
+  matchesMakalaSection,
   resolveMakalaCover,
 } from '../types';
+import { optimizeCloudinaryUrl } from '../services/cloudinaryService';
 import { estimateReadMinutes } from '../utils/formatters';
 import { useLanguage } from '../context/LanguageContext';
 import { Avatar } from './Avatar';
@@ -33,6 +36,7 @@ interface MakalaNewsroomProps {
   userUid: string | null;
   userDisplayName: string;
   userPhoto: string;
+  isSuspended?: boolean;
   votedTopicIds: Set<string>;
   onToggleVote: (topic: Topic) => void;
   onShareTopic: (topic: Topic) => void;
@@ -43,21 +47,30 @@ interface MakalaNewsroomProps {
     tags: string[];
     coverImage?: string;
   }) => Promise<void>;
-  onSignIn: () => void;
+  onSignIn: (reason?: AuthPromptReason) => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
   onBackToAll: () => void;
   inlineExpanded: boolean;
   onInlineExpandedChange: (next: boolean) => void;
+  onVisibleTopicIdsChange?: (ids: string[]) => void;
 }
 
 const BbcCoverImage: React.FC<{
   src?: string;
   alt: string;
-  aspectClass?: string;
-}> = ({ src, alt, aspectClass = 'aspect-[16/9]' }) => {
+  wrapperClass?: string;
+  imgClass?: string;
+  widthHint?: number;
+}> = ({
+  src,
+  alt,
+  wrapperClass = 'bg-slate-100',
+  imgClass = 'w-full h-auto max-h-[420px] object-contain',
+  widthHint = 760,
+}) => {
   const { tr } = useLanguage();
   const [failed, setFailed] = useState(false);
-  const resolved = resolveMakalaCover(src);
+  const resolved = optimizeCloudinaryUrl(resolveMakalaCover(src), widthHint);
 
   useEffect(() => {
     setFailed(false);
@@ -65,9 +78,7 @@ const BbcCoverImage: React.FC<{
 
   if (!resolved || failed) {
     return (
-      <div
-        className={`${aspectClass} flex w-full flex-col items-center justify-center bg-gradient-to-br from-[#2A0808] via-[#6B0F0F] to-[#B80000] px-4 text-center text-white/90`}
-      >
+      <div className="flex aspect-[16/9] w-full flex-col items-center justify-center bg-gradient-to-br from-[#2A0808] via-[#6B0F0F] to-[#B80000] px-4 text-center text-white/90">
         <Newspaper className="h-7 w-7 opacity-85" aria-hidden="true" />
         <span className="mt-1.5 text-[11px] font-bold tracking-wider uppercase opacity-85">
           {tr('Malosha Makala', 'Malosha Articles')}
@@ -77,13 +88,17 @@ const BbcCoverImage: React.FC<{
   }
 
   return (
-    <img
-      src={resolved}
-      alt={alt}
-      referrerPolicy="no-referrer"
-      onError={() => setFailed(true)}
-      className={`${aspectClass} w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]`}
-    />
+    <div className={`flex w-full items-center justify-center overflow-hidden ${wrapperClass}`}>
+      <img
+        src={resolved}
+        alt={alt}
+        loading="lazy"
+        decoding="async"
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+        className={`${imgClass} transition-transform duration-300 group-hover:scale-[1.01]`}
+      />
+    </div>
   );
 };
 
@@ -99,6 +114,8 @@ function getCreatedMillis(topic: Topic): number {
   return topic.createdAt ? topic.createdAt.toMillis() : Date.now();
 }
 
+const INITIAL_MAKALA_PAGE_SIZE = 6;
+
 export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
   articles,
   allMakalaCount,
@@ -110,6 +127,7 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
   userUid,
   userDisplayName,
   userPhoto,
+  isSuspended = false,
   votedTopicIds,
   onToggleVote,
   onShareTopic,
@@ -120,10 +138,16 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
   onBackToAll,
   inlineExpanded,
   onInlineExpandedChange,
+  onVisibleTopicIdsChange,
 }) => {
   const { lang, tr, formatTime, getMakalaSectionLabel } = useLanguage();
   const [selectedSection, setSelectedSection] = useState<string>('all');
+  const [visibleCount, setVisibleCount] = useState<number>(INITIAL_MAKALA_PAGE_SIZE);
   const composerAnchorRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setVisibleCount(INITIAL_MAKALA_PAGE_SIZE);
+  }, [selectedSection, sortMode, searchQuery]);
 
   const todayFormatted = useMemo(() => {
     try {
@@ -138,45 +162,53 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
     }
   }, [lang]);
 
-  // Strictly newest articles regardless of current section filter for instant discovery
-  const latestMakala = useMemo(() => {
-    return [...articles].sort((a, b) => getCreatedMillis(b) - getCreatedMillis(a));
+  const sectionCounts = useMemo(() => {
+    const counts: Record<string, number> = {
+      all: articles.length,
+      recent: 0,
+    };
+    for (const sec of MAKALA_SECTIONS) {
+      counts[sec] = 0;
+    }
+    for (const art of articles) {
+      if (matchesMakalaSection(art, 'recent')) {
+        counts.recent += 1;
+      }
+      const resolvedSec = getMakalaSection(art.tags, art.title);
+      counts[resolvedSec] = (counts[resolvedSec] || 0) + 1;
+    }
+    return counts;
   }, [articles]);
+
+  // Filter strictly by selectedSection FIRST so all visible sections & sidebars match
+  const sectionFilteredArticles = useMemo(() => {
+    return articles.filter((art) => matchesMakalaSection(art, selectedSection));
+  }, [articles, selectedSection]);
+
+  const latestMakala = useMemo(() => {
+    return [...sectionFilteredArticles].sort((a, b) => {
+      const diff = getCreatedMillis(b) - getCreatedMillis(a);
+      return diff !== 0 ? diff : b.id.localeCompare(a.id);
+    });
+  }, [sectionFilteredArticles]);
 
   const popularMakala = useMemo(() => {
-    return [...articles]
+    return [...sectionFilteredArticles]
       .sort((a, b) => {
-        const scoreA = a.upvotesCount * 2 + a.repliesCount;
-        const scoreB = b.upvotesCount * 2 + b.repliesCount;
-        if (scoreB !== scoreA) return scoreB - scoreA;
-        return getCreatedMillis(b) - getCreatedMillis(a);
-      })
-      .slice(0, 5);
-  }, [articles]);
-
-  const displayedArticles = useMemo(() => {
-    const now = Date.now();
-    const fortyEightHoursMs = 48 * 60 * 60 * 1000;
-
-    const filtered = articles.filter((art) => {
-      if (selectedSection === 'recent') {
-        return now - getCreatedMillis(art) <= fortyEightHoursMs;
-      }
-      if (selectedSection !== 'all') {
-        const sec = getMakalaSection(art.tags);
-        const matchesTag = art.tags.some(
-          (t) => t.trim().toLowerCase() === selectedSection.toLowerCase()
-        );
-        return sec.toLowerCase() === selectedSection.toLowerCase() || matchesTag;
-      }
-      return true;
-    });
-
-    return [...filtered].sort((a, b) => {
-      if (sortMode === 'votes') {
         if (b.upvotesCount !== a.upvotesCount) return b.upvotesCount - a.upvotesCount;
         if (b.repliesCount !== a.repliesCount) return b.repliesCount - a.repliesCount;
         return getCreatedMillis(b) - getCreatedMillis(a);
+      })
+      .slice(0, 5);
+  }, [sectionFilteredArticles]);
+
+  const displayedArticles = useMemo(() => {
+    return [...sectionFilteredArticles].sort((a, b) => {
+      if (sortMode === 'votes') {
+        if (b.upvotesCount !== a.upvotesCount) return b.upvotesCount - a.upvotesCount;
+        if (b.repliesCount !== a.repliesCount) return b.repliesCount - a.repliesCount;
+        const diff = getCreatedMillis(b) - getCreatedMillis(a);
+        return diff !== 0 ? diff : b.id.localeCompare(a.id);
       }
       if (sortMode === 'oldest') {
         const diff = getCreatedMillis(a) - getCreatedMillis(b);
@@ -187,11 +219,38 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
       if (diff !== 0) return diff;
       return b.id.localeCompare(a.id);
     });
-  }, [articles, selectedSection, sortMode]);
+  }, [sectionFilteredArticles, sortMode]);
+
+  const paginatedArticles = useMemo(
+    () => displayedArticles.slice(0, visibleCount),
+    [displayedArticles, visibleCount]
+  );
+
+  useEffect(() => {
+    if (!onVisibleTopicIdsChange) return;
+    onVisibleTopicIdsChange(paginatedArticles.map((a) => a.id));
+  }, [paginatedArticles, onVisibleTopicIdsChange]);
 
   const handleOpenInlineWriter = () => {
     if (!userUid) {
-      onSignIn();
+      onToast(
+        tr(
+          'Tengeneza akaunti au ingia (Google au Jisajili kawaida) ili kuandika makala.',
+          'Create an account or sign in to write an article.'
+        ),
+        'error'
+      );
+      onSignIn('post');
+      return;
+    }
+    if (isSuspended) {
+      onToast(
+        tr(
+          'Akaunti yako imefungwa na msimamizi — huwezi kuandika makala.',
+          'Your account is suspended — writing articles is disabled.'
+        ),
+        'error'
+      );
       return;
     }
     onInlineExpandedChange(true);
@@ -201,9 +260,31 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
     });
   };
 
-  const leadArticle = displayedArticles[0];
-  const secondaryArticles = displayedArticles.slice(1, 5);
-  const archiveArticles = displayedArticles.slice(5);
+  const leadArticle = paginatedArticles[0];
+  const secondaryArticles = paginatedArticles.slice(1, 5);
+  const archiveArticles = paginatedArticles.slice(5);
+  const remainingCount = Math.max(0, displayedArticles.length - paginatedArticles.length);
+
+  const activeSectionLabel =
+    selectedSection === 'all'
+      ? tr('Habari Zote', 'All News')
+      : selectedSection === 'recent'
+        ? tr('Mpya Hivi Punde', 'Just In')
+        : getMakalaSectionLabel(selectedSection);
+
+  const activeSortLabel =
+    sortMode === 'votes'
+      ? tr('Pendwa Zaidi', 'Most Liked')
+      : sortMode === 'oldest'
+        ? tr('Zilizotangulia', 'Earlier')
+        : tr('Mpya Zaidi', 'Newest');
+
+  const leadKickerLabel =
+    sortMode === 'votes'
+      ? tr('Inayopendwa Zaidi', 'Most Liked')
+      : sortMode === 'oldest'
+        ? tr('Makala ya Awali', 'Earlier Story')
+        : tr('Habari Kuu', 'Top Story');
 
   return (
     <div className="mx-auto max-w-6xl px-3.5 py-4 sm:px-6 sm:py-6">
@@ -293,7 +374,7 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                 : 'border-transparent text-slate-700 hover:text-slate-950'
             }`}
           >
-            {tr('Mpya Hivi Punde', 'Just In')}
+            {tr('Mpya Hivi Punde', 'Just In')} ({sectionCounts.recent ?? 0})
           </button>
           {MAKALA_SECTIONS.map((sec) => (
             <button
@@ -307,6 +388,7 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
               }`}
             >
               {getMakalaSectionLabel(sec)}
+              {(sectionCounts[sec] ?? 0) > 0 ? ` (${sectionCounts[sec]})` : ''}
             </button>
           ))}
         </nav>
@@ -365,52 +447,90 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
         <MakalaInlineComposer
           expanded={inlineExpanded}
           onExpandedChange={onInlineExpandedChange}
+          initialSection={
+            selectedSection !== 'all' && selectedSection !== 'recent'
+              ? selectedSection
+              : undefined
+          }
           userUid={userUid}
           userDisplayName={userDisplayName}
           userPhoto={userPhoto}
+          isSuspended={isSuspended}
           onSignIn={onSignIn}
           onSubmitArticle={onCreateMakalaPost}
           onToast={onToast}
         />
       </div>
 
-      {/* Latest Articles Quick-Access Strip ("Hivi Punde") */}
-      {!loading && latestMakala.length > 0 && (
-        <section
-          aria-label={tr('Makala mpya hivi punde', 'Just in articles')}
-          className="mt-4 border border-slate-200 bg-white"
-        >
-          <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2">
-            <span className="text-xs font-black tracking-wide text-[#B80000] uppercase">
-              {tr('Mpya Hivi Punde', 'Just In')}
+      {/* Explicit Active Section & Sort Feedback Strip */}
+      {(selectedSection !== 'all' || sortMode !== 'newest' || searchQuery.trim() !== '') && (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border border-slate-200 bg-white px-4 py-2.5 text-xs">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-slate-700">
+            <span className="font-bold text-[#B80000]">{activeSectionLabel}</span>
+            <span aria-hidden="true">·</span>
+            <span>
+              {tr('Mpangilio:', 'Order:')} <strong>{activeSortLabel}</strong>
             </span>
-            <span className="text-[11px] text-slate-500">
-              {tr('Makala za karibuni zaidi zilizochapishwa', 'Most recently published articles')}
+            <span aria-hidden="true">·</span>
+            <span className="tabular-nums text-slate-500">
+              {tr(`Makala ${displayedArticles.length}`, `${displayedArticles.length} articles`)}
             </span>
           </div>
-          <div className="grid grid-cols-1 divide-y divide-slate-200 md:grid-cols-3 md:divide-x md:divide-y-0">
-            {latestMakala.slice(0, 3).map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => onOpenTopic(item.id)}
-                className="flex flex-col justify-between p-3.5 text-left transition-colors hover:bg-[#F6F6F6]"
-              >
-                <span className="line-clamp-2 text-sm font-bold leading-snug text-slate-900 hover:text-[#B80000]">
-                  {item.title}
-                </span>
-                <span className="mt-2 flex items-center gap-1.5 text-[11px] text-slate-500">
-                  <span className="font-bold text-[#B80000]">
-                    {getMakalaSectionLabel(getMakalaSection(item.tags))}
-                  </span>
-                  <span aria-hidden="true">·</span>
-                  <span>{formatTime(item.createdAt)}</span>
-                </span>
-              </button>
-            ))}
-          </div>
-        </section>
+          <button
+            type="button"
+            onClick={() => {
+              setSelectedSection('all');
+              onChangeSort('newest');
+              onChangeSearch('');
+            }}
+            className="font-semibold text-[#1D4E89] hover:underline"
+          >
+            {tr('Rejesha Zote', 'Reset Filter')}
+          </button>
+        </div>
       )}
+
+      {/* Latest Articles Quick-Access Strip ("Hivi Punde") — shown only in default All + Newest view */}
+      {!loading &&
+        selectedSection === 'all' &&
+        sortMode === 'newest' &&
+        !searchQuery.trim() &&
+        latestMakala.length > 0 && (
+          <section
+            aria-label={tr('Makala mpya hivi punde', 'Just in articles')}
+            className="mt-4 border border-slate-200 bg-white"
+          >
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2">
+              <span className="text-xs font-black tracking-wide text-[#B80000] uppercase">
+                {tr('Mpya Hivi Punde', 'Just In')}
+              </span>
+              <span className="text-[11px] text-slate-500">
+                {tr('Makala za karibuni zaidi zilizochapishwa', 'Most recently published articles')}
+              </span>
+            </div>
+            <div className="grid grid-cols-1 divide-y divide-slate-200 md:grid-cols-3 md:divide-x md:divide-y-0">
+              {latestMakala.slice(0, 3).map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => onOpenTopic(item.id)}
+                  className="flex flex-col justify-between p-3.5 text-left transition-colors hover:bg-[#F6F6F6]"
+                >
+                  <span className="line-clamp-2 text-sm font-bold leading-snug text-slate-900 hover:text-[#B80000]">
+                    {item.title}
+                  </span>
+                  <span className="mt-2 flex items-center gap-1.5 text-[11px] text-slate-500">
+                    <span className="font-bold text-[#B80000]">
+                      {getMakalaSectionLabel(getMakalaSection(item.tags, item.title))}
+                    </span>
+                    <span aria-hidden="true">·</span>
+                    <span>{formatTime(item.createdAt)}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
 
       {/* Main BBC Newsroom Content Grid */}
       {loading ? (
@@ -482,11 +602,13 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                     <div>
                       <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600">
                         <span className="font-black tracking-wide text-[#B80000] uppercase">
-                          {tr('Habari Kuu', 'Top Story')}
+                          {leadKickerLabel}
                         </span>
                         <span aria-hidden="true">·</span>
                         <span className="font-semibold text-slate-800">
-                          {getMakalaSectionLabel(getMakalaSection(leadArticle.tags))}
+                          {getMakalaSectionLabel(
+                            getMakalaSection(leadArticle.tags, leadArticle.title)
+                          )}
                         </span>
                       </div>
 
@@ -592,12 +714,13 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                   <button
                     type="button"
                     onClick={() => onOpenTopic(leadArticle.id)}
-                    className="block w-full overflow-hidden bg-slate-100 text-left md:order-2 md:col-span-7"
+                    className="flex w-full items-center justify-center overflow-hidden bg-slate-950/5 text-left md:order-2 md:col-span-7"
                   >
                     <BbcCoverImage
                       src={leadArticle.coverImage}
                       alt={leadArticle.title}
-                      aspectClass="aspect-[16/9] md:h-full md:aspect-auto"
+                      wrapperClass="bg-slate-950/5 md:h-full"
+                      imgClass="w-full h-auto max-h-[440px] object-contain"
                     />
                   </button>
                 </div>
@@ -623,7 +746,9 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                   {secondaryArticles.map((article) => {
                     const voted = votedTopicIds.has(article.id);
                     const readMins = estimateReadMinutes(article.body);
-                    const sectionLabel = getMakalaSectionLabel(getMakalaSection(article.tags));
+                    const sectionLabel = getMakalaSectionLabel(
+                      getMakalaSection(article.tags, article.title)
+                    );
 
                     return (
                       <article
@@ -633,12 +758,13 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                         <button
                           type="button"
                           onClick={() => onOpenTopic(article.id)}
-                          className="block w-full overflow-hidden text-left"
+                          className="block w-full overflow-hidden bg-slate-950/5 text-left"
                         >
                           <BbcCoverImage
                             src={article.coverImage}
                             alt={article.title}
-                            aspectClass="aspect-[16/9]"
+                            wrapperClass="bg-slate-950/5"
+                            imgClass="w-full h-auto max-h-[340px] object-contain"
                           />
                         </button>
 
@@ -752,18 +878,20 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                       <button
                         type="button"
                         onClick={() => onOpenTopic(art.id)}
-                        className="block w-full overflow-hidden text-left sm:w-44 shrink-0"
+                        className="block w-full overflow-hidden bg-slate-950/5 text-left sm:w-44 shrink-0"
                       >
                         <BbcCoverImage
                           src={art.coverImage}
                           alt={art.title}
-                          aspectClass="aspect-[16/9]"
+                          wrapperClass="bg-slate-950/5"
+                          imgClass="w-full h-auto max-h-[260px] sm:max-h-[120px] object-contain"
+                          widthHint={420}
                         />
                       </button>
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-slate-500">
                           <span className="font-bold text-[#B80000] uppercase">
-                            {getMakalaSectionLabel(getMakalaSection(art.tags))}
+                            {getMakalaSectionLabel(getMakalaSection(art.tags, art.title))}
                           </span>
                           <span aria-hidden="true">·</span>
                           <span>{formatTime(art.createdAt)}</span>
@@ -773,6 +901,10 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                               `Dakika ${estimateReadMinutes(art.body)}`,
                               `${estimateReadMinutes(art.body)} min`
                             )}
+                          </span>
+                          <span aria-hidden="true">·</span>
+                          <span className="tabular-nums">
+                            {tr('Penda', 'Likes')} {art.upvotesCount}
                           </span>
                         </div>
                         <button
@@ -790,6 +922,24 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                   ))}
                 </div>
               </section>
+            )}
+
+            {/* Progressive Load More Button to Save Mobile Data */}
+            {remainingCount > 0 && (
+              <div className="flex justify-center pt-1">
+                <button
+                  type="button"
+                  onClick={() => setVisibleCount((prev) => prev + INITIAL_MAKALA_PAGE_SIZE)}
+                  className="inline-flex min-h-[44px] items-center gap-2 border border-slate-300 bg-white px-6 py-2.5 text-xs font-bold text-slate-800 transition-colors hover:border-[#B80000] hover:text-[#B80000]"
+                >
+                  <span>
+                    {tr(
+                      `Onyesha Makala Zaidi (${remainingCount} zimesalia)`,
+                      `Load More Articles (${remainingCount} remaining)`
+                    )}
+                  </span>
+                </button>
+              </div>
             )}
           </div>
 
@@ -819,7 +969,7 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                       </p>
                       <p className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[11px] text-slate-500">
                         <span className="font-semibold text-slate-700">
-                          {getMakalaSectionLabel(getMakalaSection(item.tags))}
+                          {getMakalaSectionLabel(getMakalaSection(item.tags, item.title))}
                         </span>
                         <span aria-hidden="true">·</span>
                         <span>{formatTime(item.createdAt)}</span>

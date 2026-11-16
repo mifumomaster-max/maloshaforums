@@ -12,6 +12,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import {
+  AuthPromptReason,
   FORUM_BOARDS,
   JOB_TYPES,
   NavTab,
@@ -47,6 +48,7 @@ interface TopicListProps {
   userDisplayName: string;
   userPhoto: string;
   isAdmin: boolean;
+  isSuspended?: boolean;
   votedTopicIds: Set<string>;
   onToggleVote: (topic: Topic) => void;
   onShareTopic: (topic: Topic) => void;
@@ -79,7 +81,7 @@ interface TopicListProps {
   onEditTopic: (topic: Topic) => void;
   onDeleteTopic: (topic: Topic) => void;
   onOpenReport: (targetType: 'topic' | 'reply', targetId: string, topicId: string) => void;
-  onSignIn: () => void;
+  onSignIn: (reason?: AuthPromptReason) => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
   onRequestConfirm: (opts: {
     title: string;
@@ -90,6 +92,7 @@ interface TopicListProps {
   }) => void;
   onSeedStarterTopics: () => Promise<void>;
   seeding: boolean;
+  onVisibleTopicIdsChange?: (ids: string[]) => void;
 }
 
 function stripMarkdownPreview(raw: string): string {
@@ -113,6 +116,7 @@ export const TopicList: React.FC<TopicListProps> = ({
   userDisplayName,
   userPhoto,
   isAdmin,
+  isSuspended = false,
   votedTopicIds,
   onToggleVote,
   onShareTopic,
@@ -130,6 +134,7 @@ export const TopicList: React.FC<TopicListProps> = ({
   onRequestConfirm,
   onSeedStarterTopics,
   seeding,
+  onVisibleTopicIdsChange,
 }) => {
   const { tr, formatTime, getBoardLabel, getBoardDescription, getJobTypeLabel } = useLanguage();
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -139,6 +144,7 @@ export const TopicList: React.FC<TopicListProps> = ({
   const [inlineComposerOpen, setInlineComposerOpen] = useState(false);
   const [fursaInlineOpen, setFursaInlineOpen] = useState(false);
   const [makalaInlineOpen, setMakalaInlineOpen] = useState(false);
+  const [visibleCount, setVisibleCount] = useState<number>(8);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -295,6 +301,22 @@ export const TopicList: React.FC<TopicListProps> = ({
     userUid,
   ]);
 
+  useEffect(() => {
+    setVisibleCount(8);
+  }, [activeTab, effectiveCategory, selectedJobType, sortMode, searchQuery, onlyMine]);
+
+  const paginatedTopics = useMemo(
+    () => filteredTopics.slice(0, visibleCount),
+    [filteredTopics, visibleCount]
+  );
+
+  const remainingTopicsCount = Math.max(0, filteredTopics.length - paginatedTopics.length);
+
+  useEffect(() => {
+    if (!onVisibleTopicIdsChange || effectiveCategory === 'Makala') return;
+    onVisibleTopicIdsChange(paginatedTopics.map((t) => t.id));
+  }, [paginatedTopics, onVisibleTopicIdsChange, effectiveCategory]);
+
   const activeBoardMeta =
     effectiveCategory !== 'all'
       ? FORUM_BOARDS.find((b) => b.id === effectiveCategory)
@@ -363,6 +385,7 @@ export const TopicList: React.FC<TopicListProps> = ({
         userUid={userUid}
         userDisplayName={userDisplayName}
         userPhoto={userPhoto}
+        isSuspended={isSuspended}
         votedTopicIds={votedTopicIds}
         onToggleVote={onToggleVote}
         onShareTopic={onShareTopic}
@@ -373,6 +396,7 @@ export const TopicList: React.FC<TopicListProps> = ({
         onBackToAll={() => handleBoardSelect('all')}
         inlineExpanded={makalaInlineOpen}
         onInlineExpandedChange={setMakalaInlineOpen}
+        onVisibleTopicIdsChange={onVisibleTopicIdsChange}
       />
     );
   }
@@ -420,7 +444,21 @@ export const TopicList: React.FC<TopicListProps> = ({
             onClick={() => {
               if (effectiveCategory === 'Kijiweni') {
                 if (!userUid) {
-                  onSignIn();
+                  onToast(
+                    tr(
+                      'Tengeneza akaunti au ingia ili kuchapisha Kijiweni.',
+                      'Create an account or sign in to post.'
+                    ),
+                    'error'
+                  );
+                  onSignIn('post');
+                  return;
+                }
+                if (isSuspended) {
+                  onToast(
+                    tr('Akaunti yako imefungwa na msimamizi.', 'Your account is suspended.'),
+                    'error'
+                  );
                   return;
                 }
                 setInlineComposerOpen(true);
@@ -430,7 +468,21 @@ export const TopicList: React.FC<TopicListProps> = ({
                 });
               } else if (effectiveCategory === 'Fursa') {
                 if (!userUid) {
-                  onSignIn();
+                  onToast(
+                    tr(
+                      'Tengeneza akaunti au ingia ili kutangaza fursa.',
+                      'Create an account or sign in to post an opportunity.'
+                    ),
+                    'error'
+                  );
+                  onSignIn('post');
+                  return;
+                }
+                if (isSuspended) {
+                  onToast(
+                    tr('Akaunti yako imefungwa na msimamizi.', 'Your account is suspended.'),
+                    'error'
+                  );
                   return;
                 }
                 setFursaInlineOpen(true);
@@ -589,6 +641,7 @@ export const TopicList: React.FC<TopicListProps> = ({
                 userUid={userUid}
                 userDisplayName={userDisplayName}
                 userPhoto={userPhoto}
+                isSuspended={isSuspended}
                 onSignIn={onSignIn}
                 onSubmitPost={onCreateKijiweniPost}
                 onToast={onToast}
@@ -605,6 +658,7 @@ export const TopicList: React.FC<TopicListProps> = ({
                 userUid={userUid}
                 userDisplayName={userDisplayName}
                 userPhoto={userPhoto}
+                isSuspended={isSuspended}
                 onSignIn={onSignIn}
                 onSubmitPost={onCreateFursaPost}
                 onToast={onToast}
@@ -685,19 +739,28 @@ export const TopicList: React.FC<TopicListProps> = ({
                     )}
                   </>
                 ) : (
-                  <p className="text-xs text-slate-500">
-                    {tr(
-                      'Ingia kwa akaunti yako ya Google juu kulia ili kuchapisha mada au fursa mpya.',
-                      'Sign in with Google at the top right to publish a new topic or opportunity.'
-                    )}
-                  </p>
+                  <div className="space-y-3">
+                    <p className="text-xs text-slate-600">
+                      {tr(
+                        'Tengeneza akaunti (Google au Jisajili kawaida) ili kuchapisha mada au fursa mpya.',
+                        'Create an account (Google or Register) to publish a new topic or opportunity.'
+                      )}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => onSignIn('post')}
+                      className="inline-flex min-h-[42px] items-center rounded-lg bg-[#1D4E89] px-4 py-2 text-xs font-semibold text-white hover:bg-[#163A5F]"
+                    >
+                      {tr('Jisajili / Ingia', 'Register / Sign In')}
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
           ) : effectiveCategory === 'Fursa' ? (
             /* ── FURSA: Youth Job Announcements & Opportunities Feed ───────────── */
             <div className="space-y-4">
-              {filteredTopics.map((job) => (
+              {paginatedTopics.map((job) => (
                 <FursaPostCard
                   key={job.id}
                   post={job}
@@ -705,6 +768,7 @@ export const TopicList: React.FC<TopicListProps> = ({
                   userDisplayName={userDisplayName}
                   userPhoto={userPhoto}
                   isAdmin={isAdmin}
+                  isSuspended={isSuspended}
                   hasVoted={votedTopicIds.has(job.id)}
                   onToggleVote={onToggleVote}
                   onShareTopic={onShareTopic}
@@ -717,11 +781,27 @@ export const TopicList: React.FC<TopicListProps> = ({
                   onRequestConfirm={onRequestConfirm}
                 />
               ))}
+              {remainingTopicsCount > 0 && (
+                <div className="flex justify-center pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setVisibleCount((prev) => prev + 8)}
+                    className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-xs font-bold text-slate-800 transition-colors hover:border-[#1D4E89] hover:text-[#1D4E89]"
+                  >
+                    <span>
+                      {tr(
+                        `Onyesha Fursa Zaidi (${remainingTopicsCount} zimesalia)`,
+                        `Load More Opportunities (${remainingTopicsCount} remaining)`
+                      )}
+                    </span>
+                  </button>
+                </div>
+              )}
             </div>
           ) : effectiveCategory === 'Kijiweni' ? (
             /* ── KIJIWENI: Facebook-Style Feed with Threadlike Comments ─ */
             <div className="space-y-4">
-              {filteredTopics.map((post) => (
+              {paginatedTopics.map((post) => (
                 <KijiweniPostCard
                   key={post.id}
                   post={post}
@@ -729,6 +809,7 @@ export const TopicList: React.FC<TopicListProps> = ({
                   userDisplayName={userDisplayName}
                   userPhoto={userPhoto}
                   isAdmin={isAdmin}
+                  isSuspended={isSuspended}
                   hasVoted={votedTopicIds.has(post.id)}
                   onToggleVote={onToggleVote}
                   onShareTopic={onShareTopic}
@@ -741,6 +822,22 @@ export const TopicList: React.FC<TopicListProps> = ({
                   onRequestConfirm={onRequestConfirm}
                 />
               ))}
+              {remainingTopicsCount > 0 && (
+                <div className="flex justify-center pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setVisibleCount((prev) => prev + 8)}
+                    className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-xs font-bold text-slate-800 transition-colors hover:border-[#1D4E89] hover:text-[#1D4E89]"
+                  >
+                    <span>
+                      {tr(
+                        `Onyesha Machapisho Zaidi (${remainingTopicsCount} yamesalia)`,
+                        `Load More Posts (${remainingTopicsCount} remaining)`
+                      )}
+                    </span>
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             /* ── MADA ZOTE & ZILIZOVUMA: JamiiForums-Inspired Responsive Thread List ─ */
@@ -757,7 +854,7 @@ export const TopicList: React.FC<TopicListProps> = ({
               </div>
 
               <div className="divide-y divide-slate-200">
-                {filteredTopics.map((topic) => {
+                {paginatedTopics.map((topic) => {
                   const voted = votedTopicIds.has(topic.id);
                   const boardLabel = normalizeBoardCategory(topic.category);
                   const plainExcerpt = stripMarkdownPreview(topic.body);
@@ -941,6 +1038,22 @@ export const TopicList: React.FC<TopicListProps> = ({
                   );
                 })}
               </div>
+              {remainingTopicsCount > 0 && (
+                <div className="border-t border-slate-200 bg-slate-50/70 p-3 text-center">
+                  <button
+                    type="button"
+                    onClick={() => setVisibleCount((prev) => prev + 8)}
+                    className="inline-flex min-h-[42px] items-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-2 text-xs font-bold text-[#163A5F] transition-colors hover:border-[#1D4E89] hover:bg-sky-50/50"
+                  >
+                    <span>
+                      {tr(
+                        `Onyesha Mada Zaidi (${remainingTopicsCount} zimesalia)`,
+                        `Load More Topics (${remainingTopicsCount} remaining)`
+                      )}
+                    </span>
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -1,9 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bell,
+  BellOff,
+  BellRing,
+  CalendarDays,
   CheckCheck,
   ChevronRight,
+  Download,
   Globe,
+  Lock,
   LogOut,
   Newspaper,
   Plus,
@@ -19,6 +24,16 @@ import {
   normalizeBoardCategory,
   resolveMakalaCover,
 } from '../types';
+import { optimizeCloudinaryUrl } from '../services/cloudinaryService';
+import {
+  PhoneNotificationPermission,
+  getNotificationPermission,
+  isNotificationSupported,
+  isPhoneAlertsEnabled,
+  requestPhoneNotificationPermission,
+  sendPhoneNotification,
+  setPhoneAlertsEnabled,
+} from '../services/notificationService';
 import { Avatar } from './Avatar';
 import { AuthorVerificationBadge, VerificationBadge } from './VerificationBadge';
 
@@ -32,10 +47,15 @@ interface HeaderProps {
   userDisplayName: string;
   userPhoto: string;
   isAdmin: boolean;
+  isSuspended?: boolean;
   onOpenComposer: () => void;
   onSignIn: () => void;
   onSignOut: () => void;
   authBusy: boolean;
+  canInstallApp?: boolean;
+  onTriggerInstallApp?: () => void;
+  onToast?: (message: string, kind?: 'success' | 'error') => void;
+  unreadChatCount?: number;
 }
 
 const NOTIF_READ_IDS_KEY = 'malosha_notif_read_ids_v1';
@@ -72,15 +92,24 @@ export const Header: React.FC<HeaderProps> = ({
   userDisplayName,
   userPhoto,
   isAdmin,
+  isSuspended = false,
   onOpenComposer,
   onSignIn,
   onSignOut,
   authBusy,
+  canInstallApp = false,
+  onTriggerInstallApp,
+  onToast,
+  unreadChatCount = 0,
 }) => {
   const { lang, setLang, tr, formatTime, getMakalaSectionLabel, getBoardLabel } = useLanguage();
   const [menuOpen, setMenuOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [notifFilter, setNotifFilter] = useState<'news' | 'all'>('news');
+  const [notifPermission, setNotifPermission] = useState<PhoneNotificationPermission>(() =>
+    getNotificationPermission()
+  );
+  const [phoneAlertsOn, setPhoneAlertsOn] = useState<boolean>(() => isPhoneAlertsEnabled());
   const menuRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
 
@@ -182,22 +211,149 @@ export const Header: React.FC<HeaderProps> = ({
     }
   };
 
+  const handleEnablePhoneAlerts = async () => {
+    if (!isNotificationSupported()) {
+      onToast?.(
+        tr(
+          'Kifaa au kivinjari hiki hakiauni arifa za moja kwa moja.',
+          'This device or browser does not support push notifications.'
+        ),
+        'error'
+      );
+      return;
+    }
+
+    if (notifPermission === 'granted') {
+      const next = !phoneAlertsOn;
+      setPhoneAlertsEnabled(next);
+      setPhoneAlertsOn(next);
+      onToast?.(
+        next
+          ? tr('Arifa za simu zimewashwa!', 'Phone notifications enabled!')
+          : tr('Arifa za simu zimezimwa.', 'Phone notifications paused.')
+      );
+      return;
+    }
+
+    const result = await requestPhoneNotificationPermission();
+    setNotifPermission(result);
+    if (result === 'granted') {
+      setPhoneAlertsOn(true);
+      onToast?.(
+        tr(
+          'Safi! Utapata arifa kwenye simu kila taarifa mpya ikichapishwa.',
+          'All set! You will receive phone notifications for new posts.'
+        )
+      );
+      void sendPhoneNotification({
+        title: 'Malosha Forums',
+        body: tr(
+          'Arifa za simu zimewashwa kikamilifu! Utapata taarifa mpya papo hapo.',
+          'Phone notifications are active! You will get updates right away.'
+        ),
+        tag: 'malosha-welcome-alert',
+      });
+    } else if (result === 'denied') {
+      onToast?.(
+        tr(
+          'Ruhusa imezuiwa kwenye simu. Fungua Settings ya App au Browser kisha ruhusu Notifications.',
+          'Permission blocked. Open App/Browser Settings and allow Notifications.'
+        ),
+        'error'
+      );
+    }
+  };
+
+  const [nowDate, setNowDate] = useState<Date>(() => new Date());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNowDate(new Date());
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const formattedDayAndDate = useMemo(() => {
+    const locale = lang === 'sw' ? 'sw-TZ' : 'en-US';
+    try {
+      const weekday = new Intl.DateTimeFormat(locale, { weekday: 'long' }).format(nowDate);
+      const dateStr = new Intl.DateTimeFormat(locale, {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      }).format(nowDate);
+      const capDay = weekday.charAt(0).toUpperCase() + weekday.slice(1);
+      return { day: capDay, date: dateStr };
+    } catch {
+      return {
+        day: nowDate.toLocaleDateString('en-US', { weekday: 'long' }),
+        date: nowDate.toLocaleDateString('en-US', {
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric',
+        }),
+      };
+    }
+  }, [lang, nowDate]);
+
   const navItems: { id: NavTab; label: string }[] = [
     { id: 'kijiweni', label: 'Kijiweni' },
     { id: 'fursa', label: tr('Fursa', 'Opportunities') },
     { id: 'makala', label: tr('Makala', 'Articles') },
+    { id: 'chat', label: 'Mchart' },
     { id: 'trending', label: tr('Zilizovuma', 'Trending') },
   ];
 
   return (
-    <header className="sticky top-0 z-40 border-b border-white/10 bg-[#0E2640]/95 text-white shadow-[0_4px_20px_rgba(10,25,47,0.18)] backdrop-blur-md">
-      {/* Crisp Editorial Top Accent Line */}
-      <div
-        className="h-[3px] w-full bg-gradient-to-r from-[#D97706] via-[#F59E0B] to-[#38BDF8]"
-        aria-hidden="true"
-      />
+    <>
+      {/* Official Editorial Masthead with Moving Background Objects */}
+      <div className="relative overflow-hidden border-b border-white/10 bg-gradient-to-br from-[#0A1E33] via-[#0E2640] to-[#163A5F] text-white">
+        {/* Crisp Editorial Top Accent Line */}
+        <div
+          className="relative z-10 h-[3px] w-full bg-gradient-to-r from-[#D97706] via-[#F59E0B] to-[#38BDF8]"
+          aria-hidden="true"
+        />
 
-      <div className="mx-auto flex h-[54px] max-w-6xl items-center justify-between gap-3 px-3.5 sm:h-16 sm:gap-8 sm:px-6">
+        {/* Animated Moving Background Objects */}
+        <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+          <div className="animate-malosha-float-a absolute -top-12 left-[6%] h-44 w-44 rounded-full bg-[#F59E0B]/18 blur-2xl" />
+          <div className="animate-malosha-float-b absolute -right-10 -bottom-14 h-52 w-52 rounded-full bg-[#38BDF8]/16 blur-2xl" />
+          <div className="animate-malosha-float-b absolute top-4 left-[42%] h-20 w-20 rounded-2xl border border-amber-300/15 bg-amber-400/5" />
+          <div className="animate-malosha-float-a absolute right-[24%] bottom-2 h-14 w-14 rounded-full border border-sky-300/20 bg-sky-400/5" />
+          <div className="animate-malosha-beam absolute inset-y-0 w-36 bg-gradient-to-r from-transparent via-white/[0.06] to-transparent" />
+        </div>
+
+        <div className="relative z-10 mx-auto flex max-w-6xl flex-col gap-3 px-3.5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6 sm:py-5">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold tracking-wide text-amber-300 sm:text-xs">
+              {tr(
+                'Jukwaa Rasmi la Jamii · Mijadala, Fursa & Habari',
+                'Official Community Platform · Discussions, Opportunities & News'
+              )}
+            </p>
+            <p className="font-display mt-1 text-base font-semibold leading-snug text-white sm:text-lg [text-wrap:balance]">
+              {tr(
+                'Sauti ya Pamoja kwa Maendeleo, Elimu na Ajira za Vijana',
+                'A Shared Voice for Progress, Knowledge, and Youth Opportunities'
+              )}
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2.5 self-start rounded-xl border border-white/15 bg-white/[0.07] px-3.5 py-2 backdrop-blur-xs sm:self-center shrink-0">
+            <CalendarDays className="h-4 w-4 shrink-0 text-amber-400" aria-hidden="true" />
+            <div className="text-left leading-tight">
+              <p className="text-xs font-bold text-white">{formattedDayAndDate.day}</p>
+              <p className="text-[11px] font-medium text-slate-200 tabular-nums">
+                {formattedDayAndDate.date}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Sticky Compact Navigation Bar */}
+      <header className="sticky top-0 z-40 border-b border-white/10 bg-[#0E2640]/95 text-white shadow-[0_4px_20px_rgba(10,25,47,0.18)] backdrop-blur-md">
+        <div className="mx-auto flex h-[56px] max-w-6xl items-center justify-between gap-3 px-3.5 sm:h-16 sm:gap-8 sm:px-6">
         {/* Zone 1: Geometric Brand Emblem + Single-line Wordmark */}
         <button
           type="button"
@@ -227,16 +383,22 @@ export const Header: React.FC<HeaderProps> = ({
         >
           {navItems.map((item) => {
             const active = activeTab === item.id;
+            const showChatBadge = item.id === 'chat' && unreadChatCount > 0 && !active;
             return (
               <button
                 key={item.id}
                 type="button"
                 onClick={() => onSelectTab(item.id)}
-                className={`relative py-2 whitespace-nowrap shrink-0 transition-colors focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-sky-300 ${
+                className={`relative inline-flex items-center gap-1.5 py-2 whitespace-nowrap shrink-0 transition-colors focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-sky-300 ${
                   active ? 'font-semibold text-white' : 'text-slate-200 hover:text-white'
                 }`}
               >
-                {item.label}
+                <span>{item.label}</span>
+                {showChatBadge && (
+                  <span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[#25D366] px-1 text-[10px] font-extrabold leading-none text-[#073D35] tabular-nums">
+                    {unreadChatCount > 99 ? '99+' : unreadChatCount}
+                  </span>
+                )}
                 {active && (
                   <span
                     className="absolute right-0 bottom-0 left-0 h-0.5 rounded-full bg-amber-400"
@@ -248,8 +410,21 @@ export const Header: React.FC<HeaderProps> = ({
           })}
         </nav>
 
-        {/* Zone 3: News Notifications + Primary Auth / Account */}
+        {/* Zone 3: Install App + News Notifications + Primary Auth / Account */}
         <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+          {canInstallApp && onTriggerInstallApp && (
+            <button
+              type="button"
+              onClick={onTriggerInstallApp}
+              title={tr('Sakinisha App', 'Install App')}
+              aria-label={tr('Sakinisha App ya Malosha', 'Install Malosha App')}
+              className="flex h-10 items-center justify-center gap-1.5 rounded-xl border border-amber-400/35 bg-amber-500/15 px-2.5 text-xs font-semibold text-amber-200 transition-colors hover:bg-amber-500/25 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300 lg:px-3 whitespace-nowrap shrink-0"
+            >
+              <Download className="h-4 w-4 text-amber-400" aria-hidden="true" />
+              <span className="hidden lg:inline">{tr('Sakinisha App', 'Install App')}</span>
+            </button>
+          )}
+
           {/* News Notification Bell */}
           <div className="relative" ref={notifRef}>
             <button
@@ -331,6 +506,41 @@ export const Header: React.FC<HeaderProps> = ({
                   </button>
                 </div>
 
+                {/* Native Phone Notification Enable / Toggle Bar */}
+                {isNotificationSupported() && (
+                  <div className="flex items-center justify-between gap-2 border-b border-slate-100 bg-sky-50/70 px-4 py-2 text-xs">
+                    <div className="flex min-w-0 items-center gap-2 text-[#163A5F]">
+                      {notifPermission === 'granted' && phoneAlertsOn ? (
+                        <BellRing className="h-3.5 w-3.5 shrink-0 text-emerald-700" aria-hidden="true" />
+                      ) : (
+                        <BellOff className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden="true" />
+                      )}
+                      <span className="truncate font-semibold">
+                        {notifPermission === 'granted' && phoneAlertsOn
+                          ? tr('Arifa za simu zimewashwa', 'Phone alerts active')
+                          : notifPermission === 'denied'
+                            ? tr('Arifa zimezuiwa kwenye Settings', 'Blocked in Settings')
+                            : tr('Pata arifa mpya kwenye simu', 'Get new alerts on phone')}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void handleEnablePhoneAlerts()}
+                      className={`min-h-[30px] shrink-0 rounded-lg px-2.5 py-1 text-[11px] font-bold transition-colors ${
+                        notifPermission === 'granted' && phoneAlertsOn
+                          ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                          : 'bg-[#0E2640] text-white hover:bg-[#163A5F]'
+                      }`}
+                    >
+                      {notifPermission === 'granted'
+                        ? phoneAlertsOn
+                          ? tr('Zima', 'Mute')
+                          : tr('Washa', 'Enable')
+                        : tr('Washa Arifa', 'Enable')}
+                    </button>
+                  </div>
+                )}
+
                 {/* Notification List */}
                 <div className="max-h-[340px] divide-y divide-slate-100 overflow-y-auto">
                   {visibleNotifications.length === 0 ? (
@@ -373,8 +583,10 @@ export const Header: React.FC<HeaderProps> = ({
                         >
                           {thumb ? (
                             <img
-                              src={thumb}
+                              src={optimizeCloudinaryUrl(thumb, 128)}
                               alt={item.title}
+                              loading="lazy"
+                              decoding="async"
                               referrerPolicy="no-referrer"
                               className="h-12 w-12 shrink-0 rounded-lg object-cover border border-slate-200"
                             />
@@ -451,11 +663,26 @@ export const Header: React.FC<HeaderProps> = ({
               <button
                 type="button"
                 onClick={onOpenComposer}
-                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-[#D97706] px-3 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[#B45309] sm:px-3.5 sm:text-sm whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300"
+                aria-disabled={isSuspended && !isAdmin}
+                className={`inline-flex min-h-[40px] items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-white shadow-sm transition-colors sm:px-3.5 sm:text-sm whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300 ${
+                  isSuspended && !isAdmin
+                    ? 'bg-red-800/80 hover:bg-red-800'
+                    : 'bg-[#D97706] hover:bg-[#B45309]'
+                }`}
               >
-                <Plus className="h-4 w-4" aria-hidden="true" />
-                <span className="sm:hidden">{tr('Mada', 'Post')}</span>
-                <span className="hidden sm:inline">{tr('Anzisha Mada', 'New Post')}</span>
+                {isSuspended && !isAdmin ? (
+                  <Lock className="h-4 w-4" aria-hidden="true" />
+                ) : (
+                  <Plus className="h-4 w-4" aria-hidden="true" />
+                )}
+                <span className="sm:hidden">
+                  {isSuspended && !isAdmin ? tr('Imefungwa', 'Closed') : tr('Mada', 'Post')}
+                </span>
+                <span className="hidden sm:inline">
+                  {isSuspended && !isAdmin
+                    ? tr('Akaunti Imefungwa', 'Account Closed')
+                    : tr('Anzisha Mada', 'New Post')}
+                </span>
               </button>
 
               <div className="relative" ref={menuRef}>
@@ -485,6 +712,12 @@ export const Header: React.FC<HeaderProps> = ({
                         </p>
                         <VerificationBadge badge={userProfile?.verificationBadge} size="sm" />
                       </div>
+                      {isSuspended && !isAdmin && (
+                        <div className="mt-1 inline-flex items-center gap-1 rounded bg-red-100 px-1.5 py-0.5 text-[11px] font-bold text-red-800">
+                          <Lock className="h-3 w-3" aria-hidden="true" />
+                          <span>{tr('Akaunti Imefungwa', 'Account Closed')}</span>
+                        </div>
+                      )}
                       {userProfile && userProfile.verificationBadge !== 'none' && (
                         <div className="mt-1">
                           <VerificationBadge
@@ -574,7 +807,7 @@ export const Header: React.FC<HeaderProps> = ({
               type="button"
               disabled={authBusy}
               onClick={onSignIn}
-              aria-label={tr('Ingia na Google', 'Sign in with Google')}
+              aria-label={tr('Ingia au Jisajili', 'Sign in or Register')}
               className="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm transition-colors hover:bg-slate-100 disabled:opacity-60 sm:px-3.5 sm:text-sm whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300"
             >
               <GoogleGIcon />
@@ -585,7 +818,7 @@ export const Header: React.FC<HeaderProps> = ({
                   <>
                     {tr('Ingia', 'Sign in')}
                     <span className="hidden min-[420px]:inline">
-                      {tr(' na Google', ' with Google')}
+                      {tr(' / Jisajili', ' / Register')}
                     </span>
                   </>
                 )}
@@ -595,5 +828,6 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
     </header>
+    </>
   );
 };

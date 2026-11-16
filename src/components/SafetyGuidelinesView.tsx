@@ -1,6 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { Globe, Lock, ShieldCheck, UserCheck } from 'lucide-react';
+import { sendEmailVerification } from 'firebase/auth';
+import { AlertTriangle, BellRing, Globe, Lock, ShieldCheck, UserCheck } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
+import { ADMIN_EMAIL, auth } from '../firebase';
+import {
+  PhoneNotificationPermission,
+  getNotificationPermission,
+  isNotificationSupported,
+  isPhoneAlertsEnabled,
+  requestPhoneNotificationPermission,
+  sendPhoneNotification,
+  setPhoneAlertsEnabled,
+} from '../services/notificationService';
 import {
   Report,
   VERIFICATION_BADGE_META,
@@ -8,16 +19,19 @@ import {
   UserProfile,
 } from '../types';
 import { Avatar } from './Avatar';
+import { MemberIdCard } from './MemberIdCard';
 import { ModerationView } from './ModerationView';
 import { VerificationBadge } from './VerificationBadge';
 
 interface SafetyGuidelinesViewProps {
   userUid: string | null;
   userEmail: string | null;
+  userPhone?: string;
   userProfile: UserProfile | null;
   isAdmin: boolean;
+  isSuspended?: boolean;
   myReports: Report[];
-  onSaveProfile: (displayName: string, bio: string) => Promise<void>;
+  onSaveProfile: (displayName: string, bio: string, phoneNumber?: string) => Promise<void>;
   onSignIn: () => void;
   onUpdateReportStatus: (reportId: string, status: 'reviewed' | 'dismissed') => Promise<void>;
   onOpenTopic: (topicId: string) => void;
@@ -34,8 +48,10 @@ const BADGE_LEGEND_ORDER: VerificationBadgeType[] = [
 export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
   userUid,
   userEmail,
+  userPhone = '',
   userProfile,
   isAdmin,
+  isSuspended = false,
   myReports,
   onSaveProfile,
   onSignIn,
@@ -47,9 +63,107 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
     useLanguage();
   const [displayName, setDisplayName] = useState(userProfile?.displayName || '');
   const [bio, setBio] = useState(userProfile?.bio || '');
+  const [phone, setPhone] = useState(userPhone);
   const [saving, setSaving] = useState(false);
+  const [sendingVerify, setSendingVerify] = useState(false);
   const [savedNotice, setSavedNotice] = useState('');
   const [error, setError] = useState('');
+  const [notifPerm, setNotifPerm] = useState<PhoneNotificationPermission>(() =>
+    getNotificationPermission()
+  );
+  const [phoneAlertsOn, setPhoneAlertsOn] = useState<boolean>(() => isPhoneAlertsEnabled());
+
+  const handleTogglePhoneAlerts = async () => {
+    if (!isNotificationSupported()) {
+      onToast(
+        tr(
+          'Kivinjari au kifaa hiki hakiauni arifa za simu.',
+          'This device or browser does not support notifications.'
+        ),
+        'error'
+      );
+      return;
+    }
+
+    if (notifPerm === 'granted') {
+      const next = !phoneAlertsOn;
+      setPhoneAlertsEnabled(next);
+      setPhoneAlertsOn(next);
+      onToast(
+        next
+          ? tr('Arifa za simu zimewashwa!', 'Phone notifications enabled!')
+          : tr('Arifa za simu zimezimwa.', 'Phone notifications muted.')
+      );
+      return;
+    }
+
+    const res = await requestPhoneNotificationPermission();
+    setNotifPerm(res);
+    if (res === 'granted') {
+      setPhoneAlertsOn(true);
+      onToast(
+        tr(
+          'Arifa za simu zimewashwa! Utapata ujumbe mpya wa taarifa papo hapo.',
+          'Phone alerts active! You will receive new updates immediately.'
+        )
+      );
+    } else if (res === 'denied') {
+      onToast(
+        tr(
+          'Ruhusa imezuiwa. Fungua Settings ya App au Browser ili kuwezesha Notifications.',
+          'Permission blocked. Open App/Browser Settings to enable Notifications.'
+        ),
+        'error'
+      );
+    }
+  };
+
+  const handleSendTestAlert = async () => {
+    const ok = await sendPhoneNotification({
+      title: 'Malosha Forums',
+      body: tr(
+        'Jaribio la arifa limefanikiwa! Taarifa mpya zitaonekana hapa kwenye simu yako.',
+        'Notification test successful! New updates will appear on your phone.'
+      ),
+      tag: 'malosha-test-alert',
+    });
+    if (ok) {
+      onToast(tr('Arifa ya majaribio imetumwa!', 'Test notification sent!'));
+    } else {
+      onToast(
+        tr('Washa ruhusa ya arifa kwanza kabla ya kujaribu.', 'Enable notification permission first.'),
+        'error'
+      );
+    }
+  };
+
+  const isUnverifiedOwner =
+    Boolean(userUid) &&
+    !isAdmin &&
+    (userEmail || '').trim().toLowerCase() === ADMIN_EMAIL.toLowerCase();
+
+  const handleSendOwnerVerification = async () => {
+    if (!auth.currentUser) return;
+    setSendingVerify(true);
+    try {
+      await sendEmailVerification(auth.currentUser);
+      onToast(
+        tr(
+          'Kiungo cha uthibitisho kimetumwa kwenye mifumomaster@gmail.com. Thibitisha kisha fanya refresh au ingia kwa Google.',
+          'Verification link sent to mifumomaster@gmail.com. Verify and refresh, or sign in with Google.'
+        )
+      );
+    } catch (err) {
+      onToast(
+        err instanceof Error
+          ? err.message
+          : tr('Imeshindwa kutuma barua pepe ya uthibitisho.', 'Failed to send verification email.'),
+        'error'
+      );
+    } finally {
+      setSendingVerify(false);
+    }
+  };
 
   useEffect(() => {
     if (userProfile) {
@@ -58,13 +172,17 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
     }
   }, [userProfile]);
 
+  useEffect(() => {
+    setPhone(userPhone);
+  }, [userPhone]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     setError('');
     setSavedNotice('');
     try {
-      await onSaveProfile(displayName, bio);
+      await onSaveProfile(displayName, bio, phone);
       setSavedNotice(
         tr('Wasifu wako umehifadhiwa kikamilifu.', 'Your profile has been saved.')
       );
@@ -90,8 +208,8 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
             <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-slate-600">
               {isAdmin
                 ? tr(
-                    'Simamia taarifa zako binafsi, toa beji za uthibitisho wa akaunti, na kagua ripoti za usalama za Malosha Forums.',
-                    'Manage your personal info, assign account verification badges, and review Malosha Forums safety reports.'
+                    'Simamia taarifa zako binafsi, angalia jumla ya wanachama na taarifa zao, weka beji, funga akaunti za wakiukaji, na ondoa machapisho yenye maudhui mabaya.',
+                    'Manage your profile, view all members and details, assign verification badges, close accounts, and remove harmful posts.'
                   )
                 : tr(
                     'Hariri taarifa zako za hadhara, chagua lugha, fuatilia ripoti zako, na soma kanuni za usalama za Malosha Forums.',
@@ -137,7 +255,13 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
             {tr('Wasifu Wako', 'Your Profile')}
           </h2>
           {userUid && userProfile && (
-            <div className="flex items-center gap-2 text-xs">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              {isSuspended && !isAdmin && (
+                <span className="inline-flex items-center gap-1 rounded bg-red-100 px-2 py-0.5 font-bold text-red-800">
+                  <Lock className="h-3 w-3" aria-hidden="true" />
+                  <span>{tr('Akaunti Imefungwa', 'Account Closed')}</span>
+                </span>
+              )}
               {userProfile.verificationBadge !== 'none' ? (
                 <VerificationBadge
                   badge={userProfile.verificationBadge}
@@ -157,6 +281,114 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
           )}
         </div>
 
+        {isSuspended && !isAdmin && (
+          <div
+            role="alert"
+            className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-xs text-red-900"
+          >
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-700" aria-hidden="true" />
+              <div className="space-y-1">
+                <p className="text-sm font-bold">
+                  {tr('Akaunti Yako Imefungwa na Mmiliki wa Jukwaa', 'Your Account Has Been Closed by the Platform Owner')}
+                </p>
+                <p className="leading-relaxed">
+                  {tr(
+                    'Huwezi kupost mada, ku-comment, kupenda (like), kuripoti, au kubadilisha taarifa za akaunti kwa sasa.',
+                    'You cannot create posts, comment, like, report, or edit account details while your account is closed.'
+                  )}
+                </p>
+                {userProfile?.suspendedReason && (
+                  <p className="font-semibold">
+                    {tr('Sababu', 'Reason')}: {userProfile.suspendedReason}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isUnverifiedOwner && (
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-950">
+            <p className="text-sm font-bold">
+              {tr('Thibitisha Barua Pepe ya Mmiliki (mifumomaster@gmail.com)', 'Verify Owner Email (mifumomaster@gmail.com)')}
+            </p>
+            <p className="mt-1 leading-relaxed text-amber-900">
+              {tr(
+                'Kwa usalama wa mfumo, jopo la mmiliki linafunguka mara tu barua pepe ya mifumomaster@gmail.com ikithibitishwa (au ukiingia kwa Google).',
+                'For platform security, owner controls unlock once mifumomaster@gmail.com is verified (or when signing in with Google).'
+              )}
+            </p>
+            <button
+              type="button"
+              disabled={sendingVerify}
+              onClick={() => void handleSendOwnerVerification()}
+              className="mt-3 inline-flex min-h-[38px] items-center rounded-lg bg-[#0E2640] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#163A5F] disabled:opacity-60"
+            >
+              {sendingVerify
+                ? tr('Inatuma kiungo...', 'Sending link...')
+                : tr('Tuma Barua Pepe ya Uthibitisho', 'Send Verification Email')}
+            </button>
+          </div>
+        )}
+
+        {/* Phone Notifications Setting for Mobile App / PWA */}
+        {isNotificationSupported() && (
+          <div className="mt-4 flex flex-col justify-between gap-3 rounded-lg border border-slate-200 bg-[#F8FAFC] p-3.5 sm:flex-row sm:items-center">
+            <div className="flex items-start gap-2.5">
+              <BellRing className="mt-0.5 h-4 w-4 text-[#D97706] shrink-0" aria-hidden="true" />
+              <div>
+                <p className="text-xs font-bold text-slate-900">
+                  {tr('Arifa za Simu (App Notifications)', 'Phone Notifications (PWA Alerts)')}
+                </p>
+                <p className="text-[11px] text-slate-600">
+                  {notifPerm === 'granted' && phoneAlertsOn
+                    ? tr(
+                        'Imewashwa — utapokea ujumbe wa taarifa mpya kwenye simu yako.',
+                        'Active — you will receive new post alerts on your device.'
+                      )
+                    : notifPerm === 'denied'
+                      ? tr(
+                          'Imezuiwa na kivinjari/simu. Ruhusu Notifications kupitia Settings ya kifaa.',
+                          'Blocked by device/browser. Enable Notifications in device Settings.'
+                        )
+                      : tr(
+                          'Washa ili upate taarifa papo hapo simu yako ikiwa imeweka app ya Malosha.',
+                          'Enable to get instant alerts when Malosha is installed on your phone.'
+                        )}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              {notifPerm === 'granted' && phoneAlertsOn && (
+                <button
+                  type="button"
+                  onClick={() => void handleSendTestAlert()}
+                  className="min-h-[36px] rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  {tr('Jaribu Arifa', 'Test Alert')}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => void handleTogglePhoneAlerts()}
+                className={`min-h-[36px] rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors ${
+                  notifPerm === 'granted' && phoneAlertsOn
+                    ? 'border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                    : 'bg-[#0E2640] text-white hover:bg-[#163A5F]'
+                }`}
+              >
+                {notifPerm === 'granted'
+                  ? phoneAlertsOn
+                    ? tr('Zimewashwa · Zima', 'Enabled · Mute')
+                    : tr('Zimezimwa · Washa', 'Muted · Enable')
+                  : tr('Washa Arifa za Simu', 'Enable Phone Alerts')}
+              </button>
+            </div>
+          </div>
+        )}
+
         {!userUid ? (
           <div className="mt-5 flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
             <p className="text-sm text-slate-600">
@@ -170,7 +402,7 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
               onClick={onSignIn}
               className="min-h-[40px] rounded-lg bg-[#1D4E89] px-4 py-2 text-sm font-semibold text-white hover:bg-[#163A5F]"
             >
-              {tr('Ingia na Google', 'Sign in with Google')}
+              {tr('Ingia / Jisajili', 'Sign in / Register')}
             </button>
           </div>
         ) : (
@@ -237,9 +469,10 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
                   required
                   minLength={1}
                   maxLength={80}
+                  disabled={saving || isSuspended}
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
-                  className="mt-1.5 min-h-[40px] w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none"
+                  className="mt-1.5 min-h-[40px] w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
                 />
               </div>
 
@@ -257,6 +490,25 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
             </div>
 
             <div>
+              <label htmlFor="profile-phone" className="block text-xs font-semibold text-slate-700">
+                {tr(
+                  'Namba ya Simu (Binafsi — Haionekani Hadharani)',
+                  'Phone Number (Private — Never Shown Publicly)'
+                )}
+              </label>
+              <input
+                id="profile-phone"
+                type="tel"
+                maxLength={30}
+                disabled={saving || isSuspended}
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder={tr('Mfano: +255 712 345 678', 'e.g. +255 712 345 678')}
+                className="mt-1.5 min-h-[40px] w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none disabled:bg-slate-100 disabled:text-slate-500 sm:max-w-sm"
+              />
+            </div>
+
+            <div>
               <label htmlFor="profile-bio" className="block text-xs font-semibold text-slate-700">
                 {tr('Utambulisho Mfupi (Hiari)', 'Short Bio (Optional)')}
               </label>
@@ -264,13 +516,14 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
                 id="profile-bio"
                 rows={3}
                 maxLength={300}
+                disabled={saving || isSuspended}
                 value={bio}
                 onChange={(e) => setBio(e.target.value)}
                 placeholder={tr(
                   'Mfano: Mhandisi wa programu anayependa usalama wa mitandao...',
                   'Example: Software engineer passionate about digital communities...'
                 )}
-                className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white p-3 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none"
+                className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white p-3 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
               />
             </div>
 
@@ -280,7 +533,7 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
             <div className="flex justify-end">
               <button
                 type="submit"
-                disabled={saving}
+                disabled={saving || isSuspended}
                 className="min-h-[40px] rounded-lg bg-[#1D4E89] px-4 py-2 text-sm font-semibold text-white hover:bg-[#163A5F] disabled:opacity-60"
               >
                 {saving
@@ -289,6 +542,14 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
               </button>
             </div>
           </form>
+
+          {userProfile && (
+            <MemberIdCard
+              profile={userProfile}
+              isAdmin={isAdmin}
+              onToast={onToast}
+            />
+          )}
           </>
         )}
 
@@ -394,8 +655,8 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
           </h2>
           <p className="mt-2 text-xs leading-relaxed text-slate-600">
             {tr(
-              'Kila chapisho na jibu huthibitishwa na utambulisho halali wa Google ili kuzuia akaunti bandia na ujumbe wa taka.',
-              'Every post and reply is backed by valid Google authentication to deter fake accounts and spam.'
+              'Kila chapisho na jibu huthibitishwa na akaunti halali (Google au Barua Pepe) ili kuzuia akaunti bandia na ujumbe wa taka.',
+              'Every post and reply is backed by valid account authentication (Google or Email) to deter fake accounts and spam.'
             )}
           </p>
         </div>
@@ -407,8 +668,8 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
           </h2>
           <p className="mt-2 text-xs leading-relaxed text-slate-600">
             {tr(
-              'Anwani yako ya barua pepe huhifadhiwa kwenye mkusanyiko maalum wa siri unaoweza kusomwa na wewe pekee.',
-              'Your email address is stored in a private collection accessible only to you.'
+              'Barua pepe na namba yako ya simu huhifadhiwa kwenye mkusanyiko maalum wa siri unaoweza kusomwa na wewe pekee.',
+              'Your email address and phone number are stored in a private collection accessible only to you.'
             )}
           </p>
         </div>

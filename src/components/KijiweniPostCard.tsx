@@ -10,7 +10,8 @@ import {
   Share2,
   Trash2,
 } from 'lucide-react';
-import { Topic } from '../types';
+import { AuthPromptReason, Topic } from '../types';
+import { optimizeCloudinaryUrl } from '../services/cloudinaryService';
 import { useLanguage } from '../context/LanguageContext';
 import { Avatar } from './Avatar';
 import { RichText } from './RichText';
@@ -23,6 +24,7 @@ interface KijiweniPostCardProps {
   userDisplayName: string;
   userPhoto: string;
   isAdmin: boolean;
+  isSuspended?: boolean;
   hasVoted: boolean;
   onToggleVote: (topic: Topic) => void;
   onShareTopic: (topic: Topic) => void;
@@ -30,7 +32,7 @@ interface KijiweniPostCardProps {
   onEditTopic: (topic: Topic) => void;
   onDeleteTopic: (topic: Topic) => void;
   onOpenReport: (targetType: 'topic' | 'reply', targetId: string, topicId: string) => void;
-  onSignIn: () => void;
+  onSignIn: (reason?: AuthPromptReason) => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
   onRequestConfirm: (opts: {
     title: string;
@@ -47,6 +49,7 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
   userDisplayName,
   userPhoto,
   isAdmin,
+  isSuspended = false,
   hasVoted,
   onToggleVote,
   onShareTopic,
@@ -116,7 +119,7 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
           </div>
 
           <div className="flex items-center gap-1 shrink-0">
-            {canManage && post.status === 'open' && (
+            {canManage && post.status === 'open' && (!isSuspended || isAdmin) && (
               <button
                 type="button"
                 onClick={() => onEditTopic(post)}
@@ -127,7 +130,7 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
                 <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
               </button>
             )}
-            {canManage && (
+            {canManage && (!isSuspended || isAdmin) && (
               <button
                 type="button"
                 onClick={() => onDeleteTopic(post)}
@@ -138,7 +141,7 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
                 <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
               </button>
             )}
-            {userUid && !isAuthor && (
+            {userUid && !isAuthor && !isSuspended && (
               <button
                 type="button"
                 onClick={() => onOpenReport('topic', post.id, post.id)}
@@ -197,8 +200,10 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
               } overflow-hidden rounded-lg border border-slate-200 bg-slate-100`}
             >
               <img
-                src={post.coverImage}
+                src={optimizeCloudinaryUrl(post.coverImage, 760)}
                 alt={post.title.trim() || tr('Picha iliyochapishwa Kijiweni', 'Kijiweni photo post')}
+                loading="lazy"
+                decoding="async"
                 referrerPolicy="no-referrer"
                 onError={() => setImageFailed(true)}
                 className="max-h-[460px] w-full object-cover"
@@ -300,6 +305,7 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
             userDisplayName={userDisplayName}
             userPhoto={userPhoto}
             isAdmin={isAdmin}
+            isSuspended={isSuspended}
             compact
             autoFocus={autoFocusComment}
             onSignIn={onSignIn}

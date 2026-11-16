@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Briefcase, ImagePlus, Loader2, Send, X } from 'lucide-react';
 import { uploadImageToCloudinary } from '../services/cloudinaryService';
-import { JOB_TYPES } from '../types';
+import { AuthPromptReason, JOB_TYPES } from '../types';
 import { parseTagsInput } from '../utils/formatters';
 import { useLanguage } from '../context/LanguageContext';
 import { Avatar } from './Avatar';
@@ -13,7 +13,8 @@ interface FursaInlineComposerProps {
   userUid: string | null;
   userDisplayName: string;
   userPhoto: string;
-  onSignIn: () => void;
+  isSuspended?: boolean;
+  onSignIn: (reason?: AuthPromptReason) => void;
   onSubmitPost: (data: {
     title: string;
     body: string;
@@ -34,6 +35,7 @@ export const FursaInlineComposer: React.FC<FursaInlineComposerProps> = ({
   userUid,
   userDisplayName,
   userPhoto,
+  isSuspended = false,
   onSignIn,
   onSubmitPost,
   onToast,
@@ -67,7 +69,24 @@ export const FursaInlineComposer: React.FC<FursaInlineComposerProps> = ({
 
   const handleExpand = (triggerImagePicker = false) => {
     if (!userUid) {
-      onSignIn();
+      onToast(
+        tr(
+          'Tengeneza akaunti au ingia (kwa Google au Jisajili kawaida) ili kutangaza fursa.',
+          'Create an account or sign in to post an opportunity.'
+        ),
+        'error'
+      );
+      onSignIn('post');
+      return;
+    }
+    if (isSuspended) {
+      onToast(
+        tr(
+          'Akaunti yako imefungwa na msimamizi — huwezi kutangaza fursa.',
+          'Your account is suspended — posting is disabled.'
+        ),
+        'error'
+      );
       return;
     }
     setError('');
@@ -124,9 +143,10 @@ export const FursaInlineComposer: React.FC<FursaInlineComposerProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userUid) {
-      onSignIn();
+      onSignIn('post');
       return;
     }
+    if (isSuspended) return;
     setError('');
 
     const cleanTitle = title.trim();
@@ -199,15 +219,20 @@ export const FursaInlineComposer: React.FC<FursaInlineComposerProps> = ({
             onClick={() => handleExpand(false)}
             className="min-h-[44px] flex-1 rounded-full bg-[#F0F2F5] px-4 py-2 text-left text-sm text-slate-600 transition-colors hover:bg-slate-200/80"
           >
-            {userUid
+            {isSuspended
               ? tr(
-                  'Una fursa ya ajira, internship au ruzuku? Tangaza hapa...',
-                  'Have a job, internship, or grant opportunity? Post it here...'
+                  'Akaunti yako imefungwa — huwezi kutangaza fursa.',
+                  'Your account is suspended — posting is disabled.'
                 )
-              : tr(
-                  'Ingia na Google ili utangaze fursa mpya kwa vijana...',
-                  'Sign in with Google to post a new opportunity...'
-                )}
+              : userUid
+                ? tr(
+                    'Una fursa ya ajira, internship au ruzuku? Tangaza hapa...',
+                    'Have a job, internship, or grant opportunity? Post it here...'
+                  )
+                : tr(
+                    'Tengeneza akaunti (Google / Jisajili) ili utangaze fursa mpya...',
+                    'Create an account (Google / Register) to post a new opportunity...'
+                  )}
           </button>
           <button
             type="button"

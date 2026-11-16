@@ -9,22 +9,26 @@ import {
   Clock,
   Edit3,
   ExternalLink,
+  EyeOff,
   Flag,
   Heart,
   Lock,
   MapPin,
   MessageCircle,
   Pin,
+  RotateCcw,
   Share2,
   Trash2,
   Unlock,
 } from 'lucide-react';
 import {
+  AuthPromptReason,
   Topic,
   getMakalaSection,
   normalizeBoardCategory,
   resolveMakalaCover,
 } from '../types';
+import { optimizeCloudinaryUrl } from '../services/cloudinaryService';
 import { estimateReadMinutes } from '../utils/formatters';
 import { useLanguage } from '../context/LanguageContext';
 import { Avatar } from './Avatar';
@@ -40,6 +44,7 @@ interface TopicDetailProps {
   userDisplayName: string;
   userPhoto: string;
   isAdmin: boolean;
+  isSuspended?: boolean;
   hasVotedTopic: boolean;
   onBack: () => void;
   onSelectBoard: (board: Topic['category']) => void;
@@ -48,9 +53,10 @@ interface TopicDetailProps {
   onEditTopic: (topic: Topic) => void;
   onToggleLock: (topic: Topic) => void;
   onTogglePin: (topic: Topic) => void;
+  onToggleArchive?: (topic: Topic) => void;
   onDeleteTopic: (topic: Topic) => void;
   onOpenReport: (targetType: 'topic' | 'reply', targetId: string) => void;
-  onSignIn: () => void;
+  onSignIn: (reason?: AuthPromptReason) => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
   onRequestConfirm: (opts: {
     title: string;
@@ -69,6 +75,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
   userDisplayName,
   userPhoto,
   isAdmin,
+  isSuspended = false,
   hasVotedTopic,
   onBack,
   onSelectBoard,
@@ -77,6 +84,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
   onEditTopic,
   onToggleLock,
   onTogglePin,
+  onToggleArchive,
   onDeleteTopic,
   onOpenReport,
   onSignIn,
@@ -139,6 +147,30 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
           </span>
         </nav>
       </div>
+
+      {topic.status === 'archived' && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-950">
+          <div className="flex items-center gap-2 font-semibold">
+            <EyeOff className="h-4 w-4 shrink-0 text-amber-800" aria-hidden="true" />
+            <span>
+              {tr(
+                'Chapisho hili limefungwa kwa sababu ya maudhui mabaya na halionekani kwa watumiaji wengine.',
+                'This post is closed due to harmful content and is hidden from all other users.'
+              )}
+            </span>
+          </div>
+          {isAdmin && onToggleArchive && (
+            <button
+              type="button"
+              onClick={() => onToggleArchive(topic)}
+              className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg bg-[#0E2640] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#163A5F]"
+            >
+              <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>{tr('Rejesha Hewani', 'Restore Post')}</span>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Main Content Presentation */}
       {isMakala ? (
@@ -216,7 +248,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                         <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
                         <span>{tr('Shiriki', 'Share')}</span>
                       </button>
-                      {canManageTopic && topic.status === 'open' && (
+                      {canManageTopic && topic.status === 'open' && (!isSuspended || isAdmin) && (
                         <button
                           type="button"
                           onClick={() => onEditTopic(topic)}
@@ -226,7 +258,26 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                           <span>{tr('Hariri', 'Edit')}</span>
                         </button>
                       )}
-                      {canManageTopic && (
+                      {isAdmin && onToggleArchive && (
+                        <button
+                          type="button"
+                          onClick={() => onToggleArchive(topic)}
+                          className="inline-flex min-h-[34px] items-center gap-1 border border-amber-300 bg-amber-50 px-2.5 py-1 font-semibold text-amber-900 hover:bg-amber-100"
+                        >
+                          {topic.status === 'archived' ? (
+                            <>
+                              <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                              <span>{tr('Rejesha Hewani', 'Restore')}</span>
+                            </>
+                          ) : (
+                            <>
+                              <EyeOff className="h-3 w-3" aria-hidden="true" />
+                              <span>{tr('Funga Chapisho', 'Close Post')}</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+                      {canManageTopic && (!isSuspended || isAdmin) && (
                         <button
                           type="button"
                           onClick={() => onDeleteTopic(topic)}
@@ -240,13 +291,15 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                   </div>
 
                   {topic.coverImage && !coverFailed && (
-                    <figure className="my-6 overflow-hidden border border-slate-200 bg-slate-100">
+                    <figure className="my-6 overflow-hidden border border-slate-200 bg-slate-950/5">
                       <img
-                        src={resolveMakalaCover(topic.coverImage)}
+                        src={optimizeCloudinaryUrl(resolveMakalaCover(topic.coverImage), 1080)}
                         alt={topic.title}
+                        loading="lazy"
+                        decoding="async"
                         referrerPolicy="no-referrer"
                         onError={() => setCoverFailed(true)}
-                        className="aspect-[16/9] w-full object-cover"
+                        className="mx-auto h-auto max-h-[75vh] w-full object-contain"
                       />
                       <figcaption className="border-t border-slate-200 bg-[#F6F6F6] px-4 py-2 text-xs text-slate-600">
                         {tr('Picha', 'Photo')}: Malosha Forums · {topic.title}
@@ -297,7 +350,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                       </button>
                     </div>
 
-                    {userUid && !isTopicAuthor && (
+                    {userUid && !isTopicAuthor && !isSuspended && (
                       <button
                         type="button"
                         onClick={() => onOpenReport('topic', topic.id)}
@@ -327,6 +380,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                   userDisplayName={userDisplayName}
                   userPhoto={userPhoto}
                   isAdmin={isAdmin}
+                  isSuspended={isSuspended}
                   allowAcceptAnswer={false}
                   onSignIn={onSignIn}
                   onOpenReport={onOpenReport}
@@ -406,7 +460,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
               </div>
 
               <div className="flex flex-wrap items-center gap-2 text-xs">
-                {canManageTopic && topic.status === 'open' && (
+                {canManageTopic && topic.status === 'open' && (!isSuspended || isAdmin) && (
                   <button
                     type="button"
                     onClick={() => onEditTopic(topic)}
@@ -416,7 +470,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                     <span>{tr('Hariri', 'Edit')}</span>
                   </button>
                 )}
-                {canManageTopic && topic.status !== 'archived' && (
+                {canManageTopic && topic.status !== 'archived' && (!isSuspended || isAdmin) && (
                   <button
                     type="button"
                     onClick={() => onToggleLock(topic)}
@@ -430,7 +484,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                     ) : (
                       <>
                         <Lock className="h-3 w-3" aria-hidden="true" />
-                        <span>{tr('Funga', 'Lock')}</span>
+                        <span>{tr('Funga Maoni', 'Lock Comments')}</span>
                       </>
                     )}
                   </button>
@@ -445,7 +499,26 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                     <span>{topic.isPinned ? tr('Ondoa Bandiko', 'Unpin') : tr('Bandika', 'Pin')}</span>
                   </button>
                 )}
-                {canManageTopic && (
+                {isAdmin && onToggleArchive && (
+                  <button
+                    type="button"
+                    onClick={() => onToggleArchive(topic)}
+                    className="inline-flex min-h-[34px] items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 font-semibold text-amber-900 hover:bg-amber-100"
+                  >
+                    {topic.status === 'archived' ? (
+                      <>
+                        <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                        <span>{tr('Rejesha Hewani', 'Restore')}</span>
+                      </>
+                    ) : (
+                      <>
+                        <EyeOff className="h-3 w-3" aria-hidden="true" />
+                        <span>{tr('Funga Chapisho', 'Close Post')}</span>
+                      </>
+                    )}
+                  </button>
+                )}
+                {canManageTopic && (!isSuspended || isAdmin) && (
                   <button
                     type="button"
                     onClick={() => onDeleteTopic(topic)}
@@ -455,7 +528,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                     <span>{tr('Futa', 'Delete')}</span>
                   </button>
                 )}
-                {userUid && !isTopicAuthor && (
+                {userUid && !isTopicAuthor && !isSuspended && (
                   <button
                     type="button"
                     onClick={() => onOpenReport('topic', topic.id)}
@@ -483,8 +556,10 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
             {topic.coverImage && !coverFailed && (
               <figure className="mt-4 overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
                 <img
-                  src={topic.coverImage}
+                  src={optimizeCloudinaryUrl(topic.coverImage, 960)}
                   alt={topic.title.trim() || tr('Picha iliyochapishwa Kijiweni', 'Kijiweni photo post')}
+                  loading="lazy"
+                  decoding="async"
                   referrerPolicy="no-referrer"
                   onError={() => setCoverFailed(true)}
                   className="max-h-[520px] w-full object-cover"
@@ -625,7 +700,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                {canManageTopic && topic.status === 'open' && (
+                {canManageTopic && topic.status === 'open' && (!isSuspended || isAdmin) && (
                   <button
                     type="button"
                     onClick={() => onEditTopic(topic)}
@@ -635,7 +710,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                     <span>{tr('Hariri', 'Edit')}</span>
                   </button>
                 )}
-                {canManageTopic && topic.status !== 'archived' && (
+                {canManageTopic && topic.status !== 'archived' && (!isSuspended || isAdmin) && (
                   <button
                     type="button"
                     onClick={() => onToggleLock(topic)}
@@ -649,7 +724,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                     ) : (
                       <>
                         <Lock className="h-3 w-3" aria-hidden="true" />
-                        <span>{tr('Funga', 'Lock')}</span>
+                        <span>{tr('Funga Maoni', 'Lock Comments')}</span>
                       </>
                     )}
                   </button>
@@ -664,7 +739,26 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                     <span>{topic.isPinned ? tr('Ondoa Bandiko', 'Unpin') : tr('Bandika', 'Pin')}</span>
                   </button>
                 )}
-                {canManageTopic && (
+                {isAdmin && onToggleArchive && (
+                  <button
+                    type="button"
+                    onClick={() => onToggleArchive(topic)}
+                    className="inline-flex min-h-[36px] items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 font-semibold text-amber-900 hover:bg-amber-100"
+                  >
+                    {topic.status === 'archived' ? (
+                      <>
+                        <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                        <span>{tr('Rejesha Hewani', 'Restore')}</span>
+                      </>
+                    ) : (
+                      <>
+                        <EyeOff className="h-3 w-3" aria-hidden="true" />
+                        <span>{tr('Funga Chapisho', 'Close Post')}</span>
+                      </>
+                    )}
+                  </button>
+                )}
+                {canManageTopic && (!isSuspended || isAdmin) && (
                   <button
                     type="button"
                     onClick={() => onDeleteTopic(topic)}
@@ -754,8 +848,10 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
             {topic.coverImage && !coverFailed && (
               <figure className="mt-4 overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
                 <img
-                  src={topic.coverImage}
+                  src={optimizeCloudinaryUrl(topic.coverImage, 960)}
                   alt={topic.title}
+                  loading="lazy"
+                  decoding="async"
                   referrerPolicy="no-referrer"
                   onError={() => setCoverFailed(true)}
                   className="max-h-[520px] w-full object-cover"
@@ -793,7 +889,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                 </button>
               </div>
 
-              {userUid && !isTopicAuthor && (
+              {userUid && !isTopicAuthor && !isSuspended && (
                 <button
                   type="button"
                   onClick={() => onOpenReport('topic', topic.id)}
@@ -825,6 +921,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
             userDisplayName={userDisplayName}
             userPhoto={userPhoto}
             isAdmin={isAdmin}
+            isSuspended={isSuspended}
             allowAcceptAnswer={!isKijiweni}
             onSignIn={onSignIn}
             onOpenReport={onOpenReport}

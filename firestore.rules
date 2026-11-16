@@ -21,7 +21,9 @@ service cloud.firestore {
     }
 
     function isSignedIn() {
-      return request.auth != null && request.auth.token.email_verified == true;
+      return request.auth != null
+        && request.auth.uid != null
+        && request.auth.token.firebase.sign_in_provider != 'anonymous';
     }
 
     function isOwner(userId) {
@@ -35,6 +37,15 @@ service cloud.firestore {
       );
     }
 
+    function isNotSuspended() {
+      return isSignedIn() && (
+        isAdmin() ||
+        !exists(/databases/$(database)/documents/users/$(request.auth.uid)) ||
+        !('accountStatus' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data) ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountStatus != 'suspended'
+      );
+    }
+
     // 3. Entity Validation Blueprints
     function isValidUserProfile(data, userId) {
       return data.keys().hasAll([
@@ -43,6 +54,7 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'uid', 'displayName', 'photoURL', 'bio', 'role', 'verificationBadge',
+          'accountStatus', 'suspendedReason',
           'topicsCount', 'repliesCount', 'createdAt', 'updatedAt'
         ])
         && data.uid is string && data.uid == userId && data.uid.size() >= 1 && data.uid.size() <= 128
@@ -51,6 +63,8 @@ service cloud.firestore {
         && data.bio is string && data.bio.size() <= 300
         && data.role in ['member', 'moderator']
         && (!('verificationBadge' in data) || (data.verificationBadge is string && data.verificationBadge in ['none', 'individual', 'organization', 'government', 'owner']))
+        && (!('accountStatus' in data) || (data.accountStatus is string && data.accountStatus in ['active', 'suspended']))
+        && (!('suspendedReason' in data) || (data.suspendedReason is string && data.suspendedReason.size() <= 300))
         && data.topicsCount is int && data.topicsCount >= 0
         && data.repliesCount is int && data.repliesCount >= 0
         && data.createdAt is timestamp
@@ -59,9 +73,10 @@ service cloud.firestore {
 
     function isValidPrivateInfo(data, userId) {
       return data.keys().hasAll(['uid', 'email', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'email', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'phoneNumber', 'createdAt', 'updatedAt'])
         && data.uid is string && data.uid == userId && data.uid.size() >= 1 && data.uid.size() <= 128
         && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && (!('phoneNumber' in data) || (data.phoneNumber is string && data.phoneNumber.size() <= 30))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -167,6 +182,133 @@ service cloud.firestore {
         && data.createdAt is timestamp;
     }
 
+    function isValidChatMessage(data) {
+      return data.keys().hasAll([
+          'senderId', 'senderName', 'senderPhoto', 'text',
+          'attachmentType', 'attachmentUrl', 'attachmentName',
+          'attachmentSize', 'attachmentMime',
+          'replyToId', 'replyToSenderName', 'replyToPreview',
+          'isDeleted', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'senderId', 'senderName', 'senderPhoto', 'text',
+          'attachmentType', 'attachmentUrl', 'attachmentName',
+          'attachmentSize', 'attachmentMime',
+          'replyToId', 'replyToSenderName', 'replyToPreview',
+          'isDeleted', 'createdAt', 'updatedAt'
+        ])
+        && data.senderId is string && data.senderId.size() >= 1 && data.senderId.size() <= 128
+        && data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80
+        && data.senderPhoto is string && data.senderPhoto.size() <= 500
+        && data.text is string && data.text.size() <= 2000
+        && data.attachmentType in ['none', 'image', 'document']
+        && data.attachmentUrl is string && data.attachmentUrl.size() <= 500
+        && data.attachmentName is string && data.attachmentName.size() <= 140
+        && data.attachmentSize is int && data.attachmentSize >= 0 && data.attachmentSize <= 15728640
+        && data.attachmentMime is string && data.attachmentMime.size() <= 120
+        && data.replyToId is string && data.replyToId.size() <= 128
+        && data.replyToSenderName is string && data.replyToSenderName.size() <= 80
+        && data.replyToPreview is string && data.replyToPreview.size() <= 160
+        && data.isDeleted is bool
+        && (
+          data.isDeleted == true ||
+          data.text.size() >= 1 ||
+          (data.attachmentType in ['image', 'document'] && data.attachmentUrl.size() >= 10)
+        )
+        && (
+          data.attachmentType == 'none' ||
+          (data.attachmentUrl.size() >= 10 && data.attachmentUrl.matches('^https://.*'))
+        )
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMchartNote(data) {
+      return data.keys().hasAll([
+          'authorId', 'authorName', 'title', 'body', 'summary',
+          'fileName', 'wordCount', 'isArchived', 'isPinned',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'authorId', 'authorName', 'title', 'subtitle', 'body', 'summary',
+          'fileName', 'wordCount', 'isArchived', 'isPinned',
+          'pdfUrl', 'pdfFileName', 'pdfSize', 'noteType',
+          'isLocked', 'lockedTargetMode', 'lockPrice', 'lockCurrency', 'paymentInstructions',
+          'createdAt', 'updatedAt'
+        ])
+        && data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 160
+        && (!('subtitle' in data) || (data.subtitle is string && data.subtitle.size() <= 220))
+        && data.body is string && data.body.size() >= 5 && data.body.size() <= 15000
+        && data.summary is string && data.summary.size() <= 240
+        && data.fileName is string && data.fileName.size() >= 3 && data.fileName.size() <= 120
+        && data.wordCount is int && data.wordCount >= 1 && data.wordCount <= 50000
+        && data.isArchived is bool
+        && data.isPinned is bool
+        && (!('pdfUrl' in data) || (data.pdfUrl is string && data.pdfUrl.size() <= 500 && (data.pdfUrl == '' || data.pdfUrl.matches('^https://.*'))))
+        && (!('pdfFileName' in data) || (data.pdfFileName is string && data.pdfFileName.size() <= 140))
+        && (!('pdfSize' in data) || (data.pdfSize is int && data.pdfSize >= 0 && data.pdfSize <= 20971520))
+        && (!('noteType' in data) || (data.noteType is string && data.noteType in ['text', 'pdf', 'mixed']))
+        && (!('isLocked' in data) || data.isLocked is bool)
+        && (!('lockedTargetMode' in data) || (data.lockedTargetMode is string && data.lockedTargetMode in ['all', 'selected']))
+        && (!('lockPrice' in data) || (data.lockPrice is int && data.lockPrice >= 0 && data.lockPrice <= 100000000))
+        && (!('lockCurrency' in data) || (data.lockCurrency is string && data.lockCurrency.size() <= 10))
+        && (!('paymentInstructions' in data) || (data.paymentInstructions is string && data.paymentInstructions.size() <= 500))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidNoteProtectedContent(data, noteId) {
+      return data.keys().hasAll(['noteId', 'body', 'pdfUrl', 'pdfFileName', 'pdfSize', 'updatedAt'])
+        && data.keys().hasOnly(['noteId', 'body', 'pdfUrl', 'pdfFileName', 'pdfSize', 'updatedAt'])
+        && data.noteId is string && data.noteId == noteId && data.noteId.size() <= 128
+        && data.body is string && data.body.size() >= 5 && data.body.size() <= 15000
+        && data.pdfUrl is string && data.pdfUrl.size() <= 500 && (data.pdfUrl == '' || data.pdfUrl.matches('^https://.*'))
+        && data.pdfFileName is string && data.pdfFileName.size() <= 140
+        && data.pdfSize is int && data.pdfSize >= 0 && data.pdfSize <= 20971520
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidNoteAccess(data, noteId, userId) {
+      return data.keys().hasAll(['noteId', 'userId', 'userName', 'status', 'paymentReference', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['noteId', 'userId', 'userName', 'status', 'paymentReference', 'createdAt', 'updatedAt'])
+        && data.noteId is string && data.noteId == noteId && data.noteId.size() <= 128
+        && data.userId is string && data.userId == userId && data.userId.size() >= 1 && data.userId.size() <= 128
+        && data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 80
+        && data.status in ['pending', 'unlocked', 'locked']
+        && data.paymentReference is string && data.paymentReference.size() <= 240
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function noteDocData(noteId) {
+      return get(/databases/$(database)/documents/mchart_notes/$(noteId)).data;
+    }
+
+    function hasNoteAccessDoc(noteId) {
+      return exists(/databases/$(database)/documents/mchart_notes/$(noteId)/access/$(request.auth.uid));
+    }
+
+    function noteAccessStatus(noteId) {
+      return get(/databases/$(database)/documents/mchart_notes/$(noteId)/access/$(request.auth.uid)).data.status;
+    }
+
+    function canReadProtectedNoteContent(noteId) {
+      return isAdmin() || (
+        isSignedIn() && (
+          !('isLocked' in noteDocData(noteId)) ||
+          noteDocData(noteId).isLocked != true ||
+          (hasNoteAccessDoc(noteId) && noteAccessStatus(noteId) == 'unlocked') ||
+          (
+            ('lockedTargetMode' in noteDocData(noteId)) &&
+            noteDocData(noteId).lockedTargetMode == 'selected' &&
+            (!hasNoteAccessDoc(noteId) || (noteAccessStatus(noteId) != 'locked' && noteAccessStatus(noteId) != 'pending'))
+          )
+        )
+      );
+    }
+
     // 4. Admins Collection
     match /admins/{userId} {
       allow get: if isSignedIn() && isValidId(userId) && (userId == request.auth.uid || isAdmin());
@@ -184,6 +326,8 @@ service cloud.firestore {
         && isValidUserProfile(incoming(), userId)
         && (incoming().role == 'member' || isAdmin())
         && (!('verificationBadge' in incoming()) || incoming().verificationBadge == 'none' || isAdmin())
+        && (!('accountStatus' in incoming()) || incoming().accountStatus == 'active' || isAdmin())
+        && (!('suspendedReason' in incoming()) || incoming().suspendedReason == '' || isAdmin())
         && incoming().topicsCount == 0
         && incoming().repliesCount == 0
         && incoming().createdAt == request.time
@@ -199,6 +343,7 @@ service cloud.firestore {
           isAdmin() ||
           (
             isOwner(userId) &&
+            (!('accountStatus' in existing()) || existing().accountStatus != 'suspended') &&
             incoming().role == existing().role &&
             (
               (!('verificationBadge' in incoming()) && !('verificationBadge' in existing())) ||
@@ -233,7 +378,7 @@ service cloud.firestore {
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time;
 
-        allow update: if isSignedIn()
+        allow update: if isNotSuspended()
           && isValidId(userId)
           && docId == 'info'
           && isOwner(userId)
@@ -241,7 +386,7 @@ service cloud.firestore {
           && incoming().uid == existing().uid
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
-          && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'updatedAt']);
+          && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'phoneNumber', 'updatedAt']);
 
         allow delete: if (isOwner(userId) || isAdmin()) && isValidId(userId) && docId == 'info';
       }
@@ -256,7 +401,7 @@ service cloud.firestore {
         || isAdmin()
         || (isSignedIn() && resource.data.authorId == request.auth.uid);
 
-      allow create: if isSignedIn()
+      allow create: if isNotSuspended()
         && isValidId(topicId)
         && isValidTopic(incoming())
         && incoming().authorId == request.auth.uid
@@ -269,7 +414,7 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && incoming().lastActivityAt == request.time;
 
-      allow update: if isSignedIn()
+      allow update: if isNotSuspended()
         && isValidId(topicId)
         && isValidTopic(incoming())
         && incoming().authorId == existing().authorId
@@ -335,14 +480,14 @@ service cloud.firestore {
 
       allow delete: if isSignedIn()
         && isValidId(topicId)
-        && (existing().authorId == request.auth.uid || isAdmin());
+        && (isAdmin() || (isNotSuspended() && existing().authorId == request.auth.uid));
 
       // Topic Votes
       match /votes/{userId} {
         allow get: if isSignedIn() && isValidId(topicId) && isValidId(userId) && userId == request.auth.uid;
         allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
 
-        allow create: if isSignedIn()
+        allow create: if isNotSuspended()
           && isValidId(topicId)
           && isValidId(userId)
           && userId == request.auth.uid
@@ -351,7 +496,7 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/topics/$(topicId));
 
         allow update: if false;
-        allow delete: if isSignedIn() && isValidId(topicId) && isValidId(userId) && userId == request.auth.uid;
+        allow delete: if isNotSuspended() && isValidId(topicId) && isValidId(userId) && userId == request.auth.uid;
       }
 
       // Topic Replies Subcollection
@@ -364,7 +509,7 @@ service cloud.firestore {
           || isAdmin()
           || (isSignedIn() && resource.data.authorId == request.auth.uid);
 
-        allow create: if isSignedIn()
+        allow create: if isNotSuspended()
           && isValidId(topicId)
           && isValidId(replyId)
           && isValidReply(incoming(), topicId)
@@ -379,7 +524,7 @@ service cloud.firestore {
           && getAfter(/databases/$(database)/documents/topics/$(topicId)).data.repliesCount ==
              get(/databases/$(database)/documents/topics/$(topicId)).data.repliesCount + 1;
 
-        allow update: if isSignedIn()
+        allow update: if isNotSuspended()
           && isValidId(topicId)
           && isValidId(replyId)
           && isValidReply(incoming(), topicId)
@@ -436,14 +581,14 @@ service cloud.firestore {
         allow delete: if isSignedIn()
           && isValidId(topicId)
           && isValidId(replyId)
-          && (existing().authorId == request.auth.uid || isAdmin());
+          && (isAdmin() || (isNotSuspended() && existing().authorId == request.auth.uid));
 
         // Reply Votes
         match /votes/{userId} {
           allow get: if isSignedIn() && isValidId(topicId) && isValidId(replyId) && isValidId(userId) && userId == request.auth.uid;
           allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
 
-          allow create: if isSignedIn()
+          allow create: if isNotSuspended()
             && isValidId(topicId)
             && isValidId(replyId)
             && isValidId(userId)
@@ -453,7 +598,7 @@ service cloud.firestore {
             && exists(/databases/$(database)/documents/topics/$(topicId)/replies/$(replyId));
 
           allow update: if false;
-          allow delete: if isSignedIn() && isValidId(topicId) && isValidId(replyId) && isValidId(userId) && userId == request.auth.uid;
+          allow delete: if isNotSuspended() && isValidId(topicId) && isValidId(replyId) && isValidId(userId) && userId == request.auth.uid;
         }
       }
     }
@@ -463,7 +608,7 @@ service cloud.firestore {
       allow get: if isSignedIn() && isValidId(reportId) && (isAdmin() || existing().reporterId == request.auth.uid);
       allow list: if isSignedIn() && (isAdmin() || resource.data.reporterId == request.auth.uid);
 
-      allow create: if isSignedIn()
+      allow create: if isNotSuspended()
         && isValidId(reportId)
         && isValidReport(incoming())
         && incoming().reporterId == request.auth.uid
@@ -479,6 +624,129 @@ service cloud.firestore {
         && incoming().diff(existing()).affectedKeys().hasOnly(['status']);
 
       allow delete: if isAdmin() && isValidId(reportId);
+    }
+
+    // 8. Community Group Chat Messages
+    match /forum_chat_messages/{messageId} {
+      allow get: if isValidId(messageId);
+      allow list: if (resource.data.createdAt >= timestamp.date(1970, 1, 1) && request.query.limit <= 200)
+        || isAdmin()
+        || (isSignedIn() && resource.data.senderId == request.auth.uid);
+
+      allow create: if isNotSuspended()
+        && isValidId(messageId)
+        && isValidChatMessage(incoming())
+        && incoming().senderId == request.auth.uid
+        && incoming().isDeleted == false
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isNotSuspended()
+        && isValidId(messageId)
+        && isValidChatMessage(incoming())
+        && incoming().senderId == existing().senderId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().senderId == request.auth.uid &&
+            existing().isDeleted == false &&
+            incoming().isDeleted == true &&
+            incoming().attachmentType == 'none' &&
+            incoming().attachmentUrl == '' &&
+            incoming().attachmentName == '' &&
+            incoming().attachmentSize == 0 &&
+            incoming().attachmentMime == ''
+          )
+        );
+
+      allow delete: if isSignedIn()
+        && isValidId(messageId)
+        && (isAdmin() || (isNotSuspended() && existing().senderId == request.auth.uid));
+    }
+
+    // 9. Owner Mchart Notes & Archive Files
+    match /mchart_notes/{noteId} {
+      allow get: if isValidId(noteId);
+      allow list: if (resource.data.createdAt >= timestamp.date(1970, 1, 1) && request.query.limit <= 100)
+        || isAdmin();
+
+      allow create: if isAdmin()
+        && isValidId(noteId)
+        && isValidMchartNote(incoming())
+        && incoming().authorId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidId(noteId)
+        && isValidMchartNote(incoming())
+        && incoming().authorId == existing().authorId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isAdmin() && isValidId(noteId);
+
+      // Protected Full Body & PDF URL for Paid / Locked Notes
+      match /content/{docId} {
+        allow get: if isValidId(noteId)
+          && docId == 'full'
+          && canReadProtectedNoteContent(noteId);
+        allow list: if false;
+
+        allow create, update: if isAdmin()
+          && isValidId(noteId)
+          && docId == 'full'
+          && isValidNoteProtectedContent(incoming(), noteId)
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/mchart_notes/$(noteId));
+
+        allow delete: if isAdmin() && isValidId(noteId) && docId == 'full';
+      }
+
+      // Per-User Payment Unlock & Targeted Lock Records
+      match /access/{userId} {
+        allow get: if isValidId(noteId) && isValidId(userId) && (isAdmin() || isOwner(userId));
+        allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+
+        allow create: if isSignedIn()
+          && isValidId(noteId)
+          && isValidId(userId)
+          && isValidNoteAccess(incoming(), noteId, userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/mchart_notes/$(noteId))
+          && (
+            isAdmin() ||
+            (
+              isNotSuspended() &&
+              isOwner(userId) &&
+              incoming().status == 'pending'
+            )
+          );
+
+        allow update: if isSignedIn()
+          && isValidId(noteId)
+          && isValidId(userId)
+          && isValidNoteAccess(incoming(), noteId, userId)
+          && incoming().noteId == existing().noteId
+          && incoming().userId == existing().userId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            (
+              isNotSuspended() &&
+              isOwner(userId) &&
+              existing().status != 'unlocked' &&
+              incoming().status == 'pending' &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['status', 'userName', 'paymentReference', 'updatedAt'])
+            )
+          );
+
+        allow delete: if isAdmin() && isValidId(noteId) && isValidId(userId);
+      }
     }
   }
 }

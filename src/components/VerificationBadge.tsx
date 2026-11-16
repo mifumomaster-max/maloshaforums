@@ -1,6 +1,7 @@
 import React from 'react';
+import { Lock } from 'lucide-react';
 import { VERIFICATION_BADGE_META, VerificationBadgeType } from '../types';
-import { useAuthorBadge } from '../context/UserBadgesContext';
+import { useAuthorAccountStatus, useAuthorBadge } from '../context/UserBadgesContext';
 
 interface VerificationBadgeProps {
   badge?: VerificationBadgeType | null;
@@ -131,13 +132,27 @@ export const AuthorVerificationBadge: React.FC<AuthorVerificationBadgeProps> = (
   showLabel = false,
   fullLabel = false,
 }) => {
+  const { tr } = useLanguage();
   const badge = useAuthorBadge(uid);
+  const accountStatus = useAuthorAccountStatus(uid);
+
   return (
-    <VerificationBadge
-      badge={badge}
-      size={size}
-      showLabel={showLabel}
-      fullLabel={fullLabel}
-    />
+    <>
+      <VerificationBadge
+        badge={badge}
+        size={size}
+        showLabel={showLabel}
+        fullLabel={fullLabel}
+      />
+      {accountStatus === 'suspended' && (
+        <span
+          title={tr('Akaunti hii imefungwa na msimamizi', 'This account is suspended')}
+          className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-red-700 shrink-0"
+        >
+          <Lock className="h-3 w-3" aria-hidden="true" />
+          <span>{tr('Akaunti Imefungwa', 'Account Closed')}</span>
+        </span>
+      )}
+    </>
   );
 };

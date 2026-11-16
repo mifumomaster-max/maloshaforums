@@ -99,15 +99,98 @@ export const MAKALA_SECTIONS = [
 
 export type MakalaSection = (typeof MAKALA_SECTIONS)[number];
 
-export function getMakalaSection(tags: string[]): string {
-  const normalizedMap = new Map<string, string>(
+const SECTION_SYNONYMS: Record<string, MakalaSection> = {
+  habari: 'Habari',
+  news: 'Habari',
+  siasa: 'Habari',
+  taifa: 'Habari',
+  ripoti: 'Habari',
+  uchambuzi: 'Habari',
+  nishati: 'Habari',
+  uchumi: 'Uchumi',
+  biashara: 'Uchumi',
+  fedha: 'Uchumi',
+  soko: 'Uchumi',
+  economy: 'Uchumi',
+  business: 'Uchumi',
+  teknolojia: 'Teknolojia',
+  technologia: 'Teknolojia',
+  tech: 'Teknolojia',
+  tehama: 'Teknolojia',
+  kidijitali: 'Teknolojia',
+  digital: 'Teknolojia',
+  jamii: 'Jamii',
+  maendeleo: 'Jamii',
+  familia: 'Jamii',
+  mazingira: 'Jamii',
+  vijana: 'Jamii',
+  community: 'Jamii',
+  kilimo: 'Kilimo',
+  ufugaji: 'Kilimo',
+  mazao: 'Kilimo',
+  shamba: 'Kilimo',
+  agriculture: 'Kilimo',
+  michezo: 'Michezo',
+  soka: 'Michezo',
+  mpira: 'Michezo',
+  riadha: 'Michezo',
+  sports: 'Michezo',
+  elimu: 'Elimu',
+  shule: 'Elimu',
+  chuo: 'Elimu',
+  masomo: 'Elimu',
+  education: 'Elimu',
+  afya: 'Afya',
+  tiba: 'Afya',
+  hospitali: 'Afya',
+  lishe: 'Afya',
+  health: 'Afya',
+};
+
+export function getMakalaSection(tags: string[], title = ''): MakalaSection {
+  const normalizedMap = new Map<string, MakalaSection>(
     MAKALA_SECTIONS.map((sec) => [sec.toLowerCase(), sec])
   );
+
+  // 1. Exact canonical Makala section match in tags
   for (const tag of tags) {
-    const match = normalizedMap.get(tag.trim().toLowerCase());
+    const clean = tag.trim().toLowerCase();
+    const match = normalizedMap.get(clean);
     if (match) return match;
   }
+
+  // 2. Synonym match in tags
+  for (const tag of tags) {
+    const clean = tag.trim().toLowerCase();
+    if (SECTION_SYNONYMS[clean]) {
+      return SECTION_SYNONYMS[clean];
+    }
+  }
+
+  // 3. Keyword hint from article title if tags lacked section metadata
+  const lowerTitle = title.toLowerCase();
+  if (lowerTitle) {
+    for (const [keyword, section] of Object.entries(SECTION_SYNONYMS)) {
+      if (keyword.length >= 4 && lowerTitle.includes(keyword)) {
+        return section;
+      }
+    }
+  }
+
   return 'Habari';
+}
+
+export function matchesMakalaSection(
+  topic: Pick<Topic, 'tags' | 'title' | 'createdAt'>,
+  selectedSection: string
+): boolean {
+  if (selectedSection === 'all') return true;
+  if (selectedSection === 'recent') {
+    const createdMs = topic.createdAt ? topic.createdAt.toMillis() : Date.now();
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+    return Date.now() - createdMs <= sevenDaysMs;
+  }
+  return getMakalaSection(topic.tags, topic.title).toLowerCase() === selectedSection.toLowerCase();
 }
 
 export const TOPIC_CATEGORIES: PrimaryBoard[] = FORUM_BOARDS.map((b) => b.id);
@@ -219,6 +302,14 @@ export function normalizeVerificationBadge(val: unknown): VerificationBadgeType 
   return 'none';
 }
 
+export type AccountStatus = 'active' | 'suspended';
+
+export function normalizeAccountStatus(val: unknown): AccountStatus {
+  return val === 'suspended' ? 'suspended' : 'active';
+}
+
+export type AuthPromptReason = 'comment' | 'like' | 'post' | 'chat';
+
 export interface UserProfile {
   uid: string;
   displayName: string;
@@ -226,6 +317,8 @@ export interface UserProfile {
   bio: string;
   role: 'member' | 'moderator';
   verificationBadge: VerificationBadgeType;
+  accountStatus?: AccountStatus;
+  suspendedReason?: string;
   topicsCount: number;
   repliesCount: number;
   createdAt: Timestamp | null;
@@ -299,5 +392,81 @@ export interface Report {
   createdAt: Timestamp | null;
 }
 
-export type NavTab = 'all' | 'kijiweni' | 'fursa' | 'makala' | 'trending' | 'safety';
+export type ChatAttachmentType = 'none' | 'image' | 'document';
+
+export interface ChatMessage {
+  id: string;
+  senderId: string;
+  senderName: string;
+  senderPhoto: string;
+  text: string;
+  attachmentType: ChatAttachmentType;
+  attachmentUrl: string;
+  attachmentName: string;
+  attachmentSize: number;
+  attachmentMime: string;
+  replyToId: string;
+  replyToSenderName: string;
+  replyToPreview: string;
+  isDeleted: boolean;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export type NoteLockTargetMode = 'all' | 'selected';
+export type NoteAccessStatus = 'pending' | 'unlocked' | 'locked';
+
+export interface MchartNote {
+  id: string;
+  authorId: string;
+  authorName: string;
+  title: string;
+  subtitle?: string;
+  body: string;
+  summary: string;
+  fileName: string;
+  wordCount: number;
+  isArchived: boolean;
+  isPinned: boolean;
+  pdfUrl?: string;
+  pdfFileName?: string;
+  pdfSize?: number;
+  noteType?: 'text' | 'pdf' | 'mixed';
+  isLocked?: boolean;
+  lockedTargetMode?: NoteLockTargetMode;
+  lockPrice?: number;
+  lockCurrency?: string;
+  paymentInstructions?: string;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export interface MchartNoteContent {
+  noteId: string;
+  body: string;
+  pdfUrl: string;
+  pdfFileName: string;
+  pdfSize: number;
+  updatedAt: Timestamp | null;
+}
+
+export interface MchartNoteAccess {
+  noteId: string;
+  userId: string;
+  userName: string;
+  status: NoteAccessStatus;
+  paymentReference: string;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export type NavTab =
+  | 'all'
+  | 'kijiweni'
+  | 'fursa'
+  | 'makala'
+  | 'chat'
+  | 'trending'
+  | 'safety'
+  | 'auth';
 export type SortMode = 'newest' | 'votes' | 'oldest';

@@ -24,7 +24,7 @@ import {
   toggleAcceptReply,
   toggleReplyVote,
 } from '../services/forumService';
-import { Reply, Topic } from '../types';
+import { AuthPromptReason, Reply, Topic } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 import { Avatar } from './Avatar';
 import { renderLinkedInline } from './RichText';
@@ -36,10 +36,11 @@ interface FacebookCommentsThreadProps {
   userDisplayName: string;
   userPhoto?: string;
   isAdmin: boolean;
+  isSuspended?: boolean;
   allowAcceptAnswer?: boolean;
   compact?: boolean;
   autoFocus?: boolean;
-  onSignIn: () => void;
+  onSignIn: (reason?: AuthPromptReason) => void;
   onOpenReport: (targetType: 'topic' | 'reply', targetId: string) => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
   onRequestConfirm: (opts: {
@@ -75,6 +76,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
   userDisplayName,
   userPhoto = '',
   isAdmin,
+  isSuspended = false,
   allowAcceptAnswer = false,
   compact = false,
   autoFocus = false,
@@ -273,7 +275,24 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
   const handleSubmitMainComment = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!userUid) {
-      onSignIn();
+      onToast(
+        tr(
+          'Tafadhali tengeneza akaunti au ingia (Google au fomu ya kawaida) ili utoe maoni.',
+          'Please create an account or sign in to comment.'
+        ),
+        'error'
+      );
+      onSignIn('comment');
+      return;
+    }
+    if (isSuspended) {
+      onToast(
+        tr(
+          'Akaunti yako imefungwa. Huwezi kutoa maoni kwa sasa.',
+          'Your account is suspended. You cannot comment.'
+        ),
+        'error'
+      );
       return;
     }
     setMainError('');
@@ -294,7 +313,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
     try {
       const { auth } = await import('../firebase');
       if (!auth.currentUser) {
-        onSignIn();
+        onSignIn('comment');
         return;
       }
       await createReply(auth.currentUser, userDisplayName, topic.id, clean, '');
@@ -313,7 +332,17 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
   const handleSubmitNestedReply = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!userUid || !activeReplyThreadId) {
-      if (!userUid) onSignIn();
+      if (!userUid) onSignIn('comment');
+      return;
+    }
+    if (isSuspended) {
+      onToast(
+        tr(
+          'Akaunti yako imefungwa. Huwezi kutuma majibu kwa sasa.',
+          'Your account is suspended. You cannot reply.'
+        ),
+        'error'
+      );
       return;
     }
     const trimmed = nestedReplyText.trim();
@@ -339,7 +368,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
     try {
       const { auth } = await import('../firebase');
       if (!auth.currentUser) {
-        onSignIn();
+        onSignIn('comment');
         return;
       }
       await createReply(
@@ -371,7 +400,21 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
 
   const openInlineReply = (rootId: string, targetReply: Reply, isChild: boolean) => {
     if (!userUid) {
-      onSignIn();
+      onToast(
+        tr(
+          'Tengeneza akaunti au ingia ili kujibu maoni.',
+          'Create an account or sign in to reply.'
+        ),
+        'error'
+      );
+      onSignIn('comment');
+      return;
+    }
+    if (isSuspended) {
+      onToast(
+        tr('Akaunti yako imefungwa. Huwezi kujibu maoni.', 'Your account is suspended.'),
+        'error'
+      );
       return;
     }
     if (topic.status !== 'open') return;
@@ -387,7 +430,24 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
 
   const handleToggleLike = async (reply: Reply) => {
     if (!userUid) {
-      onToast(tr('Ingia na Google ili kupenda maoni.', 'Sign in with Google to like comments.'), 'error');
+      onToast(
+        tr(
+          'Tengeneza akaunti au ingia (kwa Google au Jisajili kawaida) ili kupenda maoni.',
+          'Create an account or sign in (Google or Register) to like comments.'
+        ),
+        'error'
+      );
+      onSignIn('like');
+      return;
+    }
+    if (isSuspended) {
+      onToast(
+        tr(
+          'Akaunti yako imefungwa. Huwezi kupenda maoni.',
+          'Your account is suspended. You cannot like comments.'
+        ),
+        'error'
+      );
       return;
     }
     const hasVoted = votedReplyIds.has(reply.id);
@@ -395,6 +455,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
   };
 
   const handleSaveEdit = async (replyId: string) => {
+    if (isSuspended) return;
     const clean = editingBody.trim();
     if (clean.length < 2) {
       onToast(
@@ -415,6 +476,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
   };
 
   const handleDelete = (reply: Reply) => {
+    if (isSuspended && !isAdmin) return;
     onRequestConfirm({
       title: tr('Futa Maoni Haya?', 'Delete this comment?'),
       message: tr(
@@ -431,6 +493,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
   };
 
   const handleToggleAccept = async (reply: Reply) => {
+    if (isSuspended) return;
     await toggleAcceptReply(
       topic.id,
       reply.id,
@@ -576,7 +639,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
                 </button>
               )}
 
-              {allowAcceptAnswer && userUid === topic.authorId && (
+              {allowAcceptAnswer && userUid === topic.authorId && !isSuspended && (
                 <button
                   type="button"
                   onClick={() => void handleToggleAccept(reply)}
@@ -590,7 +653,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
                 </button>
               )}
 
-              {isAuthor && topic.status === 'open' && (
+              {isAuthor && topic.status === 'open' && !isSuspended && (
                 <button
                   type="button"
                   onClick={() => {
@@ -604,7 +667,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
                 </button>
               )}
 
-              {(isAuthor || isAdmin) && (
+              {((isAuthor && !isSuspended) || isAdmin) && (
                 <button
                   type="button"
                   onClick={() => handleDelete(reply)}
@@ -615,7 +678,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
                 </button>
               )}
 
-              {userUid && !isAuthor && (
+              {userUid && !isAuthor && !isSuspended && (
                 <button
                   type="button"
                   onClick={() => onOpenReport('reply', reply.id)}
@@ -673,20 +736,27 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
             'This discussion is locked and not accepting new comments.'
           )}
         </p>
+      ) : isSuspended ? (
+        <p className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs font-medium text-red-800">
+          {tr(
+            'Akaunti yako imefungwa na msimamizi — huwezi kuandika maoni, kujibu, au kupenda.',
+            'Your account is suspended by the platform owner — you cannot comment, reply, or like.'
+          )}
+        </p>
       ) : !userUid ? (
         <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-slate-200 bg-[#F8FAFC] px-3.5 py-2.5">
-          <span className="text-xs text-slate-600">
+          <span className="text-xs text-slate-700">
             {tr(
-              'Ingia na akaunti yako ya Google ili kuandika maoni au kujibu.',
-              'Sign in with Google to comment or reply.'
+              'Tengeneza akaunti (kwa Google au Jisajili kawaida) ili uandike maoni, ujibu, au kupenda.',
+              'Create an account (with Google or standard registration) to comment, reply, or like.'
             )}
           </span>
           <button
             type="button"
-            onClick={onSignIn}
+            onClick={() => onSignIn('comment')}
             className="min-h-[38px] rounded-lg bg-[#1D4E89] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#163A5F] whitespace-nowrap"
           >
-            {tr('Ingia na Google', 'Sign in with Google')}
+            {tr('Jisajili / Ingia', 'Register / Sign In')}
           </button>
         </div>
       ) : (

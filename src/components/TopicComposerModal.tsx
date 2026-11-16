@@ -4,8 +4,10 @@ import {
   FORUM_BOARDS,
   JOB_TYPES,
   MAKALA_COVERS,
+  MAKALA_SECTIONS,
   Topic,
   TopicCategory,
+  getMakalaSection,
   normalizeBoardCategory,
   resolveMakalaCover,
 } from '../types';
@@ -39,9 +41,10 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
   onClose,
   onSubmit,
 }) => {
-  const { tr, getBoardLabel, getJobTypeLabel, getMakalaCoverLabel } = useLanguage();
+  const { tr, getBoardLabel, getJobTypeLabel, getMakalaCoverLabel, getMakalaSectionLabel } = useLanguage();
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState<TopicCategory>('Kijiweni');
+  const [makalaSection, setMakalaSection] = useState<string>(MAKALA_SECTIONS[0]);
   const [body, setBody] = useState('');
   const [tagsRaw, setTagsRaw] = useState('');
 
@@ -68,6 +71,11 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
       const norm = normalizeBoardCategory(editingTopic.category);
       setTitle(editingTopic.title);
       setCategory(norm);
+      setMakalaSection(
+        norm === 'Makala'
+          ? getMakalaSection(editingTopic.tags, editingTopic.title)
+          : MAKALA_SECTIONS[0]
+      );
       setBody(editingTopic.body);
       setTagsRaw(editingTopic.tags.join(', '));
       setCompany(editingTopic.company || '');
@@ -86,6 +94,7 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
           : 'Kijiweni';
       setTitle('');
       setCategory(initialCat);
+      setMakalaSection(MAKALA_SECTIONS[0]);
       setBody('');
       setTagsRaw('');
       setCompany('');
@@ -191,11 +200,21 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
 
     setSaving(true);
     try {
+      const parsedTags = parseTagsInput(tagsRaw);
+      const sectionTag = makalaSection.toLowerCase();
+      const canonicalLowerSections = new Set(MAKALA_SECTIONS.map((s) => s.toLowerCase()));
+      const finalTags = isMakala
+        ? [
+            sectionTag,
+            ...parsedTags.filter((t) => !canonicalLowerSections.has(t.toLowerCase())),
+          ].slice(0, 5)
+        : parsedTags;
+
       await onSubmit({
         title: cleanTitle,
         body: cleanBody,
         category,
-        tags: parseTagsInput(tagsRaw),
+        tags: finalTags,
         ...(isFursa
           ? {
               company: company.trim(),
@@ -476,9 +495,29 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
             </div>
           )}
 
-          {/* Makala Editorial Cover Image Upload & Presets */}
+          {/* Makala Editorial Section Selector + Cover Image Upload & Presets */}
           {isMakala && (
-            <div>
+            <div className="space-y-4">
+              <div>
+                <label
+                  htmlFor="makala-modal-section"
+                  className="block text-xs font-semibold text-slate-700"
+                >
+                  {tr('Kitengo cha Habari / Makala', 'News / Article Section')}
+                </label>
+                <select
+                  id="makala-modal-section"
+                  value={makalaSection}
+                  onChange={(e) => setMakalaSection(e.target.value)}
+                  className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:border-[#B80000] focus:outline-none sm:max-w-xs"
+                >
+                  {MAKALA_SECTIONS.map((sec) => (
+                    <option key={sec} value={sec}>
+                      {getMakalaSectionLabel(sec)}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="block text-xs font-semibold text-slate-700">
                   {tr(
