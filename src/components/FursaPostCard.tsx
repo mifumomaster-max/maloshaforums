@@ -239,15 +239,15 @@ export const FursaPostCard: React.FC<FursaPostCardProps> = ({
 
         {/* Attached Fursa Image */}
         {post.coverImage && !imageFailed && (
-          <div className="mt-3 overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
+          <div className="-mx-4 mt-3 overflow-hidden border-y border-slate-200 bg-slate-100 sm:mx-0 sm:rounded-lg sm:border">
             <img
-              src={optimizeCloudinaryUrl(post.coverImage, 760)}
+              src={optimizeCloudinaryUrl(post.coverImage, 1080)}
               alt={post.title}
               loading="lazy"
               decoding="async"
               referrerPolicy="no-referrer"
               onError={() => setImageFailed(true)}
-              className="max-h-[420px] w-full object-cover"
+              className="block h-auto w-full"
             />
           </div>
         )}

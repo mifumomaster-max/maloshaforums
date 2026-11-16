@@ -34,7 +34,7 @@ import {
   sendPhoneNotification,
   setPhoneAlertsEnabled,
 } from '../services/notificationService';
-import { Avatar } from './Avatar';
+import { Avatar, OnlineStatusPill } from './Avatar';
 import { AuthorVerificationBadge, VerificationBadge } from './VerificationBadge';
 
 interface HeaderProps {
@@ -112,6 +112,34 @@ export const Header: React.FC<HeaderProps> = ({
   const [phoneAlertsOn, setPhoneAlertsOn] = useState<boolean>(() => isPhoneAlertsEnabled());
   const menuRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
+  const fixedHeaderRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const el = fixedHeaderRef.current;
+    if (!el || typeof window === 'undefined') return;
+
+    const updateHeaderHeightVar = () => {
+      const h = Math.ceil(el.getBoundingClientRect().height);
+      if (h > 0) {
+        document.documentElement.style.setProperty('--malosha-header-h', `${h}px`);
+      }
+    };
+
+    updateHeaderHeightVar();
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(updateHeaderHeightVar);
+      ro.observe(el);
+      window.addEventListener('resize', updateHeaderHeightVar);
+      return () => {
+        ro.disconnect();
+        window.removeEventListener('resize', updateHeaderHeightVar);
+      };
+    }
+
+    window.addEventListener('resize', updateHeaderHeightVar);
+    return () => window.removeEventListener('resize', updateHeaderHeightVar);
+  }, []);
 
   const [readIds, setReadIds] = useState<Set<string>>(() => {
     if (typeof window === 'undefined') return new Set();
@@ -305,55 +333,42 @@ export const Header: React.FC<HeaderProps> = ({
   ];
 
   return (
-    <>
-      {/* Official Editorial Masthead with Moving Background Objects */}
-      <div className="relative overflow-hidden border-b border-white/10 bg-gradient-to-br from-[#0A1E33] via-[#0E2640] to-[#163A5F] text-white">
-        {/* Crisp Editorial Top Accent Line */}
-        <div
-          className="relative z-10 h-[3px] w-full bg-gradient-to-r from-[#D97706] via-[#F59E0B] to-[#38BDF8]"
-          aria-hidden="true"
-        />
+    <header
+      ref={fixedHeaderRef}
+      className="fixed inset-x-0 top-0 z-40 transform-gpu border-b border-white/10 bg-gradient-to-b from-[#0A1E33] via-[#0E2640] to-[#123050] text-white shadow-[0_4px_20px_rgba(10,25,47,0.22)] will-change-transform"
+    >
+      {/* Crisp Editorial Top Accent Line */}
+      <div
+        className="h-[3px] w-full bg-gradient-to-r from-[#D97706] via-[#F59E0B] to-[#38BDF8]"
+        aria-hidden="true"
+      />
 
-        {/* Animated Moving Background Objects */}
-        <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
-          <div className="animate-malosha-float-a absolute -top-12 left-[6%] h-44 w-44 rounded-full bg-[#F59E0B]/18 blur-2xl" />
-          <div className="animate-malosha-float-b absolute -right-10 -bottom-14 h-52 w-52 rounded-full bg-[#38BDF8]/16 blur-2xl" />
-          <div className="animate-malosha-float-b absolute top-4 left-[42%] h-20 w-20 rounded-2xl border border-amber-300/15 bg-amber-400/5" />
-          <div className="animate-malosha-float-a absolute right-[24%] bottom-2 h-14 w-14 rounded-full border border-sky-300/20 bg-sky-400/5" />
-          <div className="animate-malosha-beam absolute inset-y-0 w-36 bg-gradient-to-r from-transparent via-white/[0.06] to-transparent" />
-        </div>
-
-        <div className="relative z-10 mx-auto flex max-w-6xl flex-col gap-3 px-3.5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6 sm:py-5">
-          <div className="min-w-0">
-            <p className="text-[11px] font-semibold tracking-wide text-amber-300 sm:text-xs">
-              {tr(
-                'Jukwaa Rasmi la Jamii · Mijadala, Fursa & Habari',
-                'Official Community Platform · Discussions, Opportunities & News'
-              )}
-            </p>
-            <p className="font-display mt-1 text-base font-semibold leading-snug text-white sm:text-lg [text-wrap:balance]">
-              {tr(
-                'Sauti ya Pamoja kwa Maendeleo, Elimu na Ajira za Vijana',
-                'A Shared Voice for Progress, Knowledge, and Youth Opportunities'
-              )}
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2.5 self-start rounded-xl border border-white/15 bg-white/[0.07] px-3.5 py-2 backdrop-blur-xs sm:self-center shrink-0">
-            <CalendarDays className="h-4 w-4 shrink-0 text-amber-400" aria-hidden="true" />
-            <div className="text-left leading-tight">
-              <p className="text-xs font-bold text-white">{formattedDayAndDate.day}</p>
-              <p className="text-[11px] font-medium text-slate-200 tabular-nums">
-                {formattedDayAndDate.date}
-              </p>
-            </div>
+      {/* Centered Official Header Band (Fixed & Compact) */}
+      <div className="border-b border-white/10 bg-[#0A1E33]/55">
+        <div className="mx-auto flex max-w-6xl flex-col items-center justify-center px-3 py-1.5 text-center sm:px-6 sm:py-2">
+          <p className="text-[10px] font-bold tracking-wider text-amber-300 uppercase sm:text-xs">
+            {tr(
+              'Jukwaa Rasmi la Jamii · Mijadala, Fursa & Habari',
+              'Official Community Platform · Discussions, Opportunities & News'
+            )}
+          </p>
+          <p className="font-display mt-0.5 text-xs font-semibold leading-snug text-white sm:text-[15px] [text-wrap:balance]">
+            {tr(
+              'Sauti ya Pamoja kwa Maendeleo, Elimu na Ajira za Vijana',
+              'A Shared Voice for Progress, Knowledge, and Youth Opportunities'
+            )}
+          </p>
+          <div className="mt-0.5 inline-flex items-center justify-center gap-1.5 text-[10px] font-medium text-slate-200/90 tabular-nums sm:text-[11px]">
+            <CalendarDays className="h-3 w-3 shrink-0 text-amber-400" aria-hidden="true" />
+            <span>
+              {formattedDayAndDate.day}, {formattedDayAndDate.date}
+            </span>
           </div>
         </div>
       </div>
 
-      {/* Sticky Compact Navigation Bar */}
-      <header className="sticky top-0 z-40 border-b border-white/10 bg-[#0E2640]/95 text-white shadow-[0_4px_20px_rgba(10,25,47,0.18)] backdrop-blur-md">
-        <div className="mx-auto flex h-[56px] max-w-6xl items-center justify-between gap-3 px-3.5 sm:h-16 sm:gap-8 sm:px-6">
+      {/* Primary Fixed Navigation Bar */}
+      <div className="mx-auto flex h-[50px] max-w-6xl items-center justify-between gap-2.5 px-3.5 sm:h-[54px] sm:gap-8 sm:px-6">
         {/* Zone 1: Geometric Brand Emblem + Single-line Wordmark */}
         <button
           type="button"
@@ -453,7 +468,7 @@ export const Header: React.FC<HeaderProps> = ({
               <div
                 role="dialog"
                 aria-label={tr('Arifa za habari mpya', 'Latest news notifications')}
-                className="fixed inset-x-3 top-[64px] z-50 overflow-hidden rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl sm:absolute sm:inset-x-auto sm:top-full sm:right-0 sm:mt-2.5 sm:w-[380px]"
+                className="fixed inset-x-3 top-[calc(var(--malosha-header-h,118px)+8px)] z-50 overflow-hidden rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl sm:absolute sm:inset-x-auto sm:top-full sm:right-0 sm:mt-2.5 sm:w-[380px]"
               >
                 {/* Header */}
                 <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/80 px-4 py-3">
@@ -700,17 +715,20 @@ export const Header: React.FC<HeaderProps> = ({
                     name={userProfile?.displayName || userDisplayName}
                     photoURL={userProfile?.photoURL || userPhoto}
                     size="md"
+                    uid={userUid}
+                    showOnlineIndicator
                   />
                 </button>
 
                 {menuOpen && (
                   <div className="absolute right-0 mt-2.5 w-64 rounded-2xl border border-slate-200 bg-white p-2 text-slate-900 shadow-2xl">
                     <div className="border-b border-slate-100 px-3 py-2.5">
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         <p className="truncate text-sm font-semibold text-slate-900">
                           {userProfile?.displayName || userDisplayName}
                         </p>
                         <VerificationBadge badge={userProfile?.verificationBadge} size="sm" />
+                        <OnlineStatusPill uid={userUid} />
                       </div>
                       {isSuspended && !isAdmin && (
                         <div className="mt-1 inline-flex items-center gap-1 rounded bg-red-100 px-1.5 py-0.5 text-[11px] font-bold text-red-800">
@@ -828,6 +846,5 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
     </header>
-    </>
   );
 };

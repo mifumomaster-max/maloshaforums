@@ -225,6 +225,49 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["noteId", "userId", "userName", "status", "paymentReference", "createdAt", "updatedAt"]
+    },
+    "MemberIdRecord": {
+      "title": "MemberIdRecord",
+      "description": "Registered official Malosha Forums member ID card & security serial record for anti-fake verification (zero PII).",
+      "type": "object",
+      "properties": {
+        "cardNumber": { "type": "string", "minLength": 6, "maxLength": 32, "pattern": "^MLF-[A-Z0-9]+$" },
+        "controlSerial": { "type": "string", "minLength": 8, "maxLength": 8, "pattern": "^[0-9]{8}$" },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "photoURL": { "type": "string", "maxLength": 500 },
+        "role": { "type": "string", "enum": ["member", "moderator"] },
+        "verificationBadge": { "type": "string", "enum": ["none", "individual", "organization", "government", "owner"] },
+        "accountStatus": { "type": "string", "enum": ["active", "suspended"] },
+        "issuedAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "cardNumber", "controlSerial", "uid", "displayName", "photoURL",
+        "role", "verificationBadge", "accountStatus",
+        "issuedAt", "expiresAt", "updatedAt"
+      ]
+    },
+    "UserPresence": {
+      "title": "UserPresence",
+      "description": "Real-time online presence and Mchart typing indicator state per member (zero PII).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "isOnline": { "type": "boolean" },
+        "isTypingInMchart": { "type": "boolean" },
+        "replyingToName": { "type": "string", "maxLength": 80 },
+        "activeArea": { "type": "string", "enum": ["kijiweni", "fursa", "makala", "mchart", "profile", "forum"] },
+        "lastSeenAt": { "type": "string", "format": "date-time" },
+        "typingUpdatedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid", "displayName", "isOnline", "isTypingInMchart",
+        "replyingToName", "activeArea", "lastSeenAt", "typingUpdatedAt", "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -271,6 +314,14 @@
     "/mchart_notes/{noteId}/access/{userId}": {
       "schema": { "$ref": "#/entities/MchartNoteAccess" },
       "description": "Per-user payment unlock and specific lock access control records."
+    },
+    "/member_ids/{cardId}": {
+      "schema": { "$ref": "#/entities/MemberIdRecord" },
+      "description": "Official member ID card registry used by platform owner to verify ID authenticity."
+    },
+    "/user_presence/{userId}": {
+      "schema": { "$ref": "#/entities/UserPresence" },
+      "description": "Real-time online presence and Mchart typing status for active members."
     }
   }
 }

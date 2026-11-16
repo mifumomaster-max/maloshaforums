@@ -1,14 +1,18 @@
 import { User } from 'firebase/auth';
 import {
+  Timestamp,
   collection,
   deleteDoc,
   doc,
   getDoc,
   getDocs,
   increment,
+  limit,
+  query,
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
   writeBatch,
 } from 'firebase/firestore';
 import { ADMIN_EMAIL, db, handleFirestoreError, OperationType } from '../firebase';
@@ -19,10 +23,18 @@ import {
   MchartNote,
   MchartNoteAccess,
   MchartNoteContent,
+  MemberIdRecord,
+  MemberIdVerificationResult,
+  PresenceArea,
   ReportReason,
   TopicCategory,
   TopicStatus,
+  UserProfile,
   VerificationBadgeType,
+  computeMemberControlSerial,
+  formatMemberCode,
+  normalizeAccountStatus,
+  normalizeVerificationBadge,
 } from '../types';
 import { sanitizeTextInput } from '../utils/formatters';
 
@@ -206,6 +218,42 @@ export async function updateUserProfile(
   }
 }
 
+export async function updateUserProfilePhoto(
+  uid: string,
+  photoURL: string,
+  displayName?: string
+): Promise<string> {
+  const path = `users/${uid}`;
+  const cleanPhoto = sanitizeTextInput(photoURL, 500);
+  if (cleanPhoto && !cleanPhoto.startsWith('https://')) {
+    throw new Error('Kiungo cha picha si sahihi.');
+  }
+
+  try {
+    await updateDoc(doc(db, 'users', uid), {
+      photoURL: cleanPhoto,
+      updatedAt: serverTimestamp(),
+    });
+
+    const cardId = formatMemberCode(uid);
+    const idSnap = await getDoc(doc(db, 'member_ids', cardId)).catch(() => null);
+    if (idSnap && idSnap.exists()) {
+      const updates: Record<string, unknown> = {
+        photoURL: cleanPhoto,
+        updatedAt: serverTimestamp(),
+      };
+      if (displayName && sanitizeTextInput(displayName, 80)) {
+        updates.displayName = sanitizeTextInput(displayName, 80);
+      }
+      await updateDoc(doc(db, 'member_ids', cardId), updates).catch(() => {});
+    }
+
+    return cleanPhoto;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
 export async function updateUserVerificationBadge(
   targetUid: string,
   badge: VerificationBadgeType
@@ -216,6 +264,14 @@ export async function updateUserVerificationBadge(
       verificationBadge: badge,
       updatedAt: serverTimestamp(),
     });
+    const cardId = formatMemberCode(targetUid);
+    const idSnap = await getDoc(doc(db, 'member_ids', cardId)).catch(() => null);
+    if (idSnap && idSnap.exists()) {
+      await updateDoc(doc(db, 'member_ids', cardId), {
+        verificationBadge: badge,
+        updatedAt: serverTimestamp(),
+      }).catch(() => {});
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -234,6 +290,14 @@ export async function updateUserAccountStatus(
       suspendedReason: cleanReason,
       updatedAt: serverTimestamp(),
     });
+    const cardId = formatMemberCode(targetUid);
+    const idSnap = await getDoc(doc(db, 'member_ids', cardId)).catch(() => null);
+    if (idSnap && idSnap.exists()) {
+      await updateDoc(doc(db, 'member_ids', cardId), {
+        accountStatus: status,
+        updatedAt: serverTimestamp(),
+      }).catch(() => {});
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -1683,3 +1747,323 @@ export async function deleteMchartNote(noteId: string): Promise<void> {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
+
+export async function syncMemberIdRecord(profile: UserProfile): Promise<MemberIdRecord> {
+  const cardNumber = formatMemberCode(profile.uid);
+  const controlSerial = computeMemberControlSerial(profile.uid);
+  const path = `member_ids/${cardNumber}`;
+  const ref = doc(db, 'member_ids', cardNumber);
+
+  const safeName = sanitizeTextInput(profile.displayName || 'Mwanachama', 80) || 'Mwanachama';
+  const safePhoto = sanitizeTextInput(profile.photoURL || '', 500);
+  const role: 'member' | 'moderator' = profile.role === 'moderator' ? 'moderator' : 'member';
+  const badge = normalizeVerificationBadge(profile.verificationBadge);
+  const accountStatus = normalizeAccountStatus(profile.accountStatus);
+
+  const issuedTs = profile.createdAt || Timestamp.now();
+  const issuedDate = issuedTs.toDate();
+  const expiryDate = new Date(
+    issuedDate.getFullYear() + 10,
+    issuedDate.getMonth(),
+    issuedDate.getDate()
+  );
+  const expiresTs = Timestamp.fromDate(expiryDate);
+
+  try {
+    const snap = await getDoc(ref);
+    if (!snap.exists()) {
+      await setDoc(ref, {
+        cardNumber,
+        controlSerial,
+        uid: profile.uid,
+        displayName: safeName,
+        photoURL: safePhoto,
+        role,
+        verificationBadge: badge,
+        accountStatus,
+        issuedAt: issuedTs,
+        expiresAt: expiresTs,
+        updatedAt: serverTimestamp(),
+      });
+      return {
+        cardNumber,
+        controlSerial,
+        uid: profile.uid,
+        displayName: safeName,
+        photoURL: safePhoto,
+        role,
+        verificationBadge: badge,
+        accountStatus,
+        issuedAt: issuedTs,
+        expiresAt: expiresTs,
+        updatedAt: Timestamp.now(),
+      };
+    }
+
+    const existing = snap.data();
+    const needsSync =
+      existing.displayName !== safeName ||
+      existing.photoURL !== safePhoto;
+
+    if (needsSync && accountStatus !== 'suspended') {
+      await updateDoc(ref, {
+        displayName: safeName,
+        photoURL: safePhoto,
+        updatedAt: serverTimestamp(),
+      }).catch(() => {});
+    }
+
+    return {
+      cardNumber: String(existing.cardNumber || cardNumber),
+      controlSerial: String(existing.controlSerial || controlSerial),
+      uid: String(existing.uid || profile.uid),
+      displayName: safeName,
+      photoURL: safePhoto,
+      role: existing.role === 'moderator' ? 'moderator' : role,
+      verificationBadge: normalizeVerificationBadge(existing.verificationBadge ?? badge),
+      accountStatus: normalizeAccountStatus(existing.accountStatus ?? accountStatus),
+      issuedAt: existing.issuedAt || issuedTs,
+      expiresAt: existing.expiresAt || expiresTs,
+      updatedAt: existing.updatedAt || Timestamp.now(),
+    };
+  } catch (error) {
+    // Graceful fallback if suspended user tries initial write; read-only view still works
+    if (accountStatus === 'suspended') {
+      return {
+        cardNumber,
+        controlSerial,
+        uid: profile.uid,
+        displayName: safeName,
+        photoURL: safePhoto,
+        role,
+        verificationBadge: badge,
+        accountStatus,
+        issuedAt: issuedTs,
+        expiresAt: expiresTs,
+        updatedAt: Timestamp.now(),
+      };
+    }
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function verifyMemberIdByInput(
+  rawCardQuery: string,
+  rawControlSerial = ''
+): Promise<MemberIdVerificationResult> {
+  const trimmed = rawCardQuery.trim().toUpperCase().replace(/[\s.]+/g, '');
+  const cleanSerialInput = rawControlSerial.trim().replace(/\s+/g, '');
+
+  if (!trimmed) {
+    return { authentic: false, reason: 'not_found', record: null, source: 'none' };
+  }
+
+  let candidateCardId = '';
+  let serialQuery = '';
+
+  if (/^[0-9]{8}$/.test(trimmed)) {
+    serialQuery = trimmed;
+  } else if (trimmed.startsWith('MLF-')) {
+    candidateCardId = trimmed;
+  } else if (trimmed.startsWith('MLF') && trimmed.length > 3) {
+    candidateCardId = `MLF-${trimmed.slice(3)}`;
+  } else if (/^[A-Z0-9]{6,16}$/.test(trimmed)) {
+    candidateCardId = `MLF-${trimmed}`;
+  } else {
+    return { authentic: false, reason: 'not_found', record: null, source: 'none' };
+  }
+
+  let matchedRecord: MemberIdRecord | null = null;
+  let source: MemberIdVerificationResult['source'] = 'none';
+
+  // 1. Direct exact lookup in member_ids registry
+  if (candidateCardId && /^[A-Z0-9_\-]+$/.test(candidateCardId)) {
+    const path = `member_ids/${candidateCardId}`;
+    try {
+      const snap = await getDoc(doc(db, 'member_ids', candidateCardId));
+      if (snap.exists()) {
+        const d = snap.data();
+        matchedRecord = {
+          cardNumber: String(d.cardNumber || candidateCardId),
+          controlSerial: String(d.controlSerial || ''),
+          uid: String(d.uid || ''),
+          displayName: String(d.displayName || 'Mwanachama'),
+          photoURL: String(d.photoURL || ''),
+          role: d.role === 'moderator' ? 'moderator' : 'member',
+          verificationBadge: normalizeVerificationBadge(d.verificationBadge),
+          accountStatus: normalizeAccountStatus(d.accountStatus),
+          issuedAt: d.issuedAt || null,
+          expiresAt: d.expiresAt || null,
+          updatedAt: d.updatedAt || null,
+        };
+        source = 'registry';
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, path);
+    }
+  }
+
+  // 2. Lookup by 8-digit control serial if entered directly
+  if (!matchedRecord && serialQuery) {
+    const path = 'member_ids';
+    try {
+      const q = query(
+        collection(db, 'member_ids'),
+        where('controlSerial', '==', serialQuery),
+        limit(1)
+      );
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const d = snap.docs[0].data();
+        matchedRecord = {
+          cardNumber: String(d.cardNumber || snap.docs[0].id),
+          controlSerial: String(d.controlSerial || serialQuery),
+          uid: String(d.uid || ''),
+          displayName: String(d.displayName || 'Mwanachama'),
+          photoURL: String(d.photoURL || ''),
+          role: d.role === 'moderator' ? 'moderator' : 'member',
+          verificationBadge: normalizeVerificationBadge(d.verificationBadge),
+          accountStatus: normalizeAccountStatus(d.accountStatus),
+          issuedAt: d.issuedAt || null,
+          expiresAt: d.expiresAt || null,
+          updatedAt: d.updatedAt || null,
+        };
+        source = 'registry';
+      }
+    } catch {
+      // Non-admin cannot list; proceed to fallback check below
+    }
+  }
+
+  // 3. Fallback: Admin can check /users collection in case member never opened Profile tab yet
+  if (!matchedRecord) {
+    try {
+      const usersSnap = await getDocs(collection(db, 'users'));
+      for (const uDoc of usersSnap.docs) {
+        const uData = uDoc.data();
+        const uid = String(uData.uid || uDoc.id);
+        const generatedCode = formatMemberCode(uid);
+        const generatedSerial = computeMemberControlSerial(uid);
+        const matchesCode = candidateCardId !== '' && generatedCode === candidateCardId;
+        const matchesSerial = serialQuery !== '' && generatedSerial === serialQuery;
+        if (matchesCode || matchesSerial) {
+          const issuedTs: Timestamp = uData.createdAt || Timestamp.now();
+          const idDate = issuedTs.toDate();
+          const expTs = Timestamp.fromDate(
+            new Date(idDate.getFullYear() + 10, idDate.getMonth(), idDate.getDate())
+          );
+          matchedRecord = {
+            cardNumber: generatedCode,
+            controlSerial: generatedSerial,
+            uid,
+            displayName: String(uData.displayName || 'Mwanachama'),
+            photoURL: String(uData.photoURL || ''),
+            role: uData.role === 'moderator' ? 'moderator' : 'member',
+            verificationBadge: normalizeVerificationBadge(uData.verificationBadge),
+            accountStatus: normalizeAccountStatus(uData.accountStatus),
+            issuedAt: issuedTs,
+            expiresAt: expTs,
+            updatedAt: uData.updatedAt || issuedTs,
+          };
+          source = 'users_fallback';
+          break;
+        }
+      }
+    } catch {
+      // Non-admins cannot list /users; ignore cleanly
+    }
+  }
+
+  if (!matchedRecord) {
+    return { authentic: false, reason: 'not_found', record: null, source: 'none' };
+  }
+
+  // Always cross-check live /users/{uid} record so displayName, photo, badge & suspension state are fresh
+  try {
+    const liveUserSnap = await getDoc(doc(db, 'users', matchedRecord.uid));
+    if (liveUserSnap.exists()) {
+      const ud = liveUserSnap.data();
+      matchedRecord = {
+        ...matchedRecord,
+        displayName: String(ud.displayName || matchedRecord.displayName),
+        photoURL: String(ud.photoURL ?? matchedRecord.photoURL),
+        role: ud.role === 'moderator' ? 'moderator' : matchedRecord.role,
+        verificationBadge: normalizeVerificationBadge(ud.verificationBadge),
+        accountStatus: normalizeAccountStatus(ud.accountStatus),
+      };
+    }
+  } catch {
+    // Keep matchedRecord if /users fetch fails
+  }
+
+  if (cleanSerialInput && matchedRecord.controlSerial !== cleanSerialInput) {
+    return {
+      authentic: false,
+      reason: 'serial_mismatch',
+      record: matchedRecord,
+      source,
+    };
+  }
+
+  if (matchedRecord.accountStatus === 'suspended') {
+    return {
+      authentic: false,
+      reason: 'suspended',
+      record: matchedRecord,
+      source,
+    };
+  }
+
+  return {
+    authentic: true,
+    reason: 'valid',
+    record: matchedRecord,
+    source,
+  };
+}
+
+export async function writeUserPresence(
+  uid: string,
+  input: {
+    displayName: string;
+    isOnline: boolean;
+    isTypingInMchart?: boolean;
+    replyingToName?: string;
+    activeArea?: PresenceArea;
+  }
+): Promise<void> {
+  if (!uid || !/^[a-zA-Z0-9_-]{1,128}$/.test(uid)) return;
+  const path = `user_presence/${uid}`;
+  const cleanName = sanitizeTextInput(input.displayName || 'Mwanachama', 80) || 'Mwanachama';
+  const cleanReply = input.isTypingInMchart
+    ? sanitizeTextInput(input.replyingToName || '', 80)
+    : '';
+  const area: PresenceArea =
+    input.activeArea === 'kijiweni' ||
+    input.activeArea === 'fursa' ||
+    input.activeArea === 'makala' ||
+    input.activeArea === 'mchart' ||
+    input.activeArea === 'profile'
+      ? input.activeArea
+      : 'forum';
+
+  try {
+    await setDoc(doc(db, 'user_presence', uid), {
+      uid,
+      displayName: cleanName,
+      isOnline: Boolean(input.isOnline),
+      isTypingInMchart: Boolean(input.isOnline && input.isTypingInMchart),
+      replyingToName: cleanReply,
+      activeArea: area,
+      lastSeenAt: serverTimestamp(),
+      typingUpdatedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    // Non-fatal during offline/tab-unload transitions unless permission denied while active
+    if (error instanceof Error && error.message.toLowerCase().includes('permission')) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    }
+  }
+}
+

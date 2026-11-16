@@ -7,14 +7,18 @@ interface MobileBottomNavProps {
   activeTab: NavTab;
   onSelectTab: (tab: NavTab) => void;
   unreadChatCount?: number;
+  hidden?: boolean;
 }
 
 export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   activeTab,
   onSelectTab,
   unreadChatCount = 0,
+  hidden = false,
 }) => {
   const { tr } = useLanguage();
+
+  if (hidden) return null;
 
   const items: {
     id: NavTab;
@@ -31,7 +35,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   return (
     <nav
       aria-label={tr('Urambazaji wa simu', 'Mobile navigation')}
-      className="fixed right-0 bottom-0 left-0 z-40 border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-md md:hidden"
+      className="fixed right-0 bottom-0 left-0 z-40 transform-gpu border-t border-slate-200 bg-white pb-[env(safe-area-inset-bottom)] shadow-[0_-2px_12px_rgba(15,23,42,0.06)] will-change-transform md:hidden"
     >
       <div className="grid h-14 grid-cols-5 items-center">
         {items.map((item) => {

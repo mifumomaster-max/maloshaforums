@@ -325,6 +325,61 @@ export interface UserProfile {
   updatedAt: Timestamp | null;
 }
 
+export interface MemberIdRecord {
+  cardNumber: string;
+  controlSerial: string;
+  uid: string;
+  displayName: string;
+  photoURL: string;
+  role: 'member' | 'moderator';
+  verificationBadge: VerificationBadgeType;
+  accountStatus: AccountStatus;
+  issuedAt: Timestamp | null;
+  expiresAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export interface MemberIdVerificationResult {
+  authentic: boolean;
+  reason: 'valid' | 'suspended' | 'serial_mismatch' | 'not_found';
+  record: MemberIdRecord | null;
+  source: 'registry' | 'users_fallback' | 'none';
+}
+
+export type PresenceArea = 'kijiweni' | 'fursa' | 'makala' | 'mchart' | 'profile' | 'forum';
+
+export interface UserPresence {
+  uid: string;
+  displayName: string;
+  isOnline: boolean;
+  isTypingInMchart: boolean;
+  replyingToName: string;
+  activeArea: PresenceArea;
+  lastSeenAt: Timestamp | null;
+  typingUpdatedAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export function formatMemberCode(uid: string): string {
+  const clean = uid.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+  const suffix = (clean.slice(0, 8) || 'MEMBER01').padEnd(8, '0');
+  return `MLF-${suffix}`;
+}
+
+export function computeMemberControlSerial(uid: string): string {
+  const input = `${uid}:MALOSHA-FORUMS-ID-2026`;
+  let h1 = 0x811c9dc5;
+  let h2 = 0x9e3779b1;
+  for (let i = 0; i < input.length; i++) {
+    const c = input.charCodeAt(i);
+    h1 ^= c;
+    h1 = Math.imul(h1, 0x01000193) >>> 0;
+    h2 = (Math.imul(h2 ^ c, 0x85ebca6b) + i) >>> 0;
+  }
+  const combined = ((h1 ^ h2) >>> 0) % 1000000;
+  return `00${String(combined).padStart(6, '0')}`;
+}
+
 export interface Topic {
   id: string;
   title: string;

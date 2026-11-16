@@ -14,6 +14,7 @@ import {
 import { uploadImageToCloudinary } from '../services/cloudinaryService';
 import { parseTagsInput } from '../utils/formatters';
 import { useLanguage } from '../context/LanguageContext';
+import { ImageResizeModal } from './ImageResizeModal';
 
 interface TopicComposerModalProps {
   isOpen: boolean;
@@ -59,6 +60,10 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
   const [coverImage, setCoverImage] = useState<string>(MAKALA_COVERS[0].path);
   // Kijiweni & Fursa Cloudinary attachment
   const [kijiweniImage, setKijiweniImage] = useState<string>('');
+  const [pendingResize, setPendingResize] = useState<{
+    file: File;
+    target: 'kijiweni' | 'makala';
+  } | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
   const kijiweniFileRef = useRef<HTMLInputElement>(null);
   const makalaFileRef = useRef<HTMLInputElement>(null);
@@ -123,38 +128,39 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
   const isMakala = category === 'Makala';
   const isKijiweni = category === 'Kijiweni';
 
-  const handleKijiweniFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleKijiweniFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
     setError('');
-    setUploadingImage(true);
-    try {
-      const url = await uploadImageToCloudinary(file);
-      setKijiweniImage(url);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : tr('Imeshindwa kupakia picha.', 'Failed to upload image.')
-      );
-    } finally {
-      setUploadingImage(false);
-    }
+    setPendingResize({ file, target: 'kijiweni' });
   };
 
-  const handleMakalaFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleMakalaFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
     setError('');
+    setPendingResize({ file, target: 'makala' });
+  };
+
+  const handleConfirmResizedImage = async (resizedFile: File) => {
+    const target = pendingResize?.target || 'kijiweni';
+    setPendingResize(null);
+    setError('');
     setUploadingImage(true);
     try {
-      const url = await uploadImageToCloudinary(file);
-      setCoverImage(url);
+      const url = await uploadImageToCloudinary(resizedFile);
+      if (target === 'makala') {
+        setCoverImage(url);
+      } else {
+        setKijiweniImage(url);
+      }
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : tr('Imeshindwa kupakia picha ya makala.', 'Failed to upload cover image.')
+          : tr('Imeshindwa kupakia picha.', 'Failed to upload image.')
       );
     } finally {
       setUploadingImage(false);
@@ -467,7 +473,7 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
                     src={kijiweniImage}
                     alt={tr('Picha ya chapisho', 'Post image')}
                     referrerPolicy="no-referrer"
-                    className="max-h-56 w-full object-cover"
+                    className="block h-auto w-full"
                   />
                   <button
                     type="button"
@@ -559,7 +565,7 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
                     src={coverImage}
                     alt={tr('Hakiki ya picha ya makala', 'Cover image preview')}
                     referrerPolicy="no-referrer"
-                    className="aspect-[16/9] max-h-52 w-full object-cover"
+                    className="block h-auto w-full"
                   />
                   <button
                     type="button"
@@ -671,6 +677,12 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
           </div>
         </form>
       </div>
+
+      <ImageResizeModal
+        file={pendingResize?.file || null}
+        onCancel={() => setPendingResize(null)}
+        onConfirm={(resizedFile) => void handleConfirmResizedImage(resizedFile)}
+      />
     </div>
   );
 };

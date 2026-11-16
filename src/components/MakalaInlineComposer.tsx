@@ -5,6 +5,7 @@ import { AuthPromptReason, MAKALA_COVERS, MAKALA_SECTIONS } from '../types';
 import { parseTagsInput } from '../utils/formatters';
 import { useLanguage } from '../context/LanguageContext';
 import { Avatar } from './Avatar';
+import { ImageResizeModal } from './ImageResizeModal';
 import { AuthorVerificationBadge } from './VerificationBadge';
 
 interface MakalaInlineComposerProps {
@@ -43,6 +44,7 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
   const [body, setBody] = useState('');
   const [extraTags, setExtraTags] = useState('');
   const [coverImage, setCoverImage] = useState<string>('');
+  const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [showPresets, setShowPresets] = useState(false);
   const [previewFailed, setPreviewFailed] = useState(false);
@@ -107,22 +109,28 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
     setBody('');
     setExtraTags('');
     setCoverImage('');
+    setPendingImageFile(null);
     setShowPresets(false);
     setPreviewFailed(false);
     setError('');
     onExpandedChange(false);
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    setError('');
+    setPendingImageFile(file);
+  };
 
+  const handleConfirmResizedImage = async (resizedFile: File) => {
+    setPendingImageFile(null);
     setError('');
     setUploadingImage(true);
     setPreviewFailed(false);
     try {
-      const url = await uploadImageToCloudinary(file);
+      const url = await uploadImageToCloudinary(resizedFile);
       setCoverImage(url);
       setShowPresets(false);
       onToast(tr('Picha ya makala imeambatanishwa.', 'Article image attached.'));
@@ -389,7 +397,7 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
                   alt={tr('Hakiki ya picha ya makala', 'Article cover preview')}
                   referrerPolicy="no-referrer"
                   onError={() => setPreviewFailed(true)}
-                  className="aspect-[16/9] max-h-80 w-full object-cover"
+                  className="block h-auto w-full"
                 />
               ) : (
                 <div className="flex h-36 items-center justify-center bg-white text-xs text-slate-600">
@@ -527,6 +535,12 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
           </div>
         </div>
       </form>
+
+      <ImageResizeModal
+        file={pendingImageFile}
+        onCancel={() => setPendingImageFile(null)}
+        onConfirm={(resizedFile) => void handleConfirmResizedImage(resizedFile)}
+      />
     </section>
   );
 };

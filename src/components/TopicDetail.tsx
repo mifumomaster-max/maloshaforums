@@ -31,7 +31,7 @@ import {
 import { optimizeCloudinaryUrl } from '../services/cloudinaryService';
 import { estimateReadMinutes } from '../utils/formatters';
 import { useLanguage } from '../context/LanguageContext';
-import { Avatar } from './Avatar';
+import { Avatar, OnlineStatusPill } from './Avatar';
 import { LinkedText, RichText, extractFirstUrl } from './RichText';
 import { FacebookCommentsThread } from './FacebookCommentsThread';
 import { AuthorVerificationBadge } from './VerificationBadge';
@@ -206,8 +206,8 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 lg:items-start">
             {/* Main Essay Column (8 cols) */}
             <div className="space-y-5 lg:col-span-8">
-              <article className="overflow-hidden border border-slate-200 bg-white">
-                <div className="px-5 py-6 sm:px-8 sm:py-8">
+              <article className="-mx-3.5 overflow-hidden border-y border-slate-200 bg-white sm:mx-0 sm:border">
+                <div className="px-4 py-5 sm:px-8 sm:py-8">
                   <div className="mb-2 flex items-center gap-2 text-xs font-bold text-[#B80000] uppercase">
                     <span>{getMakalaSectionLabel(makalaSection)}</span>
                   </div>
@@ -219,11 +219,18 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                   <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-y border-slate-200 py-3 text-xs text-slate-600">
                     <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
                       <span className="inline-flex items-center gap-1.5 font-bold text-slate-900">
-                        <Avatar name={topic.authorName} photoURL={topic.authorPhoto} size="sm" />
+                        <Avatar
+                          name={topic.authorName}
+                          photoURL={topic.authorPhoto}
+                          uid={topic.authorId}
+                          showOnlineIndicator
+                          size="sm"
+                        />
                         <span>
                           {tr('Na', 'By')} {topic.authorName}
                         </span>
                         <AuthorVerificationBadge uid={topic.authorId} size="xs" />
+                        <OnlineStatusPill uid={topic.authorId} />
                       </span>
                       <span aria-hidden="true">·</span>
                       <span>{formatTime(topic.createdAt)}</span>
@@ -291,7 +298,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                   </div>
 
                   {topic.coverImage && !coverFailed && (
-                    <figure className="my-6 overflow-hidden border border-slate-200 bg-slate-950/5">
+                    <figure className="-mx-4 my-5 overflow-hidden border-y border-slate-200 bg-slate-100 sm:mx-0 sm:my-6 sm:border">
                       <img
                         src={optimizeCloudinaryUrl(resolveMakalaCover(topic.coverImage), 1080)}
                         alt={topic.title}
@@ -299,7 +306,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                         decoding="async"
                         referrerPolicy="no-referrer"
                         onError={() => setCoverFailed(true)}
-                        className="mx-auto h-auto max-h-[75vh] w-full object-contain"
+                        className="block h-auto w-full"
                       />
                       <figcaption className="border-t border-slate-200 bg-[#F6F6F6] px-4 py-2 text-xs text-slate-600">
                         {tr('Picha', 'Photo')}: Malosha Forums · {topic.title}
@@ -431,17 +438,24 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
         </div>
       ) : isKijiweni ? (
         /* ── KIJIWENI: Clean Facebook-Style Standalone Post Card ───────────────── */
-        <article className="overflow-hidden rounded-xl border border-slate-200 bg-white sm:rounded-lg">
+        <article className="-mx-3.5 overflow-hidden border-y border-slate-200 bg-white sm:mx-0 sm:rounded-lg sm:border">
           <div className="p-4 sm:p-6">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="flex items-center gap-3">
-                <Avatar name={topic.authorName} photoURL={topic.authorPhoto} size="md" />
+                <Avatar
+                  name={topic.authorName}
+                  photoURL={topic.authorPhoto}
+                  uid={topic.authorId}
+                  showOnlineIndicator
+                  size="md"
+                />
                 <div>
                   <div className="flex flex-wrap items-center gap-x-1.5">
                     <span className="text-[15px] font-bold text-slate-900">
                       {topic.authorName}
                     </span>
                     <AuthorVerificationBadge uid={topic.authorId} size="sm" />
+                    <OnlineStatusPill uid={topic.authorId} />
                     {topic.isPinned && (
                       <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#B45309]">
                         · <Pin className="h-3 w-3" aria-hidden="true" /> {tr('Maalum', 'Pinned')}
@@ -554,15 +568,15 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
             )}
 
             {topic.coverImage && !coverFailed && (
-              <figure className="mt-4 overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
+              <figure className="-mx-4 mt-4 overflow-hidden border-y border-slate-200 bg-slate-100 sm:mx-0 sm:rounded-lg sm:border">
                 <img
-                  src={optimizeCloudinaryUrl(topic.coverImage, 960)}
+                  src={optimizeCloudinaryUrl(topic.coverImage, 1080)}
                   alt={topic.title.trim() || tr('Picha iliyochapishwa Kijiweni', 'Kijiweni photo post')}
                   loading="lazy"
                   decoding="async"
                   referrerPolicy="no-referrer"
                   onError={() => setCoverFailed(true)}
-                  className="max-h-[520px] w-full object-cover"
+                  className="block h-auto w-full"
                 />
               </figure>
             )}
@@ -674,12 +688,19 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
               <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
                 <span className="inline-flex items-center gap-1.5">
-                  <Avatar name={topic.authorName} photoURL={topic.authorPhoto} size="sm" />
+                  <Avatar
+                    name={topic.authorName}
+                    photoURL={topic.authorPhoto}
+                    uid={topic.authorId}
+                    showOnlineIndicator
+                    size="sm"
+                  />
                   <span>
                     {tr('Mchapishaji:', 'Posted by:')}{' '}
                     <strong className="text-slate-800">{topic.authorName}</strong>
                   </span>
                   <AuthorVerificationBadge uid={topic.authorId} size="xs" />
+                  <OnlineStatusPill uid={topic.authorId} />
                 </span>
                 <span aria-hidden="true">·</span>
                 <button
@@ -842,19 +863,19 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
             </div>
           )}
 
-          <article className="overflow-hidden rounded-xl border border-slate-200 bg-white p-4 sm:rounded-lg sm:p-6">
+          <article className="-mx-3.5 overflow-hidden border-y border-slate-200 bg-white p-4 sm:mx-0 sm:rounded-lg sm:border sm:p-6">
             <RichText content={topic.body} />
 
             {topic.coverImage && !coverFailed && (
-              <figure className="mt-4 overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
+              <figure className="-mx-4 mt-4 overflow-hidden border-y border-slate-200 bg-slate-100 sm:mx-0 sm:rounded-lg sm:border">
                 <img
-                  src={optimizeCloudinaryUrl(topic.coverImage, 960)}
+                  src={optimizeCloudinaryUrl(topic.coverImage, 1080)}
                   alt={topic.title}
                   loading="lazy"
                   decoding="async"
                   referrerPolicy="no-referrer"
                   onError={() => setCoverFailed(true)}
-                  className="max-h-[520px] w-full object-cover"
+                  className="block h-auto w-full"
                 />
               </figure>
             )}

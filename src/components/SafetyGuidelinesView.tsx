@@ -1,8 +1,32 @@
-import React, { useEffect, useState } from 'react';
-import { sendEmailVerification } from 'firebase/auth';
-import { AlertTriangle, BellRing, Globe, Lock, ShieldCheck, UserCheck } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  EmailAuthProvider,
+  linkWithCredential,
+  reauthenticateWithCredential,
+  reauthenticateWithPopup,
+  sendEmailVerification,
+  sendPasswordResetEmail,
+  updatePassword,
+} from 'firebase/auth';
+import {
+  AlertTriangle,
+  BellRing,
+  Camera,
+  Check,
+  Copy,
+  Eye,
+  EyeOff,
+  Globe,
+  KeyRound,
+  Loader2,
+  Lock,
+  ShieldCheck,
+  Trash2,
+  UserCheck,
+} from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
-import { ADMIN_EMAIL, auth } from '../firebase';
+import { ADMIN_EMAIL, auth, googleProvider } from '../firebase';
+import { uploadImageToCloudinary } from '../services/cloudinaryService';
 import {
   PhoneNotificationPermission,
   getNotificationPermission,
@@ -17,21 +41,30 @@ import {
   VERIFICATION_BADGE_META,
   VerificationBadgeType,
   UserProfile,
+  computeMemberControlSerial,
+  formatMemberCode,
 } from '../types';
-import { Avatar } from './Avatar';
+import { Avatar, OnlineStatusPill } from './Avatar';
+import { ImageResizeModal } from './ImageResizeModal';
 import { MemberIdCard } from './MemberIdCard';
+import { MemberIdVerifier } from './MemberIdVerifier';
 import { ModerationView } from './ModerationView';
 import { VerificationBadge } from './VerificationBadge';
 
 interface SafetyGuidelinesViewProps {
   userUid: string | null;
   userEmail: string | null;
+  userEmailVerified?: boolean;
+  userCreationTime?: string;
+  userLastSignInTime?: string;
+  userProviders?: string[];
   userPhone?: string;
   userProfile: UserProfile | null;
   isAdmin: boolean;
   isSuspended?: boolean;
   myReports: Report[];
   onSaveProfile: (displayName: string, bio: string, phoneNumber?: string) => Promise<void>;
+  onUpdateProfilePhoto?: (photoURL: string) => Promise<void>;
   onSignIn: () => void;
   onUpdateReportStatus: (reportId: string, status: 'reviewed' | 'dismissed') => Promise<void>;
   onOpenTopic: (topicId: string) => void;
@@ -48,12 +81,17 @@ const BADGE_LEGEND_ORDER: VerificationBadgeType[] = [
 export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
   userUid,
   userEmail,
+  userEmailVerified = false,
+  userCreationTime = '',
+  userLastSignInTime = '',
+  userProviders = [],
   userPhone = '',
   userProfile,
   isAdmin,
   isSuspended = false,
   myReports,
   onSaveProfile,
+  onUpdateProfilePhoto,
   onSignIn,
   onUpdateReportStatus,
   onOpenTopic,
@@ -72,6 +110,57 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
     getNotificationPermission()
   );
   const [phoneAlertsOn, setPhoneAlertsOn] = useState<boolean>(() => isPhoneAlertsEnabled());
+
+  // Profile Photo Upload + Crop State
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const [pendingPhotoFile, setPendingPhotoFile] = useState<File | null>(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+
+  // Password Update / Setup State
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showCurrentPw, setShowCurrentPw] = useState(false);
+  const [showNewPw, setShowNewPw] = useState(false);
+  const [passwordBusy, setPasswordBusy] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
+  const [passwordSuccess, setPasswordSuccess] = useState('');
+  const [copiedUid, setCopiedUid] = useState(false);
+  const [passwordLinkedNow, setPasswordLinkedNow] = useState(false);
+
+  useEffect(() => {
+    setPasswordLinkedNow(false);
+  }, [userUid]);
+
+  const hasPasswordProvider = useMemo(
+    () => userProviders.includes('password') || passwordLinkedNow,
+    [userProviders, passwordLinkedNow]
+  );
+  const hasGoogleProvider = useMemo(
+    () => userProviders.includes('google.com'),
+    [userProviders]
+  );
+  const memberCode = useMemo(
+    () => (userUid ? formatMemberCode(userUid) : ''),
+    [userUid]
+  );
+  const controlSerial = useMemo(
+    () => (userUid ? computeMemberControlSerial(userUid) : ''),
+    [userUid]
+  );
+
+  const formatFullDate = (ts?: { toDate: () => Date } | null, isoFallback?: string): string => {
+    const d = ts ? ts.toDate() : isoFallback ? new Date(isoFallback) : null;
+    if (!d || Number.isNaN(d.getTime())) return tr('Haijarekodiwa', 'Not recorded');
+    try {
+      return new Intl.DateTimeFormat(lang === 'sw' ? 'sw-TZ' : 'en-US', {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      }).format(d);
+    } catch {
+      return d.toLocaleString();
+    }
+  };
 
   const handleTogglePhoneAlerts = async () => {
     if (!isNotificationSupported()) {
@@ -197,8 +286,268 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
     }
   };
 
+  const handleSelectPhotoFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      onToast(
+        tr('Tafadhali chagua faili la picha pekee.', 'Please choose an image file only.'),
+        'error'
+      );
+      return;
+    }
+    setPendingPhotoFile(file);
+  };
+
+  const handleConfirmPhotoCrop = async (resizedFile: File) => {
+    setPendingPhotoFile(null);
+    if (!onUpdateProfilePhoto) return;
+    setUploadingPhoto(true);
+    try {
+      const uploadedUrl = await uploadImageToCloudinary(resizedFile);
+      await onUpdateProfilePhoto(uploadedUrl);
+      onToast(
+        tr(
+          'Picha ya wasifu na kitambulisho chako zimebadilishwa papo hapo!',
+          'Your profile and member ID card photo have been updated!'
+        )
+      );
+    } catch (err) {
+      onToast(
+        err instanceof Error
+          ? err.message
+          : tr('Imeshindwa kupakia picha mpya.', 'Failed to upload new photo.'),
+        'error'
+      );
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const handleRemoveProfilePhoto = async () => {
+    if (!onUpdateProfilePhoto) return;
+    setUploadingPhoto(true);
+    try {
+      await onUpdateProfilePhoto('');
+      onToast(
+        tr(
+          'Picha imeondolewa kwenye wasifu na kitambulisho chako.',
+          'Photo removed from your profile and ID card.'
+        )
+      );
+    } catch (err) {
+      onToast(
+        err instanceof Error
+          ? err.message
+          : tr('Imeshindwa kuondoa picha.', 'Failed to remove photo.'),
+        'error'
+      );
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const handlePasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordError('');
+    setPasswordSuccess('');
+
+    const currentUser = auth.currentUser;
+    if (!currentUser || !currentUser.email) {
+      setPasswordError(
+        tr('Barua pepe ya akaunti haikupatikana.', 'Account email address is unavailable.')
+      );
+      return;
+    }
+
+    if (hasPasswordProvider && currentPassword.length < 1) {
+      setPasswordError(
+        tr('Tafadhali ingiza nenosiri lako la sasa.', 'Please enter your current password.')
+      );
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      setPasswordError(
+        tr(
+          'Nenosiri jipya lazima liwe na angalau herufi 6.',
+          'New password must be at least 6 characters long.'
+        )
+      );
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordError(
+        tr(
+          'Nenosiri jipya na uthibitisho havifanani.',
+          'New password and confirmation do not match.'
+        )
+      );
+      return;
+    }
+
+    if (hasPasswordProvider && currentPassword === newPassword) {
+      setPasswordError(
+        tr(
+          'Nenosiri jipya haliwezi kufanana na la sasa.',
+          'New password cannot be the same as your current password.'
+        )
+      );
+      return;
+    }
+
+    setPasswordBusy(true);
+    try {
+      if (hasPasswordProvider) {
+        const cred = EmailAuthProvider.credential(currentUser.email, currentPassword);
+        await reauthenticateWithCredential(currentUser, cred);
+        await updatePassword(currentUser, newPassword);
+        setPasswordSuccess(
+          tr(
+            'Nenosiri lako la kuingia limebadilishwa kikamilifu.',
+            'Your login password has been updated successfully.'
+          )
+        );
+      } else {
+        const cred = EmailAuthProvider.credential(currentUser.email, newPassword);
+        try {
+          await linkWithCredential(currentUser, cred);
+        } catch (linkErr) {
+          const linkCode =
+            typeof linkErr === 'object' && linkErr !== null && 'code' in linkErr
+              ? String((linkErr as { code?: unknown }).code || '')
+              : '';
+          if (linkCode === 'auth/requires-recent-login') {
+            await reauthenticateWithPopup(currentUser, googleProvider);
+            await linkWithCredential(currentUser, cred);
+          } else {
+            throw linkErr;
+          }
+        }
+        setPasswordLinkedNow(true);
+        setPasswordSuccess(
+          tr(
+            'Nenosiri lako limewekwa! Sasa unaweza kuingia pia kwa barua pepe na nenosiri.',
+            'Password set! You can now also sign in with your email and password.'
+          )
+        );
+      }
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      onToast(
+        tr('Nenosiri limehifadhiwa kikamilifu!', 'Password saved successfully!')
+      );
+    } catch (err) {
+      const code =
+        typeof err === 'object' && err !== null && 'code' in err
+          ? String((err as { code?: unknown }).code || '')
+          : '';
+      if (
+        code === 'auth/wrong-password' ||
+        code === 'auth/invalid-credential'
+      ) {
+        setPasswordError(
+          tr(
+            'Nenosiri la sasa si sahihi. Hakikisha umeandika kwa usahihi au tumia chaguo la kutuma kiungo kwa Email.',
+            'Current password is incorrect. Double-check it or use the email reset link option.'
+          )
+        );
+      } else if (code === 'auth/weak-password') {
+        setPasswordError(
+          tr(
+            'Nenosiri jipya ni dhaifu sana. Tumia mchanganyiko wa herufi na namba angalau 6.',
+            'New password is too weak. Use at least 6 characters.'
+          )
+        );
+      } else if (code === 'auth/too-many-requests') {
+        setPasswordError(
+          tr(
+            'Majaribio mengi yameshindikana. Subiri kidogo kisha jaribu tena.',
+            'Too many failed attempts. Please wait a moment and try again.'
+          )
+        );
+      } else if (code === 'auth/operation-not-allowed') {
+        setPasswordError(
+          tr(
+            'Kuingia kwa Email/Password hakujawashwa kwenye Firebase Auth.',
+            'Email/Password authentication is not enabled in Firebase Auth.'
+          )
+        );
+      } else if (code === 'auth/requires-recent-login') {
+        setPasswordError(
+          tr(
+            'Kwa usalama, toka kisha uingie tena ili kubadilisha nenosiri.',
+            'For security, please sign out and sign back in to change your password.'
+          )
+        );
+      } else {
+        setPasswordError(
+          err instanceof Error
+            ? err.message
+            : tr('Imeshindwa kubadilisha nenosiri.', 'Failed to update password.')
+        );
+      }
+    } finally {
+      setPasswordBusy(false);
+    }
+  };
+
+  const handleSendPasswordResetEmail = async () => {
+    const targetEmail = auth.currentUser?.email || userEmail;
+    if (!targetEmail) return;
+    setPasswordError('');
+    setPasswordSuccess('');
+    setPasswordBusy(true);
+    try {
+      await sendPasswordResetEmail(auth, targetEmail);
+      setPasswordSuccess(
+        tr(
+          `Kiungo cha kubadilisha nenosiri kimetumwa kwenda ${targetEmail}. Angalia Inbox au Spam.`,
+          `Password reset link sent to ${targetEmail}. Check your Inbox or Spam.`
+        )
+      );
+    } catch (err) {
+      setPasswordError(
+        err instanceof Error
+          ? err.message
+          : tr('Imeshindwa kutuma barua pepe ya nenosiri.', 'Failed to send password reset email.')
+      );
+    } finally {
+      setPasswordBusy(false);
+    }
+  };
+
+  const handleCopyUid = async () => {
+    if (!userUid) return;
+    try {
+      await navigator.clipboard.writeText(userUid);
+      setCopiedUid(true);
+      window.setTimeout(() => setCopiedUid(false), 1800);
+    } catch {
+      onToast(userUid, 'success');
+    }
+  };
+
   return (
     <div className="mx-auto max-w-4xl space-y-6 px-4 py-6 sm:px-6 sm:py-8">
+      <input
+        ref={photoInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp,image/gif"
+        onChange={handleSelectPhotoFile}
+        className="sr-only"
+      />
+
+      <ImageResizeModal
+        file={pendingPhotoFile}
+        defaultPreset="1:1"
+        onCancel={() => setPendingPhotoFile(null)}
+        onConfirm={(resizedFile) => void handleConfirmPhotoCrop(resizedFile)}
+      />
+
       <div className="border-b border-slate-200 pb-5">
         <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
           <div>
@@ -208,29 +557,50 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
             <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-slate-600">
               {isAdmin
                 ? tr(
-                    'Simamia taarifa zako binafsi, angalia jumla ya wanachama na taarifa zao, weka beji, funga akaunti za wakiukaji, na ondoa machapisho yenye maudhui mabaya.',
-                    'Manage your profile, view all members and details, assign verification badges, close accounts, and remove harmful posts.'
+                    'Simamia taarifa zako binafsi, picha, nenosiri, kitambulisho, wanachama na usalama wa mfumo.',
+                    'Manage your profile, photo, password, ID card, members, and platform safety.'
                   )
                 : tr(
-                    'Hariri taarifa zako za hadhara, chagua lugha, fuatilia ripoti zako, na soma kanuni za usalama za Malosha Forums.',
-                    'Edit your public profile, choose your language, track your reports, and read Malosha Forums safety guidelines.'
+                    'Hariri taarifa zako, badilisha picha ya profile na kitambulisho, badilisha nenosiri, na angalia taarifa zote za usajili wako.',
+                    'Edit your profile, update your profile & ID photo, change your password, and view all registration details.'
                   )}
             </p>
           </div>
 
           {userUid && userProfile && (
             <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shrink-0">
-              <Avatar
-                name={userProfile.displayName}
-                photoURL={userProfile.photoURL}
-                size="md"
-              />
+              <div className="relative shrink-0">
+                <Avatar
+                  name={userProfile.displayName}
+                  photoURL={userProfile.photoURL}
+                  size="lg"
+                  uid={userUid}
+                  showOnlineIndicator
+                />
+                {!isSuspended && (
+                  <button
+                    type="button"
+                    disabled={uploadingPhoto}
+                    onClick={() => photoInputRef.current?.click()}
+                    title={tr('Badilisha Picha', 'Change Photo')}
+                    aria-label={tr('Badilisha Picha ya Wasifu', 'Change Profile Photo')}
+                    className="absolute -bottom-1 -left-1 flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-[#1D4E89] text-white shadow-xs transition-colors hover:bg-[#0E2640] disabled:opacity-60"
+                  >
+                    {uploadingPhoto ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Camera className="h-3.5 w-3.5" aria-hidden="true" />
+                    )}
+                  </button>
+                )}
+              </div>
               <div className="min-w-0">
-                <div className="flex items-center gap-1.5">
+                <div className="flex flex-wrap items-center gap-1.5">
                   <span className="truncate text-sm font-bold text-slate-900">
                     {userProfile.displayName}
                   </span>
                   <VerificationBadge badge={userProfile.verificationBadge} size="sm" />
+                  <OnlineStatusPill uid={userUid} />
                 </div>
                 <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
                   {tr('Mada', 'Posts')} {userProfile.topicsCount} · {tr('Majibu', 'Replies')}{' '}
@@ -454,6 +824,64 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
               </div>
             </div>
 
+            {/* Profile & Member ID Photo Uploader */}
+            {userProfile && (
+              <div className="mt-5 flex flex-col justify-between gap-4 rounded-xl border border-slate-200 bg-[#F8FAFC] p-4 sm:flex-row sm:items-center">
+                <div className="flex items-center gap-3.5">
+                  <Avatar
+                    name={userProfile.displayName}
+                    photoURL={userProfile.photoURL}
+                    size="lg"
+                    uid={userUid}
+                    showOnlineIndicator
+                  />
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-slate-900">
+                      {tr('Picha ya Wasifu na Kitambulisho', 'Profile & ID Card Photo')}
+                    </p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-slate-600">
+                      {tr(
+                        'Ukibadilisha picha hapa, picha ya akaunti yako na Kitambulisho chako cha Mwanachama hubadilika papo hapo.',
+                        'Updating your photo here immediately updates both your account avatar and Member ID Card.'
+                      )}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    disabled={uploadingPhoto || isSuspended}
+                    onClick={() => photoInputRef.current?.click()}
+                    className="inline-flex min-h-[42px] items-center gap-1.5 rounded-lg bg-[#0E2640] px-3.5 py-2 text-xs font-bold text-white transition-colors hover:bg-[#163A5F] disabled:opacity-60"
+                  >
+                    {uploadingPhoto ? (
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Camera className="h-4 w-4 text-amber-400" aria-hidden="true" />
+                    )}
+                    <span>
+                      {uploadingPhoto
+                        ? tr('Inapakia Picha...', 'Uploading...')
+                        : tr('Badilisha Picha', 'Change Photo')}
+                    </span>
+                  </button>
+
+                  {userProfile.photoURL && (
+                    <button
+                      type="button"
+                      disabled={uploadingPhoto || isSuspended}
+                      onClick={() => void handleRemoveProfilePhoto()}
+                      className="inline-flex min-h-[42px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 disabled:opacity-60"
+                    >
+                      <Trash2 className="h-3.5 w-3.5 text-red-600" aria-hidden="true" />
+                      <span>{tr('Ondoa', 'Remove')}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             <form onSubmit={handleSubmit} className="mt-5 space-y-4">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
@@ -543,6 +971,353 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
             </div>
           </form>
 
+          {/* Complete Registration Details Summary */}
+          {userProfile && (
+            <div className="mt-7 border-t border-slate-200 pt-6">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="font-display text-base font-bold text-slate-900 sm:text-lg">
+                    {tr('Taarifa Zote za Usajili Wako', 'Your Complete Registration Details')}
+                  </h3>
+                  <p className="text-xs text-slate-600">
+                    {tr(
+                      'Muhtasari wa kumbukumbu zote zilizosajiliwa kwenye akaunti yako ya Malosha Forums.',
+                      'Full record of your registered account details on Malosha Forums.'
+                    )}
+                  </p>
+                </div>
+                {!userEmailVerified && userEmail && (
+                  <button
+                    type="button"
+                    disabled={sendingVerify}
+                    onClick={() => void handleSendOwnerVerification()}
+                    className="min-h-[36px] rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-60"
+                  >
+                    {sendingVerify
+                      ? tr('Inatuma...', 'Sending...')
+                      : tr('Thibitisha Email Yako', 'Verify Email')}
+                  </button>
+                )}
+              </div>
+
+              <dl className="mt-4 grid grid-cols-1 divide-y divide-slate-200 border-y border-slate-200 text-xs sm:grid-cols-2 sm:gap-x-8 sm:divide-y-0">
+                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                  <dt className="font-medium text-slate-500">
+                    {tr('Jina Kamili la Usajili', 'Registered Name')}
+                  </dt>
+                  <dd className="truncate font-semibold text-slate-900">
+                    {userProfile.displayName}
+                  </dd>
+                </div>
+
+                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                  <dt className="font-medium text-slate-500">
+                    {tr('Barua Pepe (Email)', 'Email Address')}
+                  </dt>
+                  <dd className="truncate font-semibold text-slate-900">
+                    {userEmail || tr('Haijawekwa', 'Not set')}
+                  </dd>
+                </div>
+
+                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                  <dt className="font-medium text-slate-500">
+                    {tr('Uthibitisho wa Email', 'Email Verification')}
+                  </dt>
+                  <dd
+                    className={`font-semibold ${
+                      userEmailVerified ? 'text-emerald-700' : 'text-amber-700'
+                    }`}
+                  >
+                    {userEmailVerified
+                      ? tr('Imethibitishwa', 'Verified')
+                      : tr('Haijathibitishwa', 'Not verified')}
+                  </dd>
+                </div>
+
+                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                  <dt className="font-medium text-slate-500">
+                    {tr('Namba ya Simu', 'Phone Number')}
+                  </dt>
+                  <dd className="font-semibold text-slate-900 tabular-nums">
+                    {userPhone || tr('Haijawekwa', 'Not set')}
+                  </dd>
+                </div>
+
+                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                  <dt className="font-medium text-slate-500">
+                    {tr('Namba ya Kitambulisho', 'Member ID No.')}
+                  </dt>
+                  <dd className="font-mono font-bold text-[#0E2640] tabular-nums">
+                    {memberCode}
+                  </dd>
+                </div>
+
+                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                  <dt className="font-medium text-slate-500">
+                    {tr('Namba ya Usalama (Serial)', 'Security Serial')}
+                  </dt>
+                  <dd className="font-mono font-bold text-[#0E2640] tabular-nums">
+                    {controlSerial}
+                  </dd>
+                </div>
+
+                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                  <dt className="font-medium text-slate-500">
+                    {tr('Njia ya Kuingia', 'Sign-In Method')}
+                  </dt>
+                  <dd className="font-semibold text-slate-900">
+                    {[
+                      hasGoogleProvider ? 'Google' : null,
+                      hasPasswordProvider ? tr('Barua Pepe & Nenosiri', 'Email & Password') : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ') || tr('Akaunti ya Malosha', 'Malosha Account')}
+                  </dd>
+                </div>
+
+                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                  <dt className="font-medium text-slate-500">
+                    {tr('Wadhifa & Beji', 'Role & Badge')}
+                  </dt>
+                  <dd className="font-semibold text-slate-900">
+                    {isAdmin
+                      ? tr('Mmiliki wa Mfumo', 'Platform Owner')
+                      : userProfile.role === 'moderator'
+                        ? tr('Msimamizi', 'Moderator')
+                        : tr('Mwanachama', 'Member')}{' '}
+                    · {getBadgeLabel(userProfile.verificationBadge)}
+                  </dd>
+                </div>
+
+                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                  <dt className="font-medium text-slate-500">
+                    {tr('Tarehe ya Kusajiliwa', 'Registered On')}
+                  </dt>
+                  <dd className="font-semibold text-slate-900 tabular-nums">
+                    {formatFullDate(userProfile.createdAt, userCreationTime)}
+                  </dd>
+                </div>
+
+                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                  <dt className="font-medium text-slate-500">
+                    {tr('Mara ya Mwisho Kuingia', 'Last Sign-In')}
+                  </dt>
+                  <dd className="font-semibold text-slate-900 tabular-nums">
+                    {formatFullDate(null, userLastSignInTime)}
+                  </dd>
+                </div>
+
+                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                  <dt className="font-medium text-slate-500">
+                    {tr('Hali ya Akaunti', 'Account Status')}
+                  </dt>
+                  <dd
+                    className={`font-semibold ${
+                      isSuspended && !isAdmin ? 'text-red-700' : 'text-emerald-700'
+                    }`}
+                  >
+                    {isSuspended && !isAdmin
+                      ? tr('Imefungwa', 'Closed')
+                      : tr('Hai / Active', 'Active')}
+                  </dd>
+                </div>
+
+                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                  <dt className="font-medium text-slate-500">
+                    {tr('Namba ya Akaunti (UID)', 'Account UID')}
+                  </dt>
+                  <dd className="flex items-center gap-1.5 min-w-0">
+                    <span className="max-w-[140px] truncate font-mono text-[11px] font-semibold text-slate-700">
+                      {userUid}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void handleCopyUid()}
+                      className="inline-flex min-h-[28px] items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-100"
+                    >
+                      {copiedUid ? (
+                        <Check className="h-3 w-3 text-emerald-600" aria-hidden="true" />
+                      ) : (
+                        <Copy className="h-3 w-3 text-slate-500" aria-hidden="true" />
+                      )}
+                      <span>{copiedUid ? tr('Imenakiliwa', 'Copied') : tr('Nakili', 'Copy')}</span>
+                    </button>
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          )}
+
+          {/* Change or Set Login Password */}
+          <div className="mt-7 border-t border-slate-200 pt-6">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex items-start gap-2.5">
+                <KeyRound className="mt-0.5 h-5 w-5 shrink-0 text-[#1D4E89]" aria-hidden="true" />
+                <div>
+                  <h3 className="font-display text-base font-bold text-slate-900 sm:text-lg">
+                    {hasPasswordProvider
+                      ? tr('Badilisha Nenosiri la Kuingia', 'Change Login Password')
+                      : tr('Weka Nenosiri la Kuingia (Email & Password)', 'Set Login Password')}
+                  </h3>
+                  <p className="mt-0.5 text-xs leading-relaxed text-slate-600">
+                    {hasPasswordProvider
+                      ? tr(
+                          'Imarisha usalama wa akaunti yako kwa kuweka nenosiri jipya lenye angalau herufi 6.',
+                          'Update your login password anytime using at least 6 characters.'
+                        )
+                      : tr(
+                          'Akaunti yako iliingia kupitia Google. Weka nenosiri hapa ili uweze kuingia pia kwa Barua Pepe na Nenosiri.',
+                          'You signed in with Google. Set a password here so you can also sign in using Email & Password.'
+                        )}
+                  </p>
+                </div>
+              </div>
+
+              {hasPasswordProvider && userEmail && (
+                <button
+                  type="button"
+                  disabled={passwordBusy}
+                  onClick={() => void handleSendPasswordResetEmail()}
+                  className="text-xs font-semibold text-[#1D4E89] hover:underline disabled:opacity-60"
+                >
+                  {tr('Umesahau nenosiri la sasa? Tuma kwa Email', 'Forgot current password? Send reset email')}
+                </button>
+              )}
+            </div>
+
+            <form onSubmit={handlePasswordSubmit} className="mt-4 space-y-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                {hasPasswordProvider && (
+                  <div>
+                    <label
+                      htmlFor="profile-current-password"
+                      className="block text-xs font-semibold text-slate-700"
+                    >
+                      {tr('Nenosiri la Sasa', 'Current Password')}
+                    </label>
+                    <div className="relative mt-1.5">
+                      <input
+                        id="profile-current-password"
+                        type={showCurrentPw ? 'text' : 'password'}
+                        required
+                        autoComplete="current-password"
+                        disabled={passwordBusy}
+                        value={currentPassword}
+                        onChange={(e) => setCurrentPassword(e.target.value)}
+                        placeholder={tr('Weka nenosiri la sasa', 'Enter current password')}
+                        className="min-h-[42px] w-full rounded-lg border border-slate-300 bg-white pr-10 pl-3.5 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none disabled:bg-slate-100"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowCurrentPw((p) => !p)}
+                        aria-label={
+                          showCurrentPw
+                            ? tr('Ficha nenosiri', 'Hide password')
+                            : tr('Onyesha nenosiri', 'Show password')
+                        }
+                        className="absolute top-1/2 right-1 flex min-h-[36px] min-w-[36px] -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:text-slate-800"
+                      >
+                        {showCurrentPw ? (
+                          <EyeOff className="h-4 w-4" aria-hidden="true" />
+                        ) : (
+                          <Eye className="h-4 w-4" aria-hidden="true" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <label
+                    htmlFor="profile-new-password"
+                    className="block text-xs font-semibold text-slate-700"
+                  >
+                    {tr('Nenosiri Jipya', 'New Password')}
+                  </label>
+                  <div className="relative mt-1.5">
+                    <input
+                      id="profile-new-password"
+                      type={showNewPw ? 'text' : 'password'}
+                      required
+                      minLength={6}
+                      autoComplete="new-password"
+                      disabled={passwordBusy}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder={tr('Angalau herufi 6', 'At least 6 characters')}
+                      className="min-h-[42px] w-full rounded-lg border border-slate-300 bg-white pr-10 pl-3.5 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none disabled:bg-slate-100"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPw((p) => !p)}
+                      aria-label={
+                        showNewPw
+                          ? tr('Ficha nenosiri', 'Hide password')
+                          : tr('Onyesha nenosiri', 'Show password')
+                      }
+                      className="absolute top-1/2 right-1 flex min-h-[36px] min-w-[36px] -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:text-slate-800"
+                    >
+                      {showNewPw ? (
+                        <EyeOff className="h-4 w-4" aria-hidden="true" />
+                      ) : (
+                        <Eye className="h-4 w-4" aria-hidden="true" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="profile-confirm-password"
+                    className="block text-xs font-semibold text-slate-700"
+                  >
+                    {tr('Thibitisha Nenosiri Jipya', 'Confirm New Password')}
+                  </label>
+                  <input
+                    id="profile-confirm-password"
+                    type={showNewPw ? 'text' : 'password'}
+                    required
+                    minLength={6}
+                    autoComplete="new-password"
+                    disabled={passwordBusy}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder={tr('Rudia nenosiri jipya', 'Repeat new password')}
+                    className="mt-1.5 min-h-[42px] w-full rounded-lg border border-slate-300 bg-white px-3.5 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none disabled:bg-slate-100"
+                  />
+                </div>
+              </div>
+
+              {passwordError && (
+                <p className="text-xs font-medium text-red-700">{passwordError}</p>
+              )}
+              {passwordSuccess && (
+                <p className="text-xs font-medium text-emerald-800">{passwordSuccess}</p>
+              )}
+
+              <div className="flex justify-end">
+                <button
+                  type="submit"
+                  disabled={passwordBusy}
+                  className="inline-flex min-h-[42px] items-center gap-2 rounded-lg bg-[#0E2640] px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-[#163A5F] disabled:opacity-60 sm:text-sm"
+                >
+                  {passwordBusy ? (
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Lock className="h-4 w-4 text-amber-400" aria-hidden="true" />
+                  )}
+                  <span>
+                    {passwordBusy
+                      ? tr('Inasasisha Nenosiri...', 'Updating Password...')
+                      : hasPasswordProvider
+                        ? tr('Badilisha Nenosiri', 'Update Password')
+                        : tr('Weka Nenosiri', 'Set Password')}
+                  </span>
+                </button>
+              </div>
+            </form>
+          </div>
+
           {userProfile && (
             <MemberIdCard
               profile={userProfile}
@@ -597,16 +1372,19 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
         )}
       </section>
 
-      {/* Admin Controls Embedded Directly inside Profile */}
+      {/* Owner Anti-Fake ID Checker & Controls Embedded Directly inside Profile */}
       {userUid && isAdmin && (
-        <ModerationView
-          embedded
-          reports={myReports}
-          currentUserUid={userUid}
-          onUpdateStatus={onUpdateReportStatus}
-          onOpenTopic={onOpenTopic}
-          onToast={onToast}
-        />
+        <>
+          <MemberIdVerifier />
+          <ModerationView
+            embedded
+            reports={myReports}
+            currentUserUid={userUid}
+            onUpdateStatus={onUpdateReportStatus}
+            onOpenTopic={onOpenTopic}
+            onToast={onToast}
+          />
+        </>
       )}
 
       {/* Verification Badge Tiers Legend */}

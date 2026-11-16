@@ -5,6 +5,7 @@ import { AuthPromptReason, JOB_TYPES } from '../types';
 import { parseTagsInput } from '../utils/formatters';
 import { useLanguage } from '../context/LanguageContext';
 import { Avatar } from './Avatar';
+import { ImageResizeModal } from './ImageResizeModal';
 import { AuthorVerificationBadge } from './VerificationBadge';
 
 interface FursaInlineComposerProps {
@@ -50,6 +51,7 @@ export const FursaInlineComposer: React.FC<FursaInlineComposerProps> = ({
   const [body, setBody] = useState('');
   const [tagsRaw, setTagsRaw] = useState('');
   const [attachedImage, setAttachedImage] = useState('');
+  const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -108,21 +110,27 @@ export const FursaInlineComposer: React.FC<FursaInlineComposerProps> = ({
     setBody('');
     setTagsRaw('');
     setAttachedImage('');
+    setPendingImageFile(null);
     setPreviewFailed(false);
     setError('');
     onExpandedChange(false);
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    setError('');
+    setPendingImageFile(file);
+  };
 
+  const handleConfirmResizedImage = async (resizedFile: File) => {
+    setPendingImageFile(null);
     setError('');
     setUploadingImage(true);
     setPreviewFailed(false);
     try {
-      const url = await uploadImageToCloudinary(file);
+      const url = await uploadImageToCloudinary(resizedFile);
       setAttachedImage(url);
       onToast(tr('Picha ya tangazo imeambatanishwa.', 'Listing image attached.'));
     } catch (err) {
@@ -445,7 +453,7 @@ export const FursaInlineComposer: React.FC<FursaInlineComposerProps> = ({
                 alt={tr('Hakiki ya picha ya tangazo la fursa', 'Opportunity image preview')}
                 referrerPolicy="no-referrer"
                 onError={() => setPreviewFailed(true)}
-                className="max-h-72 w-full object-cover"
+                className="block h-auto w-full"
               />
             ) : (
               <div className="flex h-32 items-center justify-center text-xs text-slate-500">
@@ -526,6 +534,12 @@ export const FursaInlineComposer: React.FC<FursaInlineComposerProps> = ({
           </div>
         </div>
       </form>
+
+      <ImageResizeModal
+        file={pendingImageFile}
+        onCancel={() => setPendingImageFile(null)}
+        onConfirm={(resizedFile) => void handleConfirmResizedImage(resizedFile)}
+      />
     </section>
   );
 };

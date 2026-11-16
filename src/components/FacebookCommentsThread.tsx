@@ -26,7 +26,7 @@ import {
 } from '../services/forumService';
 import { AuthPromptReason, Reply, Topic } from '../types';
 import { useLanguage } from '../context/LanguageContext';
-import { Avatar } from './Avatar';
+import { Avatar, OnlineStatusPill } from './Avatar';
 import { renderLinkedInline } from './RichText';
 import { AuthorVerificationBadge } from './VerificationBadge';
 
@@ -589,6 +589,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
                       {reply.authorName}
                     </span>
                     <AuthorVerificationBadge uid={reply.authorId} size="xs" />
+                    <OnlineStatusPill uid={reply.authorId} />
                     {isOp && (
                       <span className="text-[11px] font-semibold text-[#1D4E89]">
                         · {tr('Mwandishi', 'Author')}
@@ -762,7 +763,13 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
       ) : (
         <form onSubmit={handleSubmitMainComment} className="flex items-start gap-2.5">
           <div className="pt-0.5 shrink-0">
-            <Avatar name={userDisplayName} photoURL={userPhoto} size="sm" />
+            <Avatar
+              name={userDisplayName}
+              photoURL={userPhoto}
+              uid={userUid}
+              showOnlineIndicator
+              size="sm"
+            />
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-[#F0F2F5] px-3.5 py-2 focus-within:border-[#1D4E89] focus-within:bg-white">
@@ -837,7 +844,13 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
                 <div className="flex items-stretch gap-2.5">
                   {/* Left Avatar + Vertical Thread Spine */}
                   <div className="flex w-7 shrink-0 flex-col items-center">
-                    <Avatar name={root.authorName} photoURL={root.authorPhoto} size="sm" />
+                    <Avatar
+                      name={root.authorName}
+                      photoURL={root.authorPhoto}
+                      uid={root.authorId}
+                      showOnlineIndicator
+                      size="sm"
+                    />
                     {hasThreadLine && (
                       <div className="mt-1 w-[1.5px] flex-1 bg-slate-200" aria-hidden="true" />
                     )}
@@ -902,10 +915,12 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
                           <ThreadElbowConnector />
                         </div>
                         <div className="pt-0.5 shrink-0">
-                          <span className="inline-flex h-6 w-6 overflow-hidden rounded-full">
+                          <span className="inline-flex h-6 w-6 rounded-full">
                             <Avatar
                               name={child.authorName}
                               photoURL={child.authorPhoto}
+                              uid={child.authorId}
+                              showOnlineIndicator
                               size="sm"
                             />
                           </span>

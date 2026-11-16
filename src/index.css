@@ -10,6 +10,7 @@
   html {
     -webkit-tap-highlight-color: transparent;
     overscroll-behavior-y: contain;
+    scroll-padding-top: var(--malosha-header-h, 120px);
   }
 
   body {

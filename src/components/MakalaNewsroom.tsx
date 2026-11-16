@@ -64,9 +64,9 @@ const BbcCoverImage: React.FC<{
 }> = ({
   src,
   alt,
-  wrapperClass = 'bg-slate-100',
-  imgClass = 'w-full h-auto max-h-[420px] object-contain',
-  widthHint = 760,
+  wrapperClass = 'w-full bg-slate-100',
+  imgClass = 'block h-auto w-full',
+  widthHint = 1080,
 }) => {
   const { tr } = useLanguage();
   const [failed, setFailed] = useState(false);
@@ -78,7 +78,7 @@ const BbcCoverImage: React.FC<{
 
   if (!resolved || failed) {
     return (
-      <div className="flex aspect-[16/9] w-full flex-col items-center justify-center bg-gradient-to-br from-[#2A0808] via-[#6B0F0F] to-[#B80000] px-4 text-center text-white/90">
+      <div className="flex aspect-[16/10] w-full flex-col items-center justify-center bg-gradient-to-br from-[#2A0808] via-[#6B0F0F] to-[#B80000] px-4 text-center text-white/90">
         <Newspaper className="h-7 w-7 opacity-85" aria-hidden="true" />
         <span className="mt-1.5 text-[11px] font-bold tracking-wider uppercase opacity-85">
           {tr('Malosha Makala', 'Malosha Articles')}
@@ -88,7 +88,7 @@ const BbcCoverImage: React.FC<{
   }
 
   return (
-    <div className={`flex w-full items-center justify-center overflow-hidden ${wrapperClass}`}>
+    <div className={`w-full overflow-hidden ${wrapperClass}`}>
       <img
         src={resolved}
         alt={alt}
@@ -596,9 +596,9 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
           <div className="space-y-6 lg:col-span-8">
             {/* Tier 1: Lead Top Story (BBC Hero Split) */}
             {leadArticle && (
-              <article className="group overflow-hidden border border-slate-200 bg-white">
-                <div className="grid grid-cols-1 md:grid-cols-12 md:items-stretch">
-                  <div className="p-4 sm:p-6 md:order-1 md:col-span-5 flex flex-col justify-between">
+              <article className="group -mx-3.5 overflow-hidden border-y border-slate-200 bg-white sm:mx-0 sm:border">
+                <div className="grid grid-cols-1 md:grid-cols-12 md:items-center">
+                  <div className="order-2 p-4 sm:p-6 md:order-1 md:col-span-5 flex flex-col justify-between">
                     <div>
                       <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600">
                         <span className="font-black tracking-wide text-[#B80000] uppercase">
@@ -714,13 +714,14 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                   <button
                     type="button"
                     onClick={() => onOpenTopic(leadArticle.id)}
-                    className="flex w-full items-center justify-center overflow-hidden bg-slate-950/5 text-left md:order-2 md:col-span-7"
+                    className="order-1 block w-full overflow-hidden bg-slate-100 text-left md:order-2 md:col-span-7"
                   >
                     <BbcCoverImage
                       src={leadArticle.coverImage}
                       alt={leadArticle.title}
-                      wrapperClass="bg-slate-950/5 md:h-full"
-                      imgClass="w-full h-auto max-h-[440px] object-contain"
+                      wrapperClass="w-full bg-slate-100"
+                      imgClass="block h-auto w-full"
+                      widthHint={1080}
                     />
                   </button>
                 </div>
@@ -753,18 +754,19 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                     return (
                       <article
                         key={article.id}
-                        className="group flex flex-col overflow-hidden border border-slate-200 bg-white"
+                        className="group -mx-3.5 flex flex-col overflow-hidden border-y border-slate-200 bg-white sm:mx-0 sm:border"
                       >
                         <button
                           type="button"
                           onClick={() => onOpenTopic(article.id)}
-                          className="block w-full overflow-hidden bg-slate-950/5 text-left"
+                          className="block w-full overflow-hidden bg-slate-100 text-left"
                         >
                           <BbcCoverImage
                             src={article.coverImage}
                             alt={article.title}
-                            wrapperClass="bg-slate-950/5"
-                            imgClass="w-full h-auto max-h-[340px] object-contain"
+                            wrapperClass="w-full bg-slate-100"
+                            imgClass="block h-auto w-full"
+                            widthHint={1080}
                           />
                         </button>
 
@@ -869,26 +871,26 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                     {tr('Makala Zaidi', 'More Articles')}
                   </h2>
                 </div>
-                <div className="divide-y divide-slate-200 border border-slate-200 bg-white">
+                <div className="-mx-3.5 divide-y divide-slate-200 border-y border-slate-200 bg-white sm:mx-0 sm:border">
                   {archiveArticles.map((art) => (
                     <article
                       key={art.id}
-                      className="group flex flex-col gap-3 p-4 transition-colors hover:bg-slate-50 sm:flex-row sm:items-start"
+                      className="group flex flex-col gap-3 py-4 transition-colors hover:bg-slate-50 sm:flex-row sm:items-start sm:px-4"
                     >
                       <button
                         type="button"
                         onClick={() => onOpenTopic(art.id)}
-                        className="block w-full overflow-hidden bg-slate-950/5 text-left sm:w-44 shrink-0"
+                        className="block w-full overflow-hidden bg-slate-100 text-left sm:w-48 shrink-0"
                       >
                         <BbcCoverImage
                           src={art.coverImage}
                           alt={art.title}
-                          wrapperClass="bg-slate-950/5"
-                          imgClass="w-full h-auto max-h-[260px] sm:max-h-[120px] object-contain"
-                          widthHint={420}
+                          wrapperClass="w-full bg-slate-100"
+                          imgClass="block h-auto w-full"
+                          widthHint={760}
                         />
                       </button>
-                      <div className="min-w-0 flex-1">
+                      <div className="min-w-0 flex-1 px-3.5 sm:px-0">
                         <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-slate-500">
                           <span className="font-bold text-[#B80000] uppercase">
                             {getMakalaSectionLabel(getMakalaSection(art.tags, art.title))}

@@ -5,6 +5,7 @@ import {
   getRedirectResult,
   onAuthStateChanged,
   signOut,
+  updateProfile,
 } from 'firebase/auth';
 import {
   Timestamp,
@@ -29,6 +30,7 @@ import {
   ChatMessage,
   MchartNote,
   NavTab,
+  PresenceArea,
   Report,
   ReportReason,
   SortMode,
@@ -53,6 +55,8 @@ import {
   updateReportStatus,
   updateTopicStatus,
   updateUserProfile,
+  updateUserProfilePhoto,
+  writeUserPresence,
 } from './services/forumService';
 import { shareTopic } from './utils/formatters';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -66,6 +70,7 @@ import { SafetyGuidelinesView } from './components/SafetyGuidelinesView';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { LanguageProvider, useLanguage } from './context/LanguageContext';
 import { UserBadgesProvider } from './context/UserBadgesContext';
+import { UserPresenceProvider } from './context/UserPresenceContext';
 import { AppLaunchLoader } from './components/AppLaunchLoader';
 import { PWAInstallBanner } from './components/PWAInstallBanner';
 import { OfflineIndicator } from './components/OfflineIndicator';
@@ -915,7 +920,25 @@ function ForumShell() {
     }
   }, [user, activeTab]);
 
+  const activePresenceArea: PresenceArea = useMemo(() => {
+    if (activeTab === 'chat') return 'mchart';
+    if (activeTab === 'kijiweni') return 'kijiweni';
+    if (activeTab === 'fursa') return 'fursa';
+    if (activeTab === 'makala') return 'makala';
+    if (activeTab === 'safety') return 'profile';
+    return 'forum';
+  }, [activeTab]);
+
   const handleSignOut = async () => {
+    if (user) {
+      await writeUserPresence(user.uid, {
+        displayName: userProfile?.displayName || user.displayName || 'Mwanachama',
+        isOnline: false,
+        isTypingInMchart: false,
+        replyingToName: '',
+        activeArea: activePresenceArea,
+      }).catch(() => {});
+    }
     await signOut(auth);
     setOnlyMine(false);
     setLang('sw');
@@ -1334,6 +1357,16 @@ function ForumShell() {
     }
   };
 
+  const handleUpdateProfilePhoto = async (photoURL: string) => {
+    if (!user || blockIfSuspended()) return;
+    const cleanUrl = await updateUserProfilePhoto(
+      user.uid,
+      photoURL,
+      userProfile?.displayName || user.displayName || 'Mwanachama'
+    );
+    await updateProfile(user, { photoURL: cleanUrl || null }).catch(() => {});
+  };
+
   const composerDefaultCategory: TopicCategory | 'all' =
     activeTab === 'kijiweni'
       ? 'Kijiweni'
@@ -1361,8 +1394,56 @@ function ForumShell() {
   }, [pwa, showToast, tr]);
 
   const appReady = authReady;
+  const isMchartView = activeTab === 'chat' && !selectedTopic && !selectedTopicId;
+  const [mobileKeyboardOpen, setMobileKeyboardOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isMchartView || typeof window === 'undefined') {
+      setMobileKeyboardOpen(false);
+      return;
+    }
+
+    const html = document.documentElement;
+    const body = document.body;
+    const prevHtmlOverflow = html.style.overflow;
+    const prevBodyOverflow = body.style.overflow;
+    const prevBodyOverscroll = body.style.overscrollBehavior;
+
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
+    body.style.overscrollBehavior = 'none';
+    window.scrollTo(0, 0);
+
+    const checkKeyboard = () => {
+      const vv = window.visualViewport;
+      const isMobile = window.innerWidth < 768;
+      const open = Boolean(vv && isMobile && vv.height < window.innerHeight - 130);
+      setMobileKeyboardOpen(open);
+    };
+
+    checkKeyboard();
+    window.addEventListener('resize', checkKeyboard);
+    const vv = window.visualViewport;
+    vv?.addEventListener('resize', checkKeyboard);
+
+    return () => {
+      html.style.overflow = prevHtmlOverflow;
+      body.style.overflow = prevBodyOverflow;
+      body.style.overscrollBehavior = prevBodyOverscroll;
+      window.removeEventListener('resize', checkKeyboard);
+      vv?.removeEventListener('resize', checkKeyboard);
+      setMobileKeyboardOpen(false);
+    };
+  }, [isMchartView]);
 
   return (
+    <UserPresenceProvider
+      authReady={authReady}
+      userUid={user?.uid || null}
+      displayName={userProfile?.displayName || user?.displayName || 'Mwanachama'}
+      activeArea={activePresenceArea}
+      isSuspended={isSuspended}
+    >
     <div className="min-h-screen flex flex-col bg-[#F1F4F8] text-slate-900">
       <AppLaunchLoader ready={appReady} />
       <OfflineIndicator />
@@ -1390,8 +1471,8 @@ function ForumShell() {
         unreadChatCount={unreadChatCount + unreadNotesCount}
       />
 
-      <main className="flex-1">
-        {isSuspended && (
+      <main className={`flex-1 pt-[var(--malosha-header-h,118px)] ${isMchartView ? '' : 'pb-16 md:pb-0'}`}>
+        {isSuspended && !isMchartView && (
           <div className="border-b border-red-200 bg-red-50 px-4 py-3 text-red-900">
             <div className="mx-auto flex max-w-6xl flex-col items-start justify-between gap-2 sm:flex-row sm:items-center">
               <div className="flex items-start gap-2.5 text-xs sm:text-sm">
@@ -1537,12 +1618,17 @@ function ForumShell() {
           <SafetyGuidelinesView
             userUid={user?.uid || null}
             userEmail={user?.email || null}
+            userEmailVerified={Boolean(user?.emailVerified)}
+            userCreationTime={user?.metadata?.creationTime || ''}
+            userLastSignInTime={user?.metadata?.lastSignInTime || ''}
+            userProviders={user?.providerData?.map((p) => p.providerId) || []}
             userPhone={userPhone}
             userProfile={userProfile}
             isAdmin={isAdmin}
             isSuspended={isSuspended}
             myReports={reports}
             onSaveProfile={handleSaveProfile}
+            onUpdateProfilePhoto={handleUpdateProfilePhoto}
             onSignIn={() => handleSignIn()}
             onUpdateReportStatus={async (id, status) => {
               await updateReportStatus(id, status);
@@ -1570,6 +1656,7 @@ function ForumShell() {
             userPhoto={userProfile?.photoURL || user?.photoURL || ''}
             isAdmin={isAdmin}
             isSuspended={isSuspended}
+            keyboardOpen={isMchartView && mobileKeyboardOpen}
             onSignIn={handleSignIn}
             onToast={showToast}
             onRequestConfirm={(opts) => setConfirmState(opts)}
@@ -1681,6 +1768,7 @@ function ForumShell() {
         activeTab={activeTab}
         onSelectTab={handleSelectTab}
         unreadChatCount={unreadChatCount + unreadNotesCount}
+        hidden={isMchartView && mobileKeyboardOpen}
       />
 
       {activeTab !== 'chat' && (
@@ -1748,6 +1836,7 @@ function ForumShell() {
         </div>
       )}
     </div>
+    </UserPresenceProvider>
   );
 }
 

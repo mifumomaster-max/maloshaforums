@@ -282,6 +282,50 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidMemberIdRecord(data, cardId) {
+      return data.keys().hasAll([
+          'cardNumber', 'controlSerial', 'uid', 'displayName', 'photoURL',
+          'role', 'verificationBadge', 'accountStatus',
+          'issuedAt', 'expiresAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'cardNumber', 'controlSerial', 'uid', 'displayName', 'photoURL',
+          'role', 'verificationBadge', 'accountStatus',
+          'issuedAt', 'expiresAt', 'updatedAt'
+        ])
+        && data.cardNumber is string && data.cardNumber == cardId && data.cardNumber.size() >= 6 && data.cardNumber.size() <= 32 && data.cardNumber.matches('^MLF-[A-Z0-9]+$')
+        && data.controlSerial is string && data.controlSerial.size() == 8 && data.controlSerial.matches('^[0-9]{8}$')
+        && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && data.photoURL is string && data.photoURL.size() <= 500
+        && data.role in ['member', 'moderator']
+        && data.verificationBadge in ['none', 'individual', 'organization', 'government', 'owner']
+        && data.accountStatus in ['active', 'suspended']
+        && data.issuedAt is timestamp
+        && data.expiresAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserPresence(data, userId) {
+      return data.keys().hasAll([
+          'uid', 'displayName', 'isOnline', 'isTypingInMchart',
+          'replyingToName', 'activeArea', 'lastSeenAt', 'typingUpdatedAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'displayName', 'isOnline', 'isTypingInMchart',
+          'replyingToName', 'activeArea', 'lastSeenAt', 'typingUpdatedAt', 'updatedAt'
+        ])
+        && data.uid is string && data.uid == userId && data.uid.size() >= 1 && data.uid.size() <= 128
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && data.isOnline is bool
+        && data.isTypingInMchart is bool
+        && data.replyingToName is string && data.replyingToName.size() <= 80
+        && data.activeArea in ['kijiweni', 'fursa', 'makala', 'mchart', 'profile', 'forum']
+        && data.lastSeenAt is timestamp
+        && data.typingUpdatedAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     function noteDocData(noteId) {
       return get(/databases/$(database)/documents/mchart_notes/$(noteId)).data;
     }
@@ -747,6 +791,78 @@ service cloud.firestore {
 
         allow delete: if isAdmin() && isValidId(noteId) && isValidId(userId);
       }
+    }
+
+    // 10. Official Member ID Registry (Zero PII — For Authenticity Verification)
+    match /member_ids/{cardId} {
+      allow get: if isValidId(cardId);
+      allow list: if isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+
+      allow create: if isSignedIn()
+        && isValidId(cardId)
+        && isValidMemberIdRecord(incoming(), cardId)
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            isOwner(incoming().uid) &&
+            isNotSuspended() &&
+            exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+            incoming().role == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role &&
+            incoming().accountStatus == 'active' &&
+            (
+              (!('verificationBadge' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data) && incoming().verificationBadge == 'none') ||
+              incoming().verificationBadge == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.verificationBadge
+            )
+          )
+        );
+
+      allow update: if isSignedIn()
+        && isValidId(cardId)
+        && isValidMemberIdRecord(incoming(), cardId)
+        && incoming().cardNumber == existing().cardNumber
+        && incoming().controlSerial == existing().controlSerial
+        && incoming().uid == existing().uid
+        && incoming().issuedAt == existing().issuedAt
+        && incoming().expiresAt == existing().expiresAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().uid) &&
+            isNotSuspended() &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isAdmin() && isValidId(cardId);
+    }
+
+    // 11. Real-Time Online Presence & Mchart Typing State (Zero PII)
+    match /user_presence/{userId} {
+      allow get: if isValidId(userId);
+      allow list: if resource.data.isOnline == true || isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+
+      allow create: if isSignedIn()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserPresence(incoming(), userId)
+        && incoming().lastSeenAt == request.time
+        && incoming().typingUpdatedAt == request.time
+        && incoming().updatedAt == request.time
+        && (isNotSuspended() || (incoming().isOnline == false && incoming().isTypingInMchart == false));
+
+      allow update: if isSignedIn()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserPresence(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().lastSeenAt == request.time
+        && incoming().typingUpdatedAt == request.time
+        && incoming().updatedAt == request.time
+        && (isNotSuspended() || (incoming().isOnline == false && incoming().isTypingInMchart == false));
+
+      allow delete: if isValidId(userId) && (isOwner(userId) || isAdmin());
     }
   }
 }

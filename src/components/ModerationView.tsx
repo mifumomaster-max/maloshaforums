@@ -35,11 +35,14 @@ import {
   VERIFICATION_BADGE_META,
   VERIFICATION_BADGE_TIERS,
   VerificationBadgeType,
+  computeMemberControlSerial,
+  formatMemberCode,
   normalizeAccountStatus,
   normalizeBoardCategory,
   normalizeVerificationBadge,
 } from '../types';
-import { Avatar } from './Avatar';
+import { Avatar, OnlineStatusPill } from './Avatar';
+import { MemberIdVerifier } from './MemberIdVerifier';
 import { VerificationBadge } from './VerificationBadge';
 
 interface ModerationViewProps {
@@ -51,7 +54,7 @@ interface ModerationViewProps {
   embedded?: boolean;
 }
 
-type AdminSection = 'members' | 'posts' | 'reports';
+type AdminSection = 'members' | 'verify_id' | 'posts' | 'reports';
 type MemberFilter = 'all' | 'active' | 'suspended';
 type PostFilter = 'all' | 'open' | 'locked' | 'archived';
 
@@ -245,6 +248,8 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
         m.displayName.toLowerCase().includes(q) ||
         m.bio.toLowerCase().includes(q) ||
         m.uid.toLowerCase().includes(q) ||
+        formatMemberCode(m.uid).toLowerCase().includes(q) ||
+        computeMemberControlSerial(m.uid).toLowerCase().includes(q) ||
         (priv?.email || '').toLowerCase().includes(q) ||
         (priv?.phoneNumber || '').toLowerCase().includes(q) ||
         VERIFICATION_BADGE_META[m.verificationBadge].label.toLowerCase().includes(q) ||
@@ -465,6 +470,19 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
 
           <button
             type="button"
+            onClick={() => setSection('verify_id')}
+            className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
+              section === 'verify_id'
+                ? 'bg-[#1D4E89] text-white'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>{tr('Hakiki ID', 'Verify ID')}</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setSection('posts')}
             className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
               section === 'posts'
@@ -534,7 +552,11 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
         </div>
       </div>
 
-      {section === 'members' ? (
+      {section === 'verify_id' ? (
+        <div className="mt-6">
+          <MemberIdVerifier />
+        </div>
+      ) : section === 'members' ? (
         <div className="mt-6 space-y-5">
           {/* Verification Color Legend */}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -574,8 +596,8 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
                 value={memberSearch}
                 onChange={(e) => setMemberSearch(e.target.value)}
                 placeholder={tr(
-                  'Tafuta kwa jina, barua pepe, simu, UID, au beji...',
-                  'Search by name, email, phone, UID, or badge...'
+                  'Tafuta kwa jina, ID (MLF-...), serial, barua pepe, simu, au beji...',
+                  'Search by name, ID (MLF-...), serial, email, phone, or badge...'
                 )}
                 aria-label={tr('Tafuta wanachama', 'Search members')}
                 className="min-h-[42px] w-full rounded-lg border border-slate-300 bg-white py-2 pr-4 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#1D4E89] focus:outline-none"
@@ -644,6 +666,8 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
                           name={member.displayName}
                           photoURL={member.photoURL}
                           size="md"
+                          uid={member.uid}
+                          showOnlineIndicator
                         />
                         <div className="min-w-0 space-y-1">
                           <div className="flex flex-wrap items-center gap-1.5">
@@ -651,6 +675,7 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
                               {member.displayName}
                             </span>
                             <VerificationBadge badge={member.verificationBadge} size="sm" />
+                            <OnlineStatusPill uid={member.uid} />
                             {isSuspended && (
                               <span className="inline-flex items-center gap-1 rounded bg-red-100 px-1.5 py-0.5 text-[11px] font-bold text-red-800">
                                 <Lock className="h-3 w-3" aria-hidden="true" />
@@ -695,9 +720,15 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
                             </span>
                           </div>
 
-                          <p className="font-mono text-[11px] text-slate-500 break-all">
-                            UID: {member.uid}
-                          </p>
+                          <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-slate-600">
+                            <span className="rounded bg-sky-50 px-1.5 py-0.5 font-bold text-[#1D4E89]">
+                              ID: {formatMemberCode(member.uid)}
+                            </span>
+                            <span className="rounded bg-slate-100 px-1.5 py-0.5 font-bold text-slate-700">
+                              Serial: {computeMemberControlSerial(member.uid)}
+                            </span>
+                            <span className="text-slate-400 break-all">UID: {member.uid}</span>
+                          </div>
 
                           {member.bio && (
                             <p className="text-xs text-slate-600">{member.bio}</p>

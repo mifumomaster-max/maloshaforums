@@ -8,6 +8,7 @@ import { parseTagsInput } from '../utils/formatters';
 import { useLanguage } from '../context/LanguageContext';
 import { AuthPromptReason } from '../types';
 import { Avatar } from './Avatar';
+import { ImageResizeModal } from './ImageResizeModal';
 import { AuthorVerificationBadge } from './VerificationBadge';
 
 interface KijiweniInlineComposerProps {
@@ -43,6 +44,7 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
   const [body, setBody] = useState('');
   const [tagsRaw, setTagsRaw] = useState('');
   const [attachedImage, setAttachedImage] = useState('');
+  const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -97,21 +99,27 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
     setBody('');
     setTagsRaw('');
     setAttachedImage('');
+    setPendingImageFile(null);
     setPreviewFailed(false);
     setError('');
     onExpandedChange(false);
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    setError('');
+    setPendingImageFile(file);
+  };
 
+  const handleConfirmResizedImage = async (resizedFile: File) => {
+    setPendingImageFile(null);
     setError('');
     setUploadingImage(true);
     setPreviewFailed(false);
     try {
-      const url = await uploadImageToCloudinary(file);
+      const url = await uploadImageToCloudinary(resizedFile);
       setAttachedImage(url);
       onToast(tr('Picha imeambatanishwa kikamilifu.', 'Image attached successfully.'));
     } catch (err) {
@@ -353,7 +361,7 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
                 alt={tr('Hakiki ya picha iliyoambatanishwa', 'Attached image preview')}
                 referrerPolicy="no-referrer"
                 onError={() => setPreviewFailed(true)}
-                className="max-h-72 w-full object-cover"
+                className="block h-auto w-full"
               />
             ) : (
               <div className="flex h-32 items-center justify-center text-xs text-slate-500">
@@ -445,6 +453,12 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
           </div>
         </div>
       </form>
+
+      <ImageResizeModal
+        file={pendingImageFile}
+        onCancel={() => setPendingImageFile(null)}
+        onConfirm={(resizedFile) => void handleConfirmResizedImage(resizedFile)}
+      />
     </section>
   );
 };

@@ -13,7 +13,7 @@ import {
 import { AuthPromptReason, Topic } from '../types';
 import { optimizeCloudinaryUrl } from '../services/cloudinaryService';
 import { useLanguage } from '../context/LanguageContext';
-import { Avatar } from './Avatar';
+import { Avatar, OnlineStatusPill } from './Avatar';
 import { RichText } from './RichText';
 import { FacebookCommentsThread } from './FacebookCommentsThread';
 import { AuthorVerificationBadge } from './VerificationBadge';
@@ -94,13 +94,20 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
       <div className="px-4 pt-4 sm:px-5 sm:pt-4">
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <Avatar name={post.authorName} photoURL={post.authorPhoto} size="md" />
+            <Avatar
+              name={post.authorName}
+              photoURL={post.authorPhoto}
+              uid={post.authorId}
+              showOnlineIndicator
+              size="md"
+            />
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                 <span className="truncate text-[15px] font-bold text-slate-900">
                   {post.authorName}
                 </span>
                 <AuthorVerificationBadge uid={post.authorId} size="sm" />
+                <OnlineStatusPill uid={post.authorId} />
                 {post.isPinned && (
                   <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#B45309]">
                     · <Pin className="h-3 w-3" aria-hidden="true" /> {tr('Maalum', 'Pinned')}
@@ -197,16 +204,16 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
             <div
               className={`${
                 post.title.trim() || post.body.trim() ? 'mt-3' : ''
-              } overflow-hidden rounded-lg border border-slate-200 bg-slate-100`}
+              } -mx-4 overflow-hidden border-y border-slate-200 bg-slate-100 sm:mx-0 sm:rounded-lg sm:border`}
             >
               <img
-                src={optimizeCloudinaryUrl(post.coverImage, 760)}
+                src={optimizeCloudinaryUrl(post.coverImage, 1080)}
                 alt={post.title.trim() || tr('Picha iliyochapishwa Kijiweni', 'Kijiweni photo post')}
                 loading="lazy"
                 decoding="async"
                 referrerPolicy="no-referrer"
                 onError={() => setImageFailed(true)}
-                className="max-h-[460px] w-full object-cover"
+                className="block h-auto w-full"
               />
             </div>
           )}

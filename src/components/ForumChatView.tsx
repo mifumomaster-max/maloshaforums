@@ -37,7 +37,9 @@ import {
 } from '../services/forumService';
 import { AuthPromptReason, ChatMessage, MchartNote } from '../types';
 import { useLanguage } from '../context/LanguageContext';
-import { Avatar } from './Avatar';
+import { useUserPresence } from '../context/UserPresenceContext';
+import { Avatar, OnlineStatusPill } from './Avatar';
+import { ImageResizeModal } from './ImageResizeModal';
 import { MchartNotesView } from './MchartNotesView';
 import { LinkedText } from './RichText';
 import { AuthorVerificationBadge } from './VerificationBadge';
@@ -61,6 +63,7 @@ interface ForumChatViewProps {
   userPhoto?: string;
   isAdmin: boolean;
   isSuspended?: boolean;
+  keyboardOpen?: boolean;
   onSignIn: (reason?: AuthPromptReason) => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
   onRequestConfirm: (opts: {
@@ -165,11 +168,13 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
   userPhoto,
   isAdmin,
   isSuspended = false,
+  keyboardOpen: keyboardOpenProp,
   onSignIn,
   onToast,
   onRequestConfirm,
 }) => {
   const { lang, tr } = useLanguage();
+  const { onlineCount, typingUsersInMchart, setMchartTyping } = useUserPresence();
   const [draft, setDraft] = useState('');
   const [uploading, setUploading] = useState(false);
   const [optimisticMessages, setOptimisticMessages] = useState<OptimisticChatMessage[]>([]);
@@ -183,9 +188,28 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
   const [lightboxImage, setLightboxImage] = useState<{ url: string; name: string } | null>(
     null
   );
+  const [pendingCropImage, setPendingCropImage] = useState<File | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [unseenWhileScrolled, setUnseenWhileScrolled] = useState(0);
+  const [viewportMetrics, setViewportMetrics] = useState<{
+    height: number;
+    offsetTop: number;
+    isMobile: boolean;
+    keyboardOpen: boolean;
+  }>(() => {
+    if (typeof window === 'undefined') {
+      return { height: 800, offsetTop: 0, isMobile: true, keyboardOpen: false };
+    }
+    const vv = window.visualViewport;
+    const h = vv ? vv.height : window.innerHeight;
+    return {
+      height: h,
+      offsetTop: vv ? vv.offsetTop : 0,
+      isMobile: window.innerWidth < 768,
+      keyboardOpen: Boolean(vv && vv.height < window.innerHeight - 130 && window.innerWidth < 768),
+    };
+  });
 
   const scrollBoxRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -195,6 +219,53 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
   const emojiRef = useRef<HTMLDivElement>(null);
   const prevNewestIdRef = useRef<string | null>(null);
   const initialScrolledRef = useRef(false);
+  const wasNearBottomRef = useRef(true);
+  const focusTimersRef = useRef<number[]>([]);
+  const typingIdleTimerRef = useRef<number | null>(null);
+
+  // Clean up typing signal on unmount or when switching to Notes tab
+  useEffect(() => {
+    if (subTab !== 'messages' || !user) {
+      if (typingIdleTimerRef.current !== null) {
+        window.clearTimeout(typingIdleTimerRef.current);
+        typingIdleTimerRef.current = null;
+      }
+      setMchartTyping(false);
+    }
+  }, [subTab, user, setMchartTyping]);
+
+  useEffect(() => {
+    return () => {
+      if (typingIdleTimerRef.current !== null) {
+        window.clearTimeout(typingIdleTimerRef.current);
+      }
+      setMchartTyping(false);
+    };
+  }, [setMchartTyping]);
+
+  const typingStatusLabel = useMemo(() => {
+    if (typingUsersInMchart.length === 0) return '';
+    if (typingUsersInMchart.length === 1) {
+      const ty = typingUsersInMchart[0];
+      if (ty.replyingToName && ty.replyingToName !== ty.displayName) {
+        return tr(
+          `${ty.displayName} anamjibu ${ty.replyingToName} · anaandika...`,
+          `${ty.displayName} is replying to ${ty.replyingToName} · typing...`
+        );
+      }
+      return tr(`${ty.displayName} anaandika...`, `${ty.displayName} is typing...`);
+    }
+    if (typingUsersInMchart.length === 2) {
+      return tr(
+        `${typingUsersInMchart[0].displayName} na ${typingUsersInMchart[1].displayName} wanaandika...`,
+        `${typingUsersInMchart[0].displayName} and ${typingUsersInMchart[1].displayName} are typing...`
+      );
+    }
+    return tr(
+      `${typingUsersInMchart[0].displayName} na wengine ${typingUsersInMchart.length - 1} wanaandika...`,
+      `${typingUsersInMchart[0].displayName} and ${typingUsersInMchart.length - 1} others are typing...`
+    );
+  }, [typingUsersInMchart, tr]);
 
   // Drop optimistic messages as soon as Firestore echoes the real doc with same ID
   useEffect(() => {
@@ -254,9 +325,41 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Track visualViewport cleanly so mobile keyboard never pushes header or hides latest message
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const syncViewport = () => {
+      const vv = window.visualViewport;
+      const h = vv ? vv.height : window.innerHeight;
+      const offsetTop = vv ? vv.offsetTop : 0;
+      const isMobile = window.innerWidth < 768;
+      const kbOpen = Boolean(vv && vv.height < window.innerHeight - 130 && isMobile);
+      setViewportMetrics({ height: h, offsetTop, isMobile, keyboardOpen: kbOpen });
+      if (document.documentElement.scrollTop !== 0 || window.scrollY !== 0) {
+        window.scrollTo(0, 0);
+      }
+    };
+
+    syncViewport();
+    window.addEventListener('resize', syncViewport);
+    const vv = window.visualViewport;
+    vv?.addEventListener('resize', syncViewport);
+    vv?.addEventListener('scroll', syncViewport);
+
+    return () => {
+      window.removeEventListener('resize', syncViewport);
+      vv?.removeEventListener('resize', syncViewport);
+      vv?.removeEventListener('scroll', syncViewport);
+      focusTimersRef.current.forEach((id) => window.clearTimeout(id));
+      focusTimersRef.current = [];
+    };
+  }, []);
+
   const scrollToBottom = (smooth = true) => {
     const el = scrollBoxRef.current;
     if (!el) return;
+    wasNearBottomRef.current = true;
     el.scrollTo({
       top: el.scrollHeight,
       behavior: smooth ? 'smooth' : 'auto',
@@ -275,6 +378,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
     if (!initialScrolledRef.current) {
       initialScrolledRef.current = true;
       prevNewestIdRef.current = newest.id;
+      wasNearBottomRef.current = true;
       window.requestAnimationFrame(() => {
         el.scrollTop = el.scrollHeight;
       });
@@ -285,7 +389,8 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
       prevNewestIdRef.current = newest.id;
       const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
       const isNearBottom = distanceFromBottom < 180;
-      if (isNearBottom || newest.senderId === user?.uid) {
+      if (isNearBottom || newest.senderId === user?.uid || document.activeElement === inputRef.current) {
+        wasNearBottomRef.current = true;
         window.requestAnimationFrame(() => {
           el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
         });
@@ -296,11 +401,61 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
     }
   }, [loading, chronologicalMessages, user?.uid]);
 
+  // Keep latest message pinned right above composer whenever timeline resizes (keyboard / multiline draft)
+  useEffect(() => {
+    if (subTab !== 'messages') return;
+    const el = scrollBoxRef.current;
+    if (!el) return;
+
+    wasNearBottomRef.current = true;
+    window.requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+    });
+
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      if (wasNearBottomRef.current || document.activeElement === inputRef.current) {
+        el.scrollTop = el.scrollHeight;
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [subTab]);
+
+  // Keep latest sent message visible while composing draft or opening reply/attachment bars
+  useEffect(() => {
+    if (subTab !== 'messages') return;
+    const el = scrollBoxRef.current;
+    if (!el) return;
+    if (document.activeElement === inputRef.current || wasNearBottomRef.current) {
+      window.requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight;
+      });
+    }
+  }, [draft, replyTo, pendingAttachment, subTab]);
+
+  const handleComposerFocus = () => {
+    wasNearBottomRef.current = true;
+    scrollToBottom(false);
+    focusTimersRef.current.forEach((id) => window.clearTimeout(id));
+    focusTimersRef.current = [80, 220, 400].map((delay) =>
+      window.setTimeout(() => {
+        const el = scrollBoxRef.current;
+        if (el) {
+          el.scrollTop = el.scrollHeight;
+          setShowScrollBottom(false);
+          setUnseenWhileScrolled(0);
+        }
+      }, delay)
+    );
+  };
+
   const handleTimelineScroll = () => {
     const el = scrollBoxRef.current;
     if (!el) return;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const awayFromBottom = distanceFromBottom > 180;
+    const awayFromBottom = distanceFromBottom > 140;
+    wasNearBottomRef.current = !awayFromBottom;
     setShowScrollBottom(awayFromBottom);
     if (!awayFromBottom) {
       setUnseenWhileScrolled(0);
@@ -332,6 +487,24 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
     }
   };
 
+  const uploadResolvedChatFile = async (file: File) => {
+    setUploading(true);
+    try {
+      const uploaded = await uploadChatFileToCloudinary(file);
+      setPendingAttachment(uploaded);
+      inputRef.current?.focus();
+    } catch (err) {
+      onToast(
+        err instanceof Error
+          ? err.message
+          : tr('Imeshindwa kupakia faili.', 'Failed to upload file.'),
+        'error'
+      );
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const handleFileSelected = async (file: File | undefined) => {
     setAttachMenuOpen(false);
     if (!file) return;
@@ -350,21 +523,12 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
       return;
     }
 
-    setUploading(true);
-    try {
-      const uploaded = await uploadChatFileToCloudinary(file);
-      setPendingAttachment(uploaded);
-      inputRef.current?.focus();
-    } catch (err) {
-      onToast(
-        err instanceof Error
-          ? err.message
-          : tr('Imeshindwa kupakia faili.', 'Failed to upload file.'),
-        'error'
-      );
-    } finally {
-      setUploading(false);
+    if (file.type.startsWith('image/')) {
+      setPendingCropImage(file);
+      return;
     }
+
+    await uploadResolvedChatFile(file);
   };
 
   const handleSend = (e?: React.FormEvent) => {
@@ -426,6 +590,11 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
     setPendingAttachment(null);
     setReplyTo(null);
     setEmojiOpen(false);
+    if (typingIdleTimerRef.current !== null) {
+      window.clearTimeout(typingIdleTimerRef.current);
+      typingIdleTimerRef.current = null;
+    }
+    setMchartTyping(false);
     window.requestAnimationFrame(() => scrollToBottom(true));
     inputRef.current?.focus();
 
@@ -548,15 +717,32 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
     }
   };
 
+  const isKeyboardUp = keyboardOpenProp ?? viewportMetrics.keyboardOpen;
+
+  const shellStyle: React.CSSProperties = viewportMetrics.isMobile
+    ? {
+        top: `calc(var(--malosha-header-h, 114px) + ${Math.max(0, viewportMetrics.offsetTop)}px)`,
+        height: isKeyboardUp
+          ? `calc(${Math.round(viewportMetrics.height)}px - var(--malosha-header-h, 114px))`
+          : `calc(${Math.round(viewportMetrics.height)}px - var(--malosha-header-h, 114px) - 56px - env(safe-area-inset-bottom, 0px))`,
+      }
+    : {
+        top: 'var(--malosha-header-h, 124px)',
+        height: 'calc(100dvh - var(--malosha-header-h, 124px))',
+      };
+
   return (
-    <div className="mx-auto max-w-4xl px-0 py-0 pb-16 sm:px-6 sm:py-5 md:pb-8">
+    <div
+      style={shellStyle}
+      className="fixed inset-x-0 z-30 mx-auto flex max-w-4xl flex-col overflow-hidden bg-[#EFEAE2] md:bg-transparent md:px-6 md:py-4"
+    >
       <section
         aria-label={tr('Mchart ya Jamii ya Malosha', 'Malosha Community Mchart')}
-        className="flex h-[calc(100dvh-132px)] min-h-[480px] flex-col overflow-hidden border-slate-200 bg-[#EFEAE2] shadow-sm sm:h-[calc(100dvh-180px)] sm:rounded-2xl sm:border"
+        className="flex h-full min-h-0 flex-col overflow-hidden border-slate-200 bg-[#EFEAE2] shadow-sm md:rounded-2xl md:border"
       >
-        {/* WhatsApp-Style Group Header */}
-        <header className="shrink-0 bg-[#075E54] text-white">
-          <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 sm:px-5 sm:py-3">
+        {/* Stationary WhatsApp-Style Group Header */}
+        <header className="shrink-0 transform-gpu touch-none bg-[#075E54] text-white will-change-transform">
+          <div className="flex items-center justify-between gap-2 px-3 py-2 sm:px-5 sm:py-2.5">
             <div className="flex min-w-0 items-center gap-3">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/15 ring-1 ring-white/25">
                 <Users className="h-5 w-5 text-[#25D366]" aria-hidden="true" />
@@ -565,21 +751,53 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                 <h1 className="truncate font-display text-sm font-bold text-white sm:text-base">
                   Malosha Forums · Mchart
                 </h1>
-                <p className="truncate text-[11px] text-emerald-100/90 sm:text-xs">
-                  {subTab === 'notes'
-                    ? tr(
+                <p className="truncate text-[11px] sm:text-xs">
+                  {subTab === 'notes' ? (
+                    <span className="text-emerald-100/90">
+                      {tr(
                         `Notes ${notes.length} · Mafaili ya kusoma kwenye simu`,
                         `${notes.length} notes · Mobile reader & archive files`
-                      )
-                    : activeParticipantCount > 0
-                      ? tr(
-                          `Washiriki ${activeParticipantCount} · Jamii moja (Picha & Nyaraka)`,
-                          `${activeParticipantCount} active members · One community (Photos & Docs)`
-                        )
-                      : tr(
-                          'Mchart ya Pamoja · Picha, Nyaraka & Mijadala ya Moja kwa Moja',
-                          'Shared Mchart · Photos, Documents & Real-time Chat'
-                        )}
+                      )}
+                    </span>
+                  ) : typingStatusLabel ? (
+                    <span className="inline-flex items-center gap-1.5 font-bold text-[#25D366]">
+                      <span className="inline-flex gap-0.5" aria-hidden="true">
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#25D366] [animation-delay:-0.3s]" />
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#25D366] [animation-delay:-0.15s]" />
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#25D366]" />
+                      </span>
+                      <span className="truncate">{typingStatusLabel}</span>
+                    </span>
+                  ) : onlineCount > 0 || activeParticipantCount > 0 ? (
+                    <span className="inline-flex items-center gap-1.5 text-emerald-100/95">
+                      {onlineCount > 0 && (
+                        <>
+                          <span className="inline-block h-2 w-2 rounded-full bg-[#25D366]" aria-hidden="true" />
+                          <span className="font-semibold text-emerald-100">
+                            {onlineCount === 1
+                              ? tr('Mtu 1 yupo online', '1 online')
+                              : tr(`Watu ${onlineCount} wapo online`, `${onlineCount} online`)}
+                          </span>
+                          {activeParticipantCount > 0 && <span aria-hidden="true">·</span>}
+                        </>
+                      )}
+                      {activeParticipantCount > 0 && (
+                        <span>
+                          {tr(
+                            `Washiriki ${activeParticipantCount}`,
+                            `${activeParticipantCount} active`
+                          )}
+                        </span>
+                      )}
+                    </span>
+                  ) : (
+                    <span className="text-emerald-100/90">
+                      {tr(
+                        'Mchart ya Pamoja · Picha, Nyaraka & Mijadala ya Moja kwa Moja',
+                        'Shared Mchart · Photos, Documents & Real-time Chat'
+                      )}
+                    </span>
+                  )}
                 </p>
               </div>
             </div>
@@ -697,7 +915,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
         </header>
 
         {subTab === 'notes' ? (
-          <div className="flex-1 overflow-hidden">
+          <div className="min-h-0 flex-1 overflow-hidden">
             <MchartNotesView
               notes={notes}
               loading={loadingNotes}
@@ -714,11 +932,11 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
         ) : (
           <>
             {/* Scrollable WhatsApp Chat Canvas with subtle "malosha forums" watermark */}
-            <div className="bg-mchart-watermark relative flex-1 overflow-hidden">
+            <div className="bg-mchart-watermark relative min-h-0 flex-1 overflow-hidden">
               <div
                 ref={scrollBoxRef}
                 onScroll={handleTimelineScroll}
-                className="h-full overflow-y-auto px-2.5 py-3 sm:px-5 sm:py-4"
+                className="h-full touch-pan-y overflow-y-auto overscroll-contain px-2.5 py-2.5 sm:px-5 sm:py-4"
               >
             {/* Today-only Group Session Banner + Direct Invite Link */}
             <div className="mx-auto mb-3 max-w-md rounded-xl bg-[#FFF3C4]/95 px-3.5 py-2.5 text-center text-[11px] leading-relaxed text-slate-700 shadow-xs">
@@ -800,6 +1018,8 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                               <Avatar
                                 name={msg.senderName}
                                 photoURL={msg.senderPhoto}
+                                uid={msg.senderId}
+                                showOnlineIndicator
                                 size="sm"
                               />
                             ) : null}
@@ -819,9 +1039,9 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                             highlightedId === msg.id ? 'ring-2 ring-[#25D366] ring-offset-1' : ''
                           }`}
                         >
-                          {/* Sender Name + Verification Badge */}
+                          {/* Sender Name + Verification Badge + Online */}
                           {!isOwn && !isSameSenderAsPrev && (
-                            <div className="mb-1 flex items-center gap-1">
+                            <div className="mb-1 flex flex-wrap items-center gap-1.5">
                               <span
                                 className={`truncate text-xs font-bold ${getSenderColorClass(
                                   msg.senderId
@@ -830,6 +1050,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                                 {msg.senderName}
                               </span>
                               <AuthorVerificationBadge uid={msg.senderId} size="xs" />
+                              <OnlineStatusPill uid={msg.senderId} />
                             </div>
                           )}
 
@@ -879,7 +1100,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                                       loading="lazy"
                                       decoding="async"
                                       referrerPolicy="no-referrer"
-                                      className="max-h-72 w-full object-cover"
+                                      className="block h-auto w-full"
                                     />
                                   </button>
                                 </div>
@@ -989,6 +1210,27 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                     </React.Fragment>
                   );
                 })}
+              </div>
+            )}
+
+            {/* WhatsApp-Style Live Typing Indicator Bubble */}
+            {typingStatusLabel && (
+              <div
+                role="status"
+                aria-live="polite"
+                className="mt-2.5 flex items-end gap-2 justify-start"
+              >
+                <div className="w-8 shrink-0" />
+                <div className="inline-flex max-w-[86%] items-center gap-2 rounded-2xl rounded-tl-xs border border-emerald-200 bg-white px-3.5 py-2 shadow-xs">
+                  <span className="inline-flex items-center gap-1" aria-hidden="true">
+                    <span className="h-2 w-2 animate-bounce rounded-full bg-[#00A884] [animation-delay:-0.3s]" />
+                    <span className="h-2 w-2 animate-bounce rounded-full bg-[#00A884] [animation-delay:-0.15s]" />
+                    <span className="h-2 w-2 animate-bounce rounded-full bg-[#00A884]" />
+                  </span>
+                  <span className="truncate text-xs font-semibold text-[#075E54]">
+                    {typingStatusLabel}
+                  </span>
+                </div>
               </div>
             )}
           </div>
@@ -1223,7 +1465,25 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                   rows={1}
                   maxLength={2000}
                   value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
+                  onFocus={handleComposerFocus}
+                  onChange={(e) => {
+                    const nextVal = e.target.value;
+                    setDraft(nextVal);
+                    wasNearBottomRef.current = true;
+                    if (typingIdleTimerRef.current !== null) {
+                      window.clearTimeout(typingIdleTimerRef.current);
+                      typingIdleTimerRef.current = null;
+                    }
+                    if (nextVal.trim().length > 0) {
+                      setMchartTyping(true, replyTo?.senderName || '');
+                      typingIdleTimerRef.current = window.setTimeout(() => {
+                        setMchartTyping(false);
+                        typingIdleTimerRef.current = null;
+                      }, 4200);
+                    } else {
+                      setMchartTyping(false);
+                    }
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey && window.innerWidth >= 768) {
                       e.preventDefault();
@@ -1231,7 +1491,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                     }
                   }}
                   placeholder={tr('Andika ujumbe hapa...', 'Type a message...')}
-                  className="max-h-28 w-full resize-none bg-transparent text-sm leading-snug text-slate-900 placeholder-slate-400 outline-none"
+                  className="max-h-24 w-full resize-none bg-transparent text-[15px] leading-snug text-slate-900 placeholder-slate-400 outline-none sm:text-sm"
                 />
               </div>
 
@@ -1294,6 +1554,17 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
           />
         </div>
       )}
+
+      {/* Interactive Image Resize / Crop Modal */}
+      <ImageResizeModal
+        file={pendingCropImage}
+        defaultPreset="free"
+        onCancel={() => setPendingCropImage(null)}
+        onConfirm={(resizedFile) => {
+          setPendingCropImage(null);
+          void uploadResolvedChatFile(resizedFile);
+        }}
+      />
     </div>
   );
 };
