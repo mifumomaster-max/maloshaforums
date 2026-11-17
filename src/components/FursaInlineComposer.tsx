@@ -63,42 +63,11 @@ export const FursaInlineComposer: React.FC<FursaInlineComposerProps> = ({
   useEffect(() => {
     if (expanded && userUid) {
       const timer = window.setTimeout(() => {
-        titleInputRef.current?.focus();
-      }, 40);
+        titleInputRef.current?.focus({ preventScroll: true });
+      }, 110);
       return () => window.clearTimeout(timer);
     }
   }, [expanded, userUid]);
-
-  const handleExpand = (triggerImagePicker = false) => {
-    if (!userUid) {
-      onToast(
-        tr(
-          'Tengeneza akaunti au ingia (kwa Google au Jisajili kawaida) ili kutangaza fursa.',
-          'Create an account or sign in to post an opportunity.'
-        ),
-        'error'
-      );
-      onSignIn('post');
-      return;
-    }
-    if (isSuspended) {
-      onToast(
-        tr(
-          'Akaunti yako imefungwa na msimamizi — huwezi kutangaza fursa.',
-          'Your account is suspended — posting is disabled.'
-        ),
-        'error'
-      );
-      return;
-    }
-    setError('');
-    onExpandedChange(true);
-    if (triggerImagePicker) {
-      window.setTimeout(() => {
-        fileInputRef.current?.click();
-      }, 60);
-    }
-  };
 
   const handleResetAndCollapse = () => {
     setTitle('');
@@ -214,46 +183,7 @@ export const FursaInlineComposer: React.FC<FursaInlineComposerProps> = ({
   };
 
   if (!expanded) {
-    return (
-      <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 sm:rounded-lg sm:px-5">
-        <div className="flex items-center gap-3">
-          <Avatar
-            name={userUid ? userDisplayName : 'F'}
-            photoURL={userUid ? userPhoto : ''}
-            size="md"
-          />
-          <button
-            type="button"
-            onClick={() => handleExpand(false)}
-            className="min-h-[44px] flex-1 rounded-full bg-[#F0F2F5] px-4 py-2 text-left text-sm text-slate-600 transition-colors hover:bg-slate-200/80"
-          >
-            {isSuspended
-              ? tr(
-                  'Akaunti yako imefungwa — huwezi kutangaza fursa.',
-                  'Your account is suspended — posting is disabled.'
-                )
-              : userUid
-                ? tr(
-                    'Una fursa ya ajira, internship au ruzuku? Tangaza hapa...',
-                    'Have a job, internship, or grant opportunity? Post it here...'
-                  )
-                : tr(
-                    'Tengeneza akaunti (Google / Jisajili) ili utangaze fursa mpya...',
-                    'Create an account (Google / Register) to post a new opportunity...'
-                  )}
-          </button>
-          <button
-            type="button"
-            onClick={() => handleExpand(true)}
-            aria-label={tr('Ambatanisha picha ya fursa', 'Attach opportunity image')}
-            className="inline-flex min-h-[42px] items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 whitespace-nowrap shrink-0"
-          >
-            <ImagePlus className="h-4 w-4 text-emerald-700" aria-hidden="true" />
-            <span className="hidden sm:inline">{tr('Picha', 'Photo')}</span>
-          </button>
-        </div>
-      </div>
-    );
+    return null;
   }
 
   return (

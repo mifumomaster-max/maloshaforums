@@ -1,5 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ImagePlus, Loader2, X } from 'lucide-react';
+import {
+  Eye,
+  Heading2,
+  Heading3,
+  ImagePlus,
+  List,
+  ListOrdered,
+  Loader2,
+  Quote,
+  Sparkles,
+  X,
+} from 'lucide-react';
 import {
   FORUM_BOARDS,
   JOB_TYPES,
@@ -12,9 +23,11 @@ import {
   resolveMakalaCover,
 } from '../types';
 import { uploadImageToCloudinary } from '../services/cloudinaryService';
+import { autoFormatScholarlyText } from '../utils/editorialFormatter';
 import { parseTagsInput } from '../utils/formatters';
 import { useLanguage } from '../context/LanguageContext';
 import { ImageResizeModal } from './ImageResizeModal';
+import { MakalaArticleRenderer } from './MakalaArticleRenderer';
 
 interface TopicComposerModalProps {
   isOpen: boolean;
@@ -67,7 +80,9 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
   const [uploadingImage, setUploadingImage] = useState(false);
   const kijiweniFileRef = useRef<HTMLInputElement>(null);
   const makalaFileRef = useRef<HTMLInputElement>(null);
+  const bodyTextareaRef = useRef<HTMLTextAreaElement>(null);
 
+  const [makalaPreview, setMakalaPreview] = useState(false);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -110,6 +125,7 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
       setCoverImage(MAKALA_COVERS[0].path);
       setKijiweniImage('');
     }
+    setMakalaPreview(false);
     setError('');
   }, [editingTopic, defaultCategory, isOpen]);
 
@@ -127,6 +143,26 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
   const isFursa = category === 'Fursa';
   const isMakala = category === 'Makala';
   const isKijiweni = category === 'Kijiweni';
+
+  const insertMakalaSyntax = (prefix: string, sample: string) => {
+    const el = bodyTextareaRef.current;
+    if (!el) {
+      setBody((prev) => `${prev}${prev && !prev.endsWith('\n') ? '\n' : ''}${prefix}${sample}`);
+      return;
+    }
+    const start = el.selectionStart ?? body.length;
+    const end = el.selectionEnd ?? body.length;
+    const selected = body.slice(start, end) || sample;
+    const leading = start > 0 && body[start - 1] !== '\n' ? '\n' : '';
+    const insertion = `${leading}${prefix}${selected}`;
+    setBody(body.slice(0, start) + insertion + body.slice(end));
+    setMakalaPreview(false);
+    window.requestAnimationFrame(() => {
+      el.focus();
+      const pos = start + insertion.length;
+      el.setSelectionRange(pos, pos);
+    });
+  };
 
   const handleKijiweniFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -609,7 +645,7 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
           )}
 
           <div>
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <label htmlFor="topic-body" className="block text-xs font-semibold text-slate-700">
                 {isFursa
                   ? tr('Majukumu, Sifa & Maelezo ya Kazi', 'Responsibilities, Qualifications & Details')
@@ -617,33 +653,122 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
                     ? tr('Matini Kamili ya Makala', 'Full Article Body')
                     : tr('Ujumbe Wako', 'Your Message')}
               </label>
-              <span className="text-[11px] text-slate-500">
-                {tr('**nzito** · *italiki* · > nukuu', '**bold** · *italic* · > quote')}
-              </span>
+              {isMakala ? (
+                <div className="inline-flex rounded border border-slate-200 bg-slate-50 p-0.5 text-[11px] font-bold">
+                  <button
+                    type="button"
+                    onClick={() => setMakalaPreview(false)}
+                    className={`rounded px-2 py-0.5 ${
+                      !makalaPreview ? 'bg-[#141414] text-white' : 'text-slate-600'
+                    }`}
+                  >
+                    {tr('Hariri', 'Edit')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMakalaPreview(true)}
+                    className={`inline-flex items-center gap-1 rounded px-2 py-0.5 ${
+                      makalaPreview ? 'bg-[#B80000] text-white' : 'text-slate-600'
+                    }`}
+                  >
+                    <Eye className="h-3 w-3" aria-hidden="true" />
+                    <span>{tr('Hakiki (BBC)', 'Preview')}</span>
+                  </button>
+                </div>
+              ) : (
+                <span className="text-[11px] text-slate-500">
+                  {tr('**nzito** · *italiki* · > nukuu', '**bold** · *italic* · > quote')}
+                </span>
+              )}
             </div>
-            <textarea
-              id="topic-body"
-              required={!(isKijiweni && kijiweniImage.trim().length >= 10)}
-              rows={7}
-              minLength={isKijiweni && kijiweniImage.trim().length >= 10 ? 0 : 10}
-              maxLength={8000}
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder={
-                isFursa
-                  ? tr(
-                      'Eleza majukumu ya kazi, sifa za mwombaji kijana, na faida zake...',
-                      'Describe role responsibilities, requirements, and benefits...'
-                    )
-                  : isMakala
+
+            {isMakala && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-1 rounded-t-lg border border-b-0 border-slate-300 bg-slate-50 px-2 py-1.5">
+                <button
+                  type="button"
+                  onClick={() => insertMakalaSyntax('## ', tr('Kichwa cha Sehemu', 'Section Title'))}
+                  className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000]"
+                >
+                  <Heading2 className="h-3 w-3" aria-hidden="true" />
+                  <span>{tr('Kichwa', 'H2')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => insertMakalaSyntax('### ', tr('Kichwa Kidogo', 'Subtitle'))}
+                  className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000]"
+                >
+                  <Heading3 className="h-3 w-3" aria-hidden="true" />
+                  <span>{tr('Kichwa Kidogo', 'H3')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => insertMakalaSyntax('- ', tr('Hoja muhimu', 'Bullet item'))}
+                  className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000]"
+                >
+                  <List className="h-3 w-3" aria-hidden="true" />
+                  <span>{tr('Orodha', 'Bullets')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => insertMakalaSyntax('1. ', tr('Hatua ya kwanza', 'First point'))}
+                  className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000]"
+                >
+                  <ListOrdered className="h-3 w-3" aria-hidden="true" />
+                  <span>{tr('Namba', 'List')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => insertMakalaSyntax('> ', tr('Nukuu...', 'Quote...'))}
+                  className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000]"
+                >
+                  <Quote className="h-3 w-3" aria-hidden="true" />
+                  <span>{tr('Nukuu', 'Quote')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (body.trim()) setBody((p) => autoFormatScholarlyText(p));
+                  }}
+                  className="ml-auto inline-flex items-center gap-1 rounded bg-[#0E2640] px-2.5 py-1 text-[11px] font-bold text-white hover:bg-[#163A5F]"
+                >
+                  <Sparkles className="h-3 w-3 text-amber-300" aria-hidden="true" />
+                  <span>{tr('Panga Kisomi', 'Auto-Format')}</span>
+                </button>
+              </div>
+            )}
+
+            {isMakala && makalaPreview ? (
+              <div className="min-h-[190px] rounded-b-lg border border-slate-300 bg-white p-4">
+                <MakalaArticleRenderer body={body} previewMode />
+              </div>
+            ) : (
+              <textarea
+                id="topic-body"
+                ref={bodyTextareaRef}
+                required={!(isKijiweni && kijiweniImage.trim().length >= 10)}
+                rows={7}
+                minLength={isKijiweni && kijiweniImage.trim().length >= 10 ? 0 : 10}
+                maxLength={8000}
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                placeholder={
+                  isFursa
                     ? tr(
-                        'Andika uchambuzi wenye aya zinazoeleweka, ushahidi, na nukuu...',
-                        'Write a clear analysis with well-structured paragraphs, facts, and quotes...'
+                        'Eleza majukumu ya kazi, sifa za mwombaji kijana, na faida zake...',
+                        'Describe role responsibilities, requirements, and benefits...'
                       )
-                    : tr('Shiriki mawazo yako na jamii...', 'Share your thoughts with the community...')
-              }
-              className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white p-3.5 text-sm leading-relaxed text-slate-900 focus:border-[#1D4E89] focus:outline-none"
-            />
+                    : isMakala
+                      ? tr(
+                          'Andika uchambuzi wenye ## Vichwa, ### Vichwa Vidogo, - Orodha, na aya zinazoeleweka...',
+                          'Write a structured analysis with ## Headings, ### Subtitles, - Bullets, and clear paragraphs...'
+                        )
+                      : tr('Shiriki mawazo yako na jamii...', 'Share your thoughts with the community...')
+                }
+                className={`w-full border border-slate-300 bg-white p-3.5 text-sm leading-relaxed text-slate-900 focus:border-[#1D4E89] focus:outline-none ${
+                  isMakala ? 'rounded-b-lg' : 'mt-1.5 rounded-lg'
+                }`}
+              />
+            )}
             <div className="mt-1 flex justify-end font-mono text-[11px] text-slate-500 tabular-nums">
               {body.length}/8000
             </div>

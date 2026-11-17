@@ -3,22 +3,23 @@ import {
   Bell,
   BellOff,
   BellRing,
-  CalendarDays,
   CheckCheck,
   ChevronRight,
-  Download,
+  CornerDownRight,
   Globe,
   Lock,
   LogOut,
+  MessageSquare,
   Newspaper,
-  Plus,
   Sparkles,
   User as UserIcon,
 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 import {
   NavTab,
+  NavUnreadCounts,
   Topic,
+  UserNotification,
   UserProfile,
   getMakalaSection,
   normalizeBoardCategory,
@@ -35,6 +36,7 @@ import {
   setPhoneAlertsEnabled,
 } from '../services/notificationService';
 import { Avatar, OnlineStatusPill } from './Avatar';
+import { NavIconSection, NavSectionIcon } from './NavIcons';
 import { AuthorVerificationBadge, VerificationBadge } from './VerificationBadge';
 
 interface HeaderProps {
@@ -48,14 +50,15 @@ interface HeaderProps {
   userPhoto: string;
   isAdmin: boolean;
   isSuspended?: boolean;
-  onOpenComposer: () => void;
   onSignIn: () => void;
   onSignOut: () => void;
   authBusy: boolean;
-  canInstallApp?: boolean;
-  onTriggerInstallApp?: () => void;
   onToast?: (message: string, kind?: 'success' | 'error') => void;
+  unreadCounts?: NavUnreadCounts;
   unreadChatCount?: number;
+  userNotifications?: UserNotification[];
+  onMarkNotificationRead?: (notificationId: string) => void | Promise<void>;
+  onMarkAllNotificationsRead?: (notificationIds: string[]) => void | Promise<void>;
 }
 
 const NOTIF_READ_IDS_KEY = 'malosha_notif_read_ids_v1';
@@ -93,19 +96,20 @@ export const Header: React.FC<HeaderProps> = ({
   userPhoto,
   isAdmin,
   isSuspended = false,
-  onOpenComposer,
   onSignIn,
   onSignOut,
   authBusy,
-  canInstallApp = false,
-  onTriggerInstallApp,
   onToast,
+  unreadCounts,
   unreadChatCount = 0,
+  userNotifications = [],
+  onMarkNotificationRead,
+  onMarkAllNotificationsRead,
 }) => {
   const { lang, setLang, tr, formatTime, getMakalaSectionLabel, getBoardLabel } = useLanguage();
   const [menuOpen, setMenuOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
-  const [notifFilter, setNotifFilter] = useState<'news' | 'all'>('news');
+  const [notifFilter, setNotifFilter] = useState<'replies' | 'news' | 'all'>('replies');
   const [notifPermission, setNotifPermission] = useState<PhoneNotificationPermission>(() =>
     getNotificationPermission()
   );
@@ -210,7 +214,14 @@ export const Header: React.FC<HeaderProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [newsNotifications, readIds, clearedAtMs]);
 
-  const visibleNotifications = notifFilter === 'news' ? newsNotifications : allNotifications;
+  const unreadReplyIds = useMemo(
+    () => userNotifications.filter((n) => !n.isRead).map((n) => n.id),
+    [userNotifications]
+  );
+  const unreadRepliesCount = unreadReplyIds.length;
+  const totalBellUnreadCount = unreadRepliesCount + unreadNewsCount;
+
+  const visibleNewsOrTopics = notifFilter === 'news' ? newsNotifications : allNotifications;
 
   const markItemRead = (topicId: string) => {
     setReadIds((prev) => {
@@ -236,6 +247,9 @@ export const Header: React.FC<HeaderProps> = ({
       window.localStorage.setItem(NOTIF_READ_IDS_KEY, JSON.stringify(Array.from(nextIds).slice(-100)));
     } catch {
       // Ignore storage failure
+    }
+    if (unreadReplyIds.length > 0 && onMarkAllNotificationsRead) {
+      void onMarkAllNotificationsRead(unreadReplyIds);
     }
   };
 
@@ -292,44 +306,60 @@ export const Header: React.FC<HeaderProps> = ({
     }
   };
 
-  const [nowDate, setNowDate] = useState<Date>(() => new Date());
+  const activeMemberName = (userProfile?.displayName || userDisplayName || '').trim();
+  const welcomePersonLabel = userUid
+    ? activeMemberName || tr('Mwanachama', 'Member')
+    : tr('Karibu Mgeni', 'Welcome Guest');
 
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setNowDate(new Date());
-    }, 60_000);
-    return () => window.clearInterval(timer);
-  }, []);
+  const counts: NavUnreadCounts = unreadCounts || {
+    kijiweni: 0,
+    fursa: 0,
+    makala: 0,
+    chat: unreadChatCount,
+  };
 
-  const formattedDayAndDate = useMemo(() => {
-    const locale = lang === 'sw' ? 'sw-TZ' : 'en-US';
-    try {
-      const weekday = new Intl.DateTimeFormat(locale, { weekday: 'long' }).format(nowDate);
-      const dateStr = new Intl.DateTimeFormat(locale, {
-        day: 'numeric',
-        month: 'long',
-        year: 'numeric',
-      }).format(nowDate);
-      const capDay = weekday.charAt(0).toUpperCase() + weekday.slice(1);
-      return { day: capDay, date: dateStr };
-    } catch {
-      return {
-        day: nowDate.toLocaleDateString('en-US', { weekday: 'long' }),
-        date: nowDate.toLocaleDateString('en-US', {
-          day: 'numeric',
-          month: 'long',
-          year: 'numeric',
-        }),
-      };
-    }
-  }, [lang, nowDate]);
-
-  const navItems: { id: NavTab; label: string }[] = [
-    { id: 'kijiweni', label: 'Kijiweni' },
-    { id: 'fursa', label: tr('Fursa', 'Opportunities') },
-    { id: 'makala', label: tr('Makala', 'Articles') },
-    { id: 'chat', label: 'Mchart' },
-    { id: 'trending', label: tr('Zilizovuma', 'Trending') },
+  const navItems: {
+    id: NavTab;
+    iconSection: NavIconSection;
+    label: string;
+    unread: number;
+    badgeTone: 'crimson' | 'green';
+  }[] = [
+    {
+      id: 'kijiweni',
+      iconSection: 'kijiweni',
+      label: 'Kijiweni',
+      unread: counts.kijiweni,
+      badgeTone: 'crimson',
+    },
+    {
+      id: 'fursa',
+      iconSection: 'fursa',
+      label: tr('Fursa', 'Opportunities'),
+      unread: counts.fursa,
+      badgeTone: 'crimson',
+    },
+    {
+      id: 'makala',
+      iconSection: 'makala',
+      label: tr('Makala', 'Articles'),
+      unread: counts.makala,
+      badgeTone: 'crimson',
+    },
+    {
+      id: 'chat',
+      iconSection: 'chat',
+      label: 'Mchart',
+      unread: counts.chat,
+      badgeTone: 'green',
+    },
+    {
+      id: 'trending',
+      iconSection: 'trending',
+      label: tr('Zilizovuma', 'Trending'),
+      unread: 0,
+      badgeTone: 'crimson',
+    },
   ];
 
   return (
@@ -343,37 +373,82 @@ export const Header: React.FC<HeaderProps> = ({
         aria-hidden="true"
       />
 
-      {/* Centered Official Header Band (Fixed & Compact) */}
-      <div className="border-b border-white/10 bg-[#0A1E33]/55">
-        <div className="mx-auto flex max-w-6xl flex-col items-center justify-center px-3 py-1.5 text-center sm:px-6 sm:py-2">
-          <p className="text-[10px] font-bold tracking-wider text-amber-300 uppercase sm:text-xs">
-            {tr(
-              'Jukwaa Rasmi la Jamii · Mijadala, Fursa & Habari',
-              'Official Community Platform · Discussions, Opportunities & News'
-            )}
-          </p>
-          <p className="font-display mt-0.5 text-xs font-semibold leading-snug text-white sm:text-[15px] [text-wrap:balance]">
-            {tr(
-              'Sauti ya Pamoja kwa Maendeleo, Elimu na Ajira za Vijana',
-              'A Shared Voice for Progress, Knowledge, and Youth Opportunities'
-            )}
-          </p>
-          <div className="mt-0.5 inline-flex items-center justify-center gap-1.5 text-[10px] font-medium text-slate-200/90 tabular-nums sm:text-[11px]">
-            <CalendarDays className="h-3 w-3 shrink-0 text-amber-400" aria-hidden="true" />
-            <span>
-              {formattedDayAndDate.day}, {formattedDayAndDate.date}
+      {/* Centered Compact Welcome Strip + Youth Handshake-to-Name Animation */}
+      <div className="relative overflow-hidden border-b border-white/10 bg-gradient-to-r from-[#061322] via-[#0B2239] to-[#061322] px-3 py-1 text-center">
+        <p className="text-[10.5px] font-extrabold tracking-[0.14em] text-amber-300 uppercase sm:text-[11.5px]">
+          Welcome to Malosha Forums
+        </p>
+
+        {/* Animated Stage: Two Young People Shaking Hands -> Parting Out -> Signed-in User Name Appears */}
+        <div className="relative mx-auto mt-0.5 flex h-[24px] w-full max-w-[300px] items-center justify-center overflow-hidden">
+          {/* Youth Pair Shaking Hands */}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 flex items-center justify-center"
+          >
+            {/* Left Young Person */}
+            <svg
+              width="34"
+              height="24"
+              viewBox="0 0 36 26"
+              fill="none"
+              className="animate-malosha-youth-left -mr-2 will-change-transform"
+            >
+              {/* Head */}
+              <circle cx="13" cy="6.2" r="3.4" fill="#FDE68A" />
+              <path d="M9.7 5.5C10.2 3.2 12.6 2.3 15 3.1C16 3.5 16.4 4.4 16.4 5.2C14.3 4.4 11.7 4.4 9.7 5.5Z" fill="#0F172A" />
+              {/* Shirt / Jacket */}
+              <path d="M6.8 22C7.2 14.5 9.8 11.2 13.4 11.2C16.8 11.2 18.8 13.6 19.4 22H6.8Z" fill="#38BDF8" />
+              {/* Extended Handshake Arm */}
+              <path d="M16.8 13.8L31.5 14.8" stroke="#FDE68A" strokeWidth="2.8" strokeLinecap="round" />
+            </svg>
+
+            {/* Central Handshake Clasp & Spark */}
+            <div className="animate-malosha-handshake-clasp relative z-10 flex items-center justify-center">
+              <span className="h-3 w-3 rounded-full bg-amber-300/35 blur-[2px]" />
+              <span className="absolute h-2 w-2 rounded-full bg-amber-300 shadow-[0_0_8px_rgba(251,191,36,0.95)]" />
+            </div>
+
+            {/* Right Young Person */}
+            <svg
+              width="34"
+              height="24"
+              viewBox="0 0 36 26"
+              fill="none"
+              className="animate-malosha-youth-right -ml-2 will-change-transform"
+            >
+              {/* Head */}
+              <circle cx="23" cy="6.2" r="3.4" fill="#FCD34D" />
+              <path d="M19.5 5.4C19.8 3.1 22.3 2.2 24.8 3C26.1 3.5 26.6 4.5 26.4 5.4C24.4 4.5 21.7 4.5 19.5 5.4Z" fill="#1E293B" />
+              {/* Shirt / Jacket */}
+              <path d="M16.6 22C17.2 13.6 19.2 11.2 22.6 11.2C26.2 11.2 28.8 14.5 29.2 22H16.6Z" fill="#F59E0B" />
+              {/* Extended Handshake Arm */}
+              <path d="M19.2 13.8L4.5 14.8" stroke="#FCD34D" strokeWidth="2.8" strokeLinecap="round" />
+            </svg>
+          </div>
+
+          {/* Signed-in User Name Revealed in Center After Youths Exit */}
+          <div className="animate-malosha-welcome-name relative z-10 flex max-w-full items-center justify-center gap-1.5 px-2 will-change-transform">
+            <span
+              className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.9)]"
+              aria-hidden="true"
+            />
+            <span className="truncate text-[11.5px] font-bold tracking-tight text-white sm:text-xs">
+              {userUid
+                ? tr(`Karibu, ${welcomePersonLabel}`, `Welcome, ${welcomePersonLabel}`)
+                : welcomePersonLabel}
             </span>
           </div>
         </div>
       </div>
 
       {/* Primary Fixed Navigation Bar */}
-      <div className="mx-auto flex h-[50px] max-w-6xl items-center justify-between gap-2.5 px-3.5 sm:h-[54px] sm:gap-8 sm:px-6">
+      <div className="mx-auto flex h-[50px] max-w-6xl items-center justify-between gap-2 px-3 sm:h-[54px] sm:gap-5 sm:px-6">
         {/* Zone 1: Geometric Brand Emblem + Single-line Wordmark */}
         <button
           type="button"
-          onClick={() => onSelectTab('all')}
-          className="group flex items-center gap-2.5 whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-sky-300"
+          onClick={() => onSelectTab('kijiweni')}
+          className="group flex items-center gap-2 whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-sky-300 sm:gap-2.5"
         >
           <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-[#F59E0B] to-[#D97706] text-white shadow-sm ring-1 ring-white/20 transition-transform group-hover:scale-[1.03] sm:h-9 sm:w-9">
             <svg className="h-4 w-4 sm:h-[18px] sm:w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -386,37 +461,46 @@ export const Header: React.FC<HeaderProps> = ({
               <circle cx="15" cy="10.25" r="1.25" fill="#0E2640" />
             </svg>
           </span>
-          <span className="font-display text-[17px] font-bold tracking-tight text-white sm:text-xl">
+          <span className="font-display text-[15.5px] font-bold tracking-tight text-white sm:text-xl">
             Malosha Forums
           </span>
         </button>
 
-        {/* Zone 2: Desktop Single-Line Navigation Links */}
+        {/* Zone 2: Desktop Single-Line Navigation Links with Modern Colored Icons & Unread Counts */}
         <nav
           aria-label={tr('Urambazaji mkuu', 'Main navigation')}
-          className="hidden md:flex items-center gap-7 text-sm font-medium"
+          className="hidden md:flex items-center gap-3.5 lg:gap-5 text-sm font-medium"
         >
           {navItems.map((item) => {
             const active = activeTab === item.id;
-            const showChatBadge = item.id === 'chat' && unreadChatCount > 0 && !active;
+            const showBadge = item.unread > 0 && !active;
             return (
               <button
                 key={item.id}
                 type="button"
                 onClick={() => onSelectTab(item.id)}
-                className={`relative inline-flex items-center gap-1.5 py-2 whitespace-nowrap shrink-0 transition-colors focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-sky-300 ${
-                  active ? 'font-semibold text-white' : 'text-slate-200 hover:text-white'
+                className={`relative inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 whitespace-nowrap shrink-0 transition-all focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-sky-300 ${
+                  active
+                    ? 'bg-white/12 font-semibold text-white'
+                    : 'text-slate-200 hover:bg-white/8 hover:text-white'
                 }`}
               >
+                <NavSectionIcon section={item.iconSection} className="h-[19px] w-[19px] shrink-0" />
                 <span>{item.label}</span>
-                {showChatBadge && (
-                  <span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[#25D366] px-1 text-[10px] font-extrabold leading-none text-[#073D35] tabular-nums">
-                    {unreadChatCount > 99 ? '99+' : unreadChatCount}
+                {showBadge && (
+                  <span
+                    className={`flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-extrabold leading-none tabular-nums shadow-sm ${
+                      item.badgeTone === 'green'
+                        ? 'bg-[#25D366] text-[#052e27]'
+                        : 'bg-[#E11D48] text-white'
+                    }`}
+                  >
+                    {item.unread > 99 ? '99+' : item.unread}
                   </span>
                 )}
                 {active && (
                   <span
-                    className="absolute right-0 bottom-0 left-0 h-0.5 rounded-full bg-amber-400"
+                    className="absolute right-1.5 -bottom-[7px] left-1.5 h-0.5 rounded-full bg-amber-400"
                     aria-hidden="true"
                   />
                 )}
@@ -425,30 +509,27 @@ export const Header: React.FC<HeaderProps> = ({
           })}
         </nav>
 
-        {/* Zone 3: Install App + News Notifications + Primary Auth / Account */}
-        <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
-          {canInstallApp && onTriggerInstallApp && (
-            <button
-              type="button"
-              onClick={onTriggerInstallApp}
-              title={tr('Sakinisha App', 'Install App')}
-              aria-label={tr('Sakinisha App ya Malosha', 'Install Malosha App')}
-              className="flex h-10 items-center justify-center gap-1.5 rounded-xl border border-amber-400/35 bg-amber-500/15 px-2.5 text-xs font-semibold text-amber-200 transition-colors hover:bg-amber-500/25 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300 lg:px-3 whitespace-nowrap shrink-0"
-            >
-              <Download className="h-4 w-4 text-amber-400" aria-hidden="true" />
-              <span className="hidden lg:inline">{tr('Sakinisha App', 'Install App')}</span>
-            </button>
-          )}
-
-          {/* News Notification Bell */}
+        {/* Zone 2B: Centered Notification Bell (Separated Cleanly From Profile) */}
+        <div className="flex flex-1 items-center justify-center md:flex-none md:mr-3 lg:mr-5">
+          {/* Notification Bell (Facebook-Style Replies + News Alerts) */}
           <div className="relative" ref={notifRef}>
             <button
               type="button"
               onClick={() => {
-                setNotifOpen((prev) => !prev);
+                setNotifOpen((prev) => {
+                  const next = !prev;
+                  if (next) {
+                    if (unreadRepliesCount > 0 || (userUid && userNotifications.length > 0)) {
+                      setNotifFilter('replies');
+                    } else if (unreadNewsCount > 0) {
+                      setNotifFilter('news');
+                    }
+                  }
+                  return next;
+                });
                 setMenuOpen(false);
               }}
-              aria-label={tr('Arifa za habari', 'News notifications')}
+              aria-label={tr('Arifa za majibu na habari', 'Reply and news notifications')}
               aria-expanded={notifOpen}
               className={`relative flex h-10 w-10 items-center justify-center rounded-xl border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300 ${
                 notifOpen
@@ -457,9 +538,9 @@ export const Header: React.FC<HeaderProps> = ({
               }`}
             >
               <Bell className="h-[19px] w-[19px]" aria-hidden="true" />
-              {unreadNewsCount > 0 && (
+              {totalBellUnreadCount > 0 && (
                 <span className="absolute -top-1 -right-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[#E11D48] px-1 text-[10px] font-bold leading-none text-white ring-2 ring-[#0E2640] tabular-nums">
-                  {unreadNewsCount > 9 ? '9+' : unreadNewsCount}
+                  {totalBellUnreadCount > 99 ? '99+' : totalBellUnreadCount}
                 </span>
               )}
             </button>
@@ -467,57 +548,90 @@ export const Header: React.FC<HeaderProps> = ({
             {notifOpen && (
               <div
                 role="dialog"
-                aria-label={tr('Arifa za habari mpya', 'Latest news notifications')}
-                className="fixed inset-x-3 top-[calc(var(--malosha-header-h,118px)+8px)] z-50 overflow-hidden rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl sm:absolute sm:inset-x-auto sm:top-full sm:right-0 sm:mt-2.5 sm:w-[380px]"
+                aria-label={tr('Kituo cha Arifa', 'Notifications Center')}
+                className="fixed inset-x-3 top-[calc(var(--malosha-header-h,106px)+8px)] z-50 overflow-hidden rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl sm:absolute sm:inset-x-auto sm:top-full sm:left-1/2 sm:-translate-x-1/2 sm:mt-2.5 sm:w-[400px] md:left-auto md:right-0 md:translate-x-0"
               >
                 {/* Header */}
                 <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/80 px-4 py-3">
                   <div className="flex items-center gap-2">
-                    <Newspaper className="h-4 w-4 text-[#B80000]" aria-hidden="true" />
+                    <Bell className="h-4 w-4 text-[#1877F2]" aria-hidden="true" />
                     <h2 className="text-sm font-bold text-slate-900">
-                      {tr('Arifa za Habari', 'News Alerts')}
+                      {tr('Arifa Zako', 'Notifications')}
                     </h2>
-                    {unreadNewsCount > 0 && (
-                      <span className="text-xs font-semibold text-[#B80000] tabular-nums">
-                        ({unreadNewsCount} {tr('mpya', 'new')})
+                    {totalBellUnreadCount > 0 && (
+                      <span className="text-xs font-semibold text-[#E11D48] tabular-nums">
+                        ({totalBellUnreadCount} {tr('mpya', 'new')})
                       </span>
                     )}
                   </div>
-                  {visibleNotifications.length > 0 && (
+                  {(userNotifications.length > 0 || visibleNewsOrTopics.length > 0) && (
                     <button
                       type="button"
                       onClick={markAllRead}
                       className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold text-[#1D4E89] transition-colors hover:bg-sky-50"
                     >
                       <CheckCheck className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>{tr('Zimesomwa', 'Mark read')}</span>
+                      <span>{tr('Zimesomwa zote', 'Mark all read')}</span>
                     </button>
                   )}
                 </div>
 
-                {/* Filter Tabs: Habari vs Zote */}
+                {/* Filter Tabs: Majibu (Replies) vs Habari vs Zote */}
                 <div className="flex items-center gap-1.5 border-b border-slate-100 bg-white px-4 py-2">
                   <button
                     type="button"
+                    onClick={() => setNotifFilter('replies')}
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors ${
+                      notifFilter === 'replies'
+                        ? 'bg-[#1877F2] text-white'
+                        : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span>{tr('Majibu', 'Replies')}</span>
+                    {unreadRepliesCount > 0 && (
+                      <span
+                        className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none tabular-nums ${
+                          notifFilter === 'replies'
+                            ? 'bg-white text-[#1877F2]'
+                            : 'bg-[#E11D48] text-white'
+                        }`}
+                      >
+                        {unreadRepliesCount}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setNotifFilter('news')}
-                    className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors ${
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors ${
                       notifFilter === 'news'
                         ? 'bg-[#B80000] text-white'
                         : 'text-slate-600 hover:bg-slate-100'
                     }`}
                   >
-                    {tr('Habari & Makala', 'News & Articles')}
+                    <span>{tr('Habari', 'News')}</span>
+                    {unreadNewsCount > 0 && (
+                      <span
+                        className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none tabular-nums ${
+                          notifFilter === 'news'
+                            ? 'bg-white text-[#B80000]'
+                            : 'bg-[#B80000] text-white'
+                        }`}
+                      >
+                        {unreadNewsCount}
+                      </span>
+                    )}
                   </button>
                   <button
                     type="button"
                     onClick={() => setNotifFilter('all')}
-                    className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors ${
+                    className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors ${
                       notifFilter === 'all'
                         ? 'bg-[#163A5F] text-white'
                         : 'text-slate-600 hover:bg-slate-100'
                     }`}
                   >
-                    {tr('Zote', 'All Updates')}
+                    {tr('Zote', 'All')}
                   </button>
                 </div>
 
@@ -557,8 +671,127 @@ export const Header: React.FC<HeaderProps> = ({
                 )}
 
                 {/* Notification List */}
-                <div className="max-h-[340px] divide-y divide-slate-100 overflow-y-auto">
-                  {visibleNotifications.length === 0 ? (
+                <div className="max-h-[360px] divide-y divide-slate-100 overflow-y-auto">
+                  {notifFilter === 'replies' ? (
+                    !userUid ? (
+                      <div className="px-5 py-8 text-center">
+                        <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-sky-50 text-[#1877F2]">
+                          <MessageSquare className="h-5 w-5" aria-hidden="true" />
+                        </div>
+                        <p className="mt-3 text-sm font-semibold text-slate-800">
+                          {tr(
+                            'Ingia ili upate arifa za majibu ya maoni',
+                            'Sign in to get comment reply alerts'
+                          )}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {tr(
+                            'Mtu akijibu maoni yako kwenye mada yoyote, utaona arifa hapa papo hapo.',
+                            'Whenever someone replies to your comment, an alert will appear right here.'
+                          )}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNotifOpen(false);
+                            onSignIn();
+                          }}
+                          className="mt-3 inline-flex min-h-[36px] items-center rounded-lg bg-[#1877F2] px-4 py-1.5 text-xs font-bold text-white hover:bg-[#166FE5]"
+                        >
+                          {tr('Ingia / Jisajili', 'Sign In / Register')}
+                        </button>
+                      </div>
+                    ) : userNotifications.length === 0 ? (
+                      <div className="px-5 py-9 text-center">
+                        <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+                          <CornerDownRight className="h-5 w-5" aria-hidden="true" />
+                        </div>
+                        <p className="mt-3 text-sm font-semibold text-slate-800">
+                          {tr('Bado huna arifa za majibu', 'No reply notifications yet')}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {tr(
+                            'Mtu akijibu maoni yako au akiacha maoni kwenye chapisho lako, utaarifiwa hapa kama Facebook.',
+                            'When someone replies to your comment or comments on your post, you will be notified here.'
+                          )}
+                        </p>
+                      </div>
+                    ) : (
+                      userNotifications.map((notif) => (
+                        <button
+                          key={notif.id}
+                          type="button"
+                          onClick={() => {
+                            if (!notif.isRead) {
+                              void onMarkNotificationRead?.(notif.id);
+                            }
+                            setNotifOpen(false);
+                            onOpenTopic(notif.topicId);
+                          }}
+                          className={`flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 ${
+                            !notif.isRead ? 'bg-sky-50/75' : 'bg-white'
+                          }`}
+                        >
+                          {/* Facebook-style Avatar + Corner Action Badge */}
+                          <div className="relative shrink-0">
+                            <Avatar
+                              name={notif.actorName}
+                              photoURL={notif.actorPhoto}
+                              size="md"
+                              uid={notif.actorId}
+                            />
+                            <span
+                              className={`absolute -right-1 -bottom-1 flex h-5 w-5 items-center justify-center rounded-full text-white ring-2 ring-white ${
+                                notif.type === 'comment_reply' ? 'bg-[#1877F2]' : 'bg-[#16A34A]'
+                              }`}
+                              aria-hidden="true"
+                            >
+                              {notif.type === 'comment_reply' ? (
+                                <CornerDownRight className="h-3 w-3" />
+                              ) : (
+                                <MessageSquare className="h-2.5 w-2.5" />
+                              )}
+                            </span>
+                          </div>
+
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[13px] leading-snug text-slate-800">
+                              <span className="font-bold text-slate-900">{notif.actorName}</span>{' '}
+                              <span>
+                                {notif.type === 'comment_reply'
+                                  ? tr('alijibu maoni yako kwenye', 'replied to your comment on')
+                                  : tr('alitoa maoni kwenye chapisho lako', 'commented on your post')}
+                              </span>{' '}
+                              {notif.topicTitle && (
+                                <span className="font-semibold text-[#163A5F]">
+                                  «{notif.topicTitle}»
+                                </span>
+                              )}
+                            </p>
+                            {notif.replyPreview && (
+                              <p className="mt-1 line-clamp-2 rounded-lg bg-slate-100/80 px-2.5 py-1 text-xs text-slate-600">
+                                “{notif.replyPreview}”
+                              </p>
+                            )}
+                            <div className="mt-1 flex items-center gap-1.5 text-[11px]">
+                              <span className="font-semibold text-[#1877F2]">
+                                {getBoardLabel(notif.topicCategory)}
+                              </span>
+                              <span className="text-slate-300">·</span>
+                              <span className="text-slate-400">{formatTime(notif.createdAt)}</span>
+                            </div>
+                          </div>
+
+                          {!notif.isRead && (
+                            <span
+                              aria-label={tr('Haijasomwa', 'Unread')}
+                              className="mt-2 h-2.5 w-2.5 shrink-0 rounded-full bg-[#1877F2]"
+                            />
+                          )}
+                        </button>
+                      ))
+                    )
+                  ) : visibleNewsOrTopics.length === 0 ? (
                     <div className="px-5 py-9 text-center">
                       <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-slate-100 text-slate-400">
                         <Bell className="h-5 w-5" aria-hidden="true" />
@@ -574,7 +807,7 @@ export const Header: React.FC<HeaderProps> = ({
                       </p>
                     </div>
                   ) : (
-                    visibleNotifications.map((item) => {
+                    visibleNewsOrTopics.map((item) => {
                       const board = normalizeBoardCategory(item.category);
                       const isNews = board === 'Makala';
                       const unread = isUnread(item);
@@ -672,34 +905,12 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
             )}
           </div>
+        </div>
 
+        {/* Zone 3: Dedicated Primary Auth / Account Profile (Clear & Uncluttered) */}
+        <div className="flex items-center shrink-0">
           {userUid ? (
             <>
-              <button
-                type="button"
-                onClick={onOpenComposer}
-                aria-disabled={isSuspended && !isAdmin}
-                className={`inline-flex min-h-[40px] items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-white shadow-sm transition-colors sm:px-3.5 sm:text-sm whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300 ${
-                  isSuspended && !isAdmin
-                    ? 'bg-red-800/80 hover:bg-red-800'
-                    : 'bg-[#D97706] hover:bg-[#B45309]'
-                }`}
-              >
-                {isSuspended && !isAdmin ? (
-                  <Lock className="h-4 w-4" aria-hidden="true" />
-                ) : (
-                  <Plus className="h-4 w-4" aria-hidden="true" />
-                )}
-                <span className="sm:hidden">
-                  {isSuspended && !isAdmin ? tr('Imefungwa', 'Closed') : tr('Mada', 'Post')}
-                </span>
-                <span className="hidden sm:inline">
-                  {isSuspended && !isAdmin
-                    ? tr('Akaunti Imefungwa', 'Account Closed')
-                    : tr('Anzisha Mada', 'New Post')}
-                </span>
-              </button>
-
               <div className="relative" ref={menuRef}>
                 <button
                   type="button"

@@ -16,6 +16,7 @@ import {
   FORUM_BOARDS,
   JOB_TYPES,
   NavTab,
+  NavUnreadCounts,
   PrimaryBoard,
   SortMode,
   Topic,
@@ -29,6 +30,7 @@ import { FursaPostCard } from './FursaPostCard';
 import { KijiweniPostCard } from './KijiweniPostCard';
 import { KijiweniInlineComposer } from './KijiweniInlineComposer';
 import { MakalaNewsroom } from './MakalaNewsroom';
+import { NavIconSection, NavSectionIcon } from './NavIcons';
 import { AuthorVerificationBadge } from './VerificationBadge';
 
 interface TopicListProps {
@@ -93,6 +95,13 @@ interface TopicListProps {
   onSeedStarterTopics: () => Promise<void>;
   seeding: boolean;
   onVisibleTopicIdsChange?: (ids: string[]) => void;
+  unreadCounts?: NavUnreadCounts;
+}
+
+function getBoardIconSection(board: PrimaryBoard): NavIconSection {
+  if (board === 'Kijiweni') return 'kijiweni';
+  if (board === 'Fursa') return 'fursa';
+  return 'makala';
 }
 
 function stripMarkdownPreview(raw: string): string {
@@ -135,7 +144,14 @@ export const TopicList: React.FC<TopicListProps> = ({
   onSeedStarterTopics,
   seeding,
   onVisibleTopicIdsChange,
+  unreadCounts,
 }) => {
+  const getBoardUnread = (board: PrimaryBoard): number => {
+    if (!unreadCounts) return 0;
+    if (board === 'Kijiweni') return unreadCounts.kijiweni;
+    if (board === 'Fursa') return unreadCounts.fursa;
+    return unreadCounts.makala;
+  };
   const { tr, formatTime, getBoardLabel, getBoardDescription, getJobTypeLabel } = useLanguage();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const inlineComposerAnchorRef = useRef<HTMLDivElement>(null);
@@ -144,6 +160,8 @@ export const TopicList: React.FC<TopicListProps> = ({
   const [inlineComposerOpen, setInlineComposerOpen] = useState(false);
   const [fursaInlineOpen, setFursaInlineOpen] = useState(false);
   const [makalaInlineOpen, setMakalaInlineOpen] = useState(false);
+  const [makalaExpandTrigger, setMakalaExpandTrigger] = useState(0);
+  const lastHandledExpandRef = useRef<number>(inlineExpandRequest);
   const [visibleCount, setVisibleCount] = useState<number>(8);
 
   useEffect(() => {
@@ -176,24 +194,36 @@ export const TopicList: React.FC<TopicListProps> = ({
     if (effectiveCategory !== 'Fursa') {
       setSelectedJobType('all');
     }
+    setInlineComposerOpen(false);
+    setFursaInlineOpen(false);
+    setMakalaInlineOpen(false);
   }, [effectiveCategory]);
 
   useEffect(() => {
-    if (inlineExpandRequest <= 0) return;
+    if (inlineExpandRequest <= lastHandledExpandRef.current) return;
+    lastHandledExpandRef.current = inlineExpandRequest;
+
     if (effectiveCategory === 'Kijiweni') {
       setInlineComposerOpen(true);
-      inlineComposerAnchorRef.current?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'nearest',
-      });
+      const timer = window.setTimeout(() => {
+        inlineComposerAnchorRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+      }, 70);
+      return () => window.clearTimeout(timer);
     } else if (effectiveCategory === 'Fursa') {
       setFursaInlineOpen(true);
-      fursaComposerAnchorRef.current?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'nearest',
-      });
+      const timer = window.setTimeout(() => {
+        fursaComposerAnchorRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+      }, 70);
+      return () => window.clearTimeout(timer);
     } else if (effectiveCategory === 'Makala') {
       setMakalaInlineOpen(true);
+      setMakalaExpandTrigger((n) => n + 1);
     }
   }, [inlineExpandRequest, effectiveCategory]);
 
@@ -396,6 +426,7 @@ export const TopicList: React.FC<TopicListProps> = ({
         onBackToAll={() => handleBoardSelect('all')}
         inlineExpanded={makalaInlineOpen}
         onInlineExpandedChange={setMakalaInlineOpen}
+        expandTrigger={makalaExpandTrigger}
         onVisibleTopicIdsChange={onVisibleTopicIdsChange}
       />
     );
@@ -462,10 +493,12 @@ export const TopicList: React.FC<TopicListProps> = ({
                   return;
                 }
                 setInlineComposerOpen(true);
-                inlineComposerAnchorRef.current?.scrollIntoView({
-                  behavior: 'smooth',
-                  block: 'nearest',
-                });
+                window.setTimeout(() => {
+                  inlineComposerAnchorRef.current?.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'start',
+                  });
+                }, 70);
               } else if (effectiveCategory === 'Fursa') {
                 if (!userUid) {
                   onToast(
@@ -486,10 +519,12 @@ export const TopicList: React.FC<TopicListProps> = ({
                   return;
                 }
                 setFursaInlineOpen(true);
-                fursaComposerAnchorRef.current?.scrollIntoView({
-                  behavior: 'smooth',
-                  block: 'nearest',
-                });
+                window.setTimeout(() => {
+                  fursaComposerAnchorRef.current?.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'start',
+                  });
+                }, 70);
               } else {
                 onOpenComposer();
               }
@@ -559,41 +594,59 @@ export const TopicList: React.FC<TopicListProps> = ({
             <button
               type="button"
               onClick={() => handleBoardSelect('all')}
-              className={`min-h-[38px] rounded-lg border px-3 py-1.5 text-xs font-medium whitespace-nowrap shrink-0 ${
+              className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium whitespace-nowrap shrink-0 ${
                 activeTab === 'all' && effectiveCategory === 'all'
                   ? 'border-[#163A5F] bg-[#163A5F] text-white'
                   : 'border-slate-300 bg-white text-slate-700'
               }`}
             >
-              {tr('Zote', 'All')} ({categoryCounts.all})
+              <NavSectionIcon section="all" className="h-4 w-4 shrink-0" />
+              <span>
+                {tr('Zote', 'All')} ({categoryCounts.all})
+              </span>
             </button>
-            {FORUM_BOARDS.map((board) => (
-              <button
-                key={board.id}
-                type="button"
-                onClick={() => handleBoardSelect(board.id)}
-                className={`min-h-[38px] rounded-lg border px-3 py-1.5 text-xs font-medium whitespace-nowrap shrink-0 ${
-                  effectiveCategory === board.id
-                    ? 'border-[#163A5F] bg-[#163A5F] text-white'
-                    : 'border-slate-300 bg-white text-slate-700'
-                }`}
-              >
-                {getBoardLabel(board.id)} ({categoryCounts[board.id] ?? 0})
-              </button>
-            ))}
+            {FORUM_BOARDS.map((board) => {
+              const unread = effectiveCategory === board.id ? 0 : getBoardUnread(board.id);
+              return (
+                <button
+                  key={board.id}
+                  type="button"
+                  onClick={() => handleBoardSelect(board.id)}
+                  className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium whitespace-nowrap shrink-0 ${
+                    effectiveCategory === board.id
+                      ? 'border-[#163A5F] bg-[#163A5F] text-white'
+                      : 'border-slate-300 bg-white text-slate-700'
+                  }`}
+                >
+                  <NavSectionIcon
+                    section={getBoardIconSection(board.id)}
+                    className="h-4 w-4 shrink-0"
+                  />
+                  <span>
+                    {getBoardLabel(board.id)} ({categoryCounts[board.id] ?? 0})
+                  </span>
+                  {unread > 0 && (
+                    <span className="flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-[#E11D48] px-1 text-[10px] font-bold leading-none text-white tabular-nums">
+                      {unread > 99 ? '99+' : unread}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
             <button
               type="button"
               onClick={() => {
                 onSelectCategory('all');
                 onSelectTab('trending');
               }}
-              className={`min-h-[38px] rounded-lg border px-3 py-1.5 text-xs font-medium whitespace-nowrap shrink-0 ${
+              className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium whitespace-nowrap shrink-0 ${
                 activeTab === 'trending'
                   ? 'border-[#163A5F] bg-[#163A5F] text-white'
                   : 'border-slate-300 bg-white text-slate-700'
               }`}
             >
-              {tr('Zilizovuma', 'Trending')}
+              <NavSectionIcon section="trending" className="h-4 w-4 shrink-0" />
+              <span>{tr('Zilizovuma', 'Trending')}</span>
             </button>
           </div>
 
@@ -634,7 +687,12 @@ export const TopicList: React.FC<TopicListProps> = ({
 
           {/* Kijiweni Inline Composer — always inline inside the page, never a popup */}
           {effectiveCategory === 'Kijiweni' && (
-            <div ref={inlineComposerAnchorRef} className="mb-4">
+            <div
+              ref={inlineComposerAnchorRef}
+              className={`scroll-mt-[calc(var(--malosha-header-h,106px)+14px)] ${
+                inlineComposerOpen ? 'mb-4' : ''
+              }`}
+            >
               <KijiweniInlineComposer
                 expanded={inlineComposerOpen}
                 onExpandedChange={setInlineComposerOpen}
@@ -651,7 +709,12 @@ export const TopicList: React.FC<TopicListProps> = ({
 
           {/* Fursa Inline Composer — always inline inside the Fursa page, never a popup */}
           {effectiveCategory === 'Fursa' && (
-            <div ref={fursaComposerAnchorRef} className="mb-4">
+            <div
+              ref={fursaComposerAnchorRef}
+              className={`scroll-mt-[calc(var(--malosha-header-h,106px)+14px)] ${
+                fursaInlineOpen ? 'mb-4' : ''
+              }`}
+            >
               <FursaInlineComposer
                 expanded={fursaInlineOpen}
                 onExpandedChange={setFursaInlineOpen}
@@ -703,16 +766,20 @@ export const TopicList: React.FC<TopicListProps> = ({
                       onClick={() => {
                         if (effectiveCategory === 'Kijiweni') {
                           setInlineComposerOpen(true);
-                          inlineComposerAnchorRef.current?.scrollIntoView({
-                            behavior: 'smooth',
-                            block: 'nearest',
-                          });
+                          window.setTimeout(() => {
+                            inlineComposerAnchorRef.current?.scrollIntoView({
+                              behavior: 'smooth',
+                              block: 'start',
+                            });
+                          }, 70);
                         } else if (effectiveCategory === 'Fursa') {
                           setFursaInlineOpen(true);
-                          fursaComposerAnchorRef.current?.scrollIntoView({
-                            behavior: 'smooth',
-                            block: 'nearest',
-                          });
+                          window.setTimeout(() => {
+                            fursaComposerAnchorRef.current?.scrollIntoView({
+                              behavior: 'smooth',
+                              block: 'start',
+                            });
+                          }, 70);
                         } else {
                           onOpenComposer();
                         }
@@ -1076,13 +1143,17 @@ export const TopicList: React.FC<TopicListProps> = ({
                     : 'text-slate-700 hover:bg-slate-50'
                 }`}
               >
-                <span>{tr('Mada Zote', 'All Topics')}</span>
+                <span className="flex items-center gap-2">
+                  <NavSectionIcon section="all" className="h-4 w-4 shrink-0" />
+                  <span>{tr('Mada Zote', 'All Topics')}</span>
+                </span>
                 <span className="font-mono tabular-nums text-slate-500">
                   {categoryCounts.all}
                 </span>
               </button>
               {FORUM_BOARDS.map((board) => {
                 const active = effectiveCategory === board.id;
+                const unread = active ? 0 : getBoardUnread(board.id);
                 return (
                   <button
                     key={board.id}
@@ -1094,9 +1165,22 @@ export const TopicList: React.FC<TopicListProps> = ({
                         : 'text-slate-700 hover:bg-slate-50'
                     }`}
                   >
-                    <span className="truncate pr-2">{getBoardLabel(board.id)}</span>
-                    <span className="font-mono tabular-nums text-slate-500">
-                      {categoryCounts[board.id] ?? 0}
+                    <span className="flex min-w-0 items-center gap-2 pr-2">
+                      <NavSectionIcon
+                        section={getBoardIconSection(board.id)}
+                        className="h-4 w-4 shrink-0"
+                      />
+                      <span className="truncate">{getBoardLabel(board.id)}</span>
+                    </span>
+                    <span className="flex items-center gap-1.5 shrink-0">
+                      {unread > 0 && (
+                        <span className="flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-[#E11D48] px-1 text-[10px] font-bold leading-none text-white tabular-nums">
+                          {unread > 99 ? '99+' : unread}
+                        </span>
+                      )}
+                      <span className="font-mono tabular-nums text-slate-500">
+                        {categoryCounts[board.id] ?? 0}
+                      </span>
                     </span>
                   </button>
                 );
@@ -1113,7 +1197,10 @@ export const TopicList: React.FC<TopicListProps> = ({
                     : 'text-slate-700 hover:bg-slate-50'
                 }`}
               >
-                <span>{tr('Zilizovuma', 'Trending')}</span>
+                <span className="flex items-center gap-2">
+                  <NavSectionIcon section="trending" className="h-4 w-4 shrink-0" />
+                  <span>{tr('Zilizovuma', 'Trending')}</span>
+                </span>
                 <span className="font-mono tabular-nums text-slate-500">
                   {trendingPreview.length}
                 </span>

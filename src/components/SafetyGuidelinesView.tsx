@@ -37,7 +37,9 @@ import {
   setPhoneAlertsEnabled,
 } from '../services/notificationService';
 import {
+  PrimaryBoard,
   Report,
+  TopicCategory,
   VERIFICATION_BADGE_META,
   VerificationBadgeType,
   UserProfile,
@@ -45,6 +47,7 @@ import {
   formatMemberCode,
 } from '../types';
 import { Avatar, OnlineStatusPill } from './Avatar';
+import { BreakingNewsPosterStudio } from './BreakingNewsPosterStudio';
 import { ImageResizeModal } from './ImageResizeModal';
 import { MemberIdCard } from './MemberIdCard';
 import { MemberIdVerifier } from './MemberIdVerifier';
@@ -65,6 +68,14 @@ interface SafetyGuidelinesViewProps {
   myReports: Report[];
   onSaveProfile: (displayName: string, bio: string, phoneNumber?: string) => Promise<void>;
   onUpdateProfilePhoto?: (photoURL: string) => Promise<void>;
+  onPublishPosterTopic?: (data: {
+    title: string;
+    body: string;
+    category: TopicCategory;
+    tags: string[];
+    coverImage: string;
+  }) => Promise<string>;
+  onSelectBoard?: (board: PrimaryBoard) => void;
   onSignIn: () => void;
   onUpdateReportStatus: (reportId: string, status: 'reviewed' | 'dismissed') => Promise<void>;
   onOpenTopic: (topicId: string) => void;
@@ -92,6 +103,8 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
   myReports,
   onSaveProfile,
   onUpdateProfilePhoto,
+  onPublishPosterTopic,
+  onSelectBoard,
   onSignIn,
   onUpdateReportStatus,
   onOpenTopic,
@@ -1372,9 +1385,19 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
         )}
       </section>
 
-      {/* Owner Anti-Fake ID Checker & Controls Embedded Directly inside Profile */}
+      {/* Owner Breaking News Poster Studio, Anti-Fake ID Checker & Controls Embedded Inside Profile */}
       {userUid && isAdmin && (
         <>
+          {onPublishPosterTopic && (
+            <BreakingNewsPosterStudio
+              onPublishToPlatform={onPublishPosterTopic}
+              onOpenPublishedTopic={onOpenTopic}
+              onNavigateBoard={(board) => {
+                if (onSelectBoard) onSelectBoard(board);
+              }}
+              onToast={onToast}
+            />
+          )}
           <MemberIdVerifier />
           <ModerationView
             embedded

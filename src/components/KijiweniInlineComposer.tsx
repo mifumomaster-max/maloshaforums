@@ -57,42 +57,11 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
   useEffect(() => {
     if (expanded && userUid) {
       const timer = window.setTimeout(() => {
-        titleInputRef.current?.focus();
-      }, 40);
+        titleInputRef.current?.focus({ preventScroll: true });
+      }, 110);
       return () => window.clearTimeout(timer);
     }
   }, [expanded, userUid]);
-
-  const handleExpand = (triggerImagePicker = false) => {
-    if (!userUid) {
-      onToast(
-        tr(
-          'Tengeneza akaunti au ingia (kwa Google au Jisajili kawaida) ili kuchapisha Kijiweni.',
-          'Create an account or sign in to post in Kijiweni.'
-        ),
-        'error'
-      );
-      onSignIn('post');
-      return;
-    }
-    if (isSuspended) {
-      onToast(
-        tr(
-          'Akaunti yako imefungwa na msimamizi — huwezi kuchapisha.',
-          'Your account is suspended — you cannot post.'
-        ),
-        'error'
-      );
-      return;
-    }
-    setError('');
-    onExpandedChange(true);
-    if (triggerImagePicker) {
-      window.setTimeout(() => {
-        fileInputRef.current?.click();
-      }, 60);
-    }
-  };
 
   const handleResetAndCollapse = () => {
     setTitle('');
@@ -218,46 +187,7 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
   };
 
   if (!expanded) {
-    return (
-      <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 sm:rounded-lg sm:px-5">
-        <div className="flex items-center gap-3">
-          <Avatar
-            name={userUid ? userDisplayName : 'M'}
-            photoURL={userUid ? userPhoto : ''}
-            size="md"
-          />
-          <button
-            type="button"
-            onClick={() => handleExpand(false)}
-            className="min-h-[44px] flex-1 rounded-full bg-[#F0F2F5] px-4 py-2 text-left text-sm text-slate-600 transition-colors hover:bg-slate-200/80"
-          >
-            {isSuspended
-              ? tr(
-                  'Akaunti yako imefungwa — huwezi kuchapisha Kijiweni.',
-                  'Your account is suspended — posting is disabled.'
-                )
-              : userUid
-                ? tr(
-                    `Unawaza nini leo, ${userDisplayName.split(' ')[0]}? Andika hapa...`,
-                    `What's on your mind, ${userDisplayName.split(' ')[0]}? Write here...`
-                  )
-                : tr(
-                    'Tengeneza akaunti (Google / Jisajili) ili uandike unachowaza Kijiweni...',
-                    'Create an account (Google / Register) to share your thoughts on Kijiweni...'
-                  )}
-          </button>
-          <button
-            type="button"
-            onClick={() => handleExpand(true)}
-            aria-label={tr('Ambatanisha picha Kijiweni', 'Attach image to Kijiweni')}
-            className="inline-flex min-h-[42px] items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 whitespace-nowrap shrink-0"
-          >
-            <ImagePlus className="h-4 w-4 text-emerald-700" aria-hidden="true" />
-            <span className="hidden sm:inline">{tr('Picha', 'Photo')}</span>
-          </button>
-        </div>
-      </div>
-    );
+    return null;
   }
 
   return (

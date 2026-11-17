@@ -29,11 +29,13 @@ import {
   ReportReason,
   TopicCategory,
   TopicStatus,
+  UserNotificationType,
   UserProfile,
   VerificationBadgeType,
   computeMemberControlSerial,
   formatMemberCode,
   normalizeAccountStatus,
+  normalizeBoardCategory,
   normalizeVerificationBadge,
 } from '../types';
 import { sanitizeTextInput } from '../utils/formatters';
@@ -487,12 +489,22 @@ export async function deleteTopic(topicId: string): Promise<void> {
   }
 }
 
+export interface ReplyNotificationContext {
+  topicTitle: string;
+  topicCategory: string;
+  topicAuthorId: string;
+  targetReplyAuthorId?: string;
+  rootReplyAuthorId?: string;
+  replyActorPhoto?: string;
+}
+
 export async function createReply(
   user: User,
   displayName: string,
   topicId: string,
   bodyRaw: string,
-  parentReplyId = ''
+  parentReplyId = '',
+  notifyContext?: ReplyNotificationContext
 ): Promise<string> {
   const body = sanitizeTextInput(bodyRaw, 4000);
   if (body.length < 2) {
@@ -503,16 +515,20 @@ export async function createReply(
   const topicRef = doc(db, 'topics', topicId);
   const userRef = doc(db, 'users', user.uid);
   const path = `topics/${topicId}/replies/${replyRef.id}`;
+  const safeAuthorName =
+    sanitizeTextInput(displayName || user.displayName || 'Mwanachama', 80) || 'Mwanachama';
+  const safeActorPhoto = sanitizeTextInput(notifyContext?.replyActorPhoto || user.photoURL || '', 500);
+  const cleanParentReplyId = sanitizeTextInput(parentReplyId, 128);
 
   try {
     const batch = writeBatch(db);
     batch.set(replyRef, {
       topicId,
       authorId: user.uid,
-      authorName: sanitizeTextInput(displayName || user.displayName || 'Mwanachama', 80),
-      authorPhoto: sanitizeTextInput(user.photoURL || '', 500),
+      authorName: safeAuthorName,
+      authorPhoto: safeActorPhoto,
       body,
-      parentReplyId: sanitizeTextInput(parentReplyId, 128),
+      parentReplyId: cleanParentReplyId,
       isAcceptedAnswer: false,
       upvotesCount: 0,
       isDeleted: false,
@@ -531,10 +547,82 @@ export async function createReply(
       updatedAt: serverTimestamp(),
     });
 
+    if (notifyContext) {
+      const recipients = new Map<string, UserNotificationType>();
+      const validId = (id?: string): id is string =>
+        Boolean(id && /^[a-zA-Z0-9_\-]{1,128}$/.test(id) && id !== user.uid);
+
+      if (validId(notifyContext.targetReplyAuthorId)) {
+        recipients.set(notifyContext.targetReplyAuthorId, 'comment_reply');
+      }
+      if (validId(notifyContext.rootReplyAuthorId) && !recipients.has(notifyContext.rootReplyAuthorId)) {
+        recipients.set(notifyContext.rootReplyAuthorId, 'comment_reply');
+      }
+      if (validId(notifyContext.topicAuthorId) && !recipients.has(notifyContext.topicAuthorId)) {
+        recipients.set(notifyContext.topicAuthorId, 'post_comment');
+      }
+
+      const safeTitle = sanitizeTextInput(notifyContext.topicTitle || '', 140);
+      const safeBoard = normalizeBoardCategory(notifyContext.topicCategory);
+      const safePreview = sanitizeTextInput(body, 200) || 'Maoni mapya';
+
+      recipients.forEach((notifType, recipientId) => {
+        const notifRef = doc(collection(db, 'users', recipientId, 'notifications'));
+        batch.set(notifRef, {
+          recipientId,
+          actorId: user.uid,
+          actorName: safeAuthorName,
+          actorPhoto: safeActorPhoto,
+          type: notifType,
+          topicId,
+          topicTitle: safeTitle,
+          topicCategory: safeBoard,
+          replyId: replyRef.id,
+          parentReplyId: cleanParentReplyId,
+          replyPreview: safePreview,
+          isRead: false,
+          createdAt: serverTimestamp(),
+        });
+      });
+    }
+
     await batch.commit();
     return replyRef.id;
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function markUserNotificationRead(
+  uid: string,
+  notificationId: string
+): Promise<void> {
+  if (!uid || !notificationId) return;
+  try {
+    await updateDoc(doc(db, 'users', uid, 'notifications', notificationId), {
+      isRead: true,
+    });
+  } catch {
+    // Non-fatal if already deleted or offline
+  }
+}
+
+export async function markAllUserNotificationsRead(
+  uid: string,
+  notificationIds: string[]
+): Promise<void> {
+  if (!uid || notificationIds.length === 0) return;
+  try {
+    for (let i = 0; i < notificationIds.length; i += 450) {
+      const chunk = notificationIds.slice(i, i + 450);
+      const batch = writeBatch(db);
+      chunk.forEach((nid) => {
+        batch.update(doc(db, 'users', uid, 'notifications', nid), { isRead: true });
+      });
+      await batch.commit();
+    }
+  } catch {
+    // Non-fatal
   }
 }
 

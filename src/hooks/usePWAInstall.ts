@@ -11,8 +11,6 @@ declare global {
   }
 }
 
-const DISMISS_STORAGE_KEY = 'malosha_pwa_install_dismissed_at_v1';
-const DISMISS_COOLDOWN_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
 
 function checkStandalone(): boolean {
   if (typeof window === 'undefined') return false;
@@ -38,19 +36,6 @@ function checkIsMobile(): boolean {
   return /android|iphone|ipad|ipod|mobile/i.test(window.navigator.userAgent);
 }
 
-function wasRecentlyDismissed(): boolean {
-  if (typeof window === 'undefined') return false;
-  try {
-    const raw = window.localStorage.getItem(DISMISS_STORAGE_KEY);
-    if (!raw) return false;
-    const timestamp = Number(raw);
-    if (!Number.isFinite(timestamp)) return false;
-    return Date.now() - timestamp < DISMISS_COOLDOWN_MS;
-  } catch {
-    return false;
-  }
-}
-
 export function usePWAInstall() {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(() => {
     if (typeof window === 'undefined') return null;
@@ -59,7 +44,6 @@ export function usePWAInstall() {
   const [isInstalled, setIsInstalled] = useState<boolean>(() => checkStandalone());
   const [isIOS] = useState<boolean>(() => checkIsIOS());
   const [isMobile] = useState<boolean>(() => checkIsMobile());
-  const [isDismissed, setIsDismissed] = useState<boolean>(() => wasRecentlyDismissed());
   const [installing, setInstalling] = useState(false);
 
   useEffect(() => {
@@ -90,6 +74,9 @@ export function usePWAInstall() {
         setIsInstalled(true);
       }
     };
+
+    // Immediately sync in case beforeinstallprompt fired during hydration
+    syncFromWindow();
 
     window.addEventListener('malosha-pwa-prompt-ready', syncFromWindow);
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
@@ -126,20 +113,19 @@ export function usePWAInstall() {
   }, [deferredPrompt]);
 
   const dismissPrompt = useCallback(() => {
-    setIsDismissed(true);
-    try {
-      window.localStorage.setItem(DISMISS_STORAGE_KEY, String(Date.now()));
-    } catch {
-      // Ignore storage failure
-    }
+    // No permanent dismissal: banner component handles brief snooze and reminds again until installed
   }, []);
 
+  const hasPromptReady = Boolean(
+    deferredPrompt || (typeof window !== 'undefined' && window.__deferredPWAPrompt)
+  );
+
   return {
-    isInstallable: Boolean(deferredPrompt),
+    isInstallable: hasPromptReady,
     isInstalled,
     isIOS,
     isMobile,
-    isDismissed,
+    isDismissed: false,
     installing,
     install,
     dismissPrompt,

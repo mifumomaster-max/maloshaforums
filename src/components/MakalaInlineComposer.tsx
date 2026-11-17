@@ -1,11 +1,27 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ImagePlus, Loader2, Newspaper, Send, X } from 'lucide-react';
+import {
+  Bold,
+  Eye,
+  Heading2,
+  Heading3,
+  ImagePlus,
+  List,
+  ListOrdered,
+  Loader2,
+  Newspaper,
+  Quote,
+  Send,
+  Sparkles,
+  X,
+} from 'lucide-react';
 import { uploadImageToCloudinary } from '../services/cloudinaryService';
 import { AuthPromptReason, MAKALA_COVERS, MAKALA_SECTIONS } from '../types';
+import { autoFormatScholarlyText } from '../utils/editorialFormatter';
 import { parseTagsInput } from '../utils/formatters';
 import { useLanguage } from '../context/LanguageContext';
 import { Avatar } from './Avatar';
 import { ImageResizeModal } from './ImageResizeModal';
+import { MakalaArticleRenderer } from './MakalaArticleRenderer';
 import { AuthorVerificationBadge } from './VerificationBadge';
 
 interface MakalaInlineComposerProps {
@@ -48,10 +64,12 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
   const [uploadingImage, setUploadingImage] = useState(false);
   const [showPresets, setShowPresets] = useState(false);
   const [previewFailed, setPreviewFailed] = useState(false);
+  const [bodyPreviewMode, setBodyPreviewMode] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const bodyTextareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -66,42 +84,11 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
   useEffect(() => {
     if (expanded && userUid) {
       const timer = window.setTimeout(() => {
-        titleInputRef.current?.focus();
-      }, 40);
+        titleInputRef.current?.focus({ preventScroll: true });
+      }, 110);
       return () => window.clearTimeout(timer);
     }
   }, [expanded, userUid]);
-
-  const handleExpand = (triggerImagePicker = false) => {
-    if (!userUid) {
-      onToast(
-        tr(
-          'Tengeneza akaunti au ingia (kwa Google au Jisajili kawaida) ili kuandika makala.',
-          'Create an account or sign in to write an article.'
-        ),
-        'error'
-      );
-      onSignIn('post');
-      return;
-    }
-    if (isSuspended) {
-      onToast(
-        tr(
-          'Akaunti yako imefungwa na msimamizi — huwezi kuandika makala.',
-          'Your account is suspended — writing articles is disabled.'
-        ),
-        'error'
-      );
-      return;
-    }
-    setError('');
-    onExpandedChange(true);
-    if (triggerImagePicker) {
-      window.setTimeout(() => {
-        fileInputRef.current?.click();
-      }, 60);
-    }
-  };
 
   const handleResetAndCollapse = () => {
     setTitle('');
@@ -112,8 +99,46 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
     setPendingImageFile(null);
     setShowPresets(false);
     setPreviewFailed(false);
+    setBodyPreviewMode(false);
     setError('');
     onExpandedChange(false);
+  };
+
+  const insertBodySyntax = (prefix: string, suffix = '', fallbackSample = '') => {
+    const el = bodyTextareaRef.current;
+    if (!el) {
+      setBody((prev) => `${prev}${prev && !prev.endsWith('\n') ? '\n' : ''}${prefix}${fallbackSample}${suffix}`);
+      return;
+    }
+    const start = el.selectionStart ?? body.length;
+    const end = el.selectionEnd ?? body.length;
+    const selected = body.slice(start, end) || fallbackSample;
+    const needsLeadingNewline =
+      prefix.startsWith('#') || prefix.startsWith('- ') || prefix.startsWith('1. ') || prefix.startsWith('> ')
+        ? start > 0 && body[start - 1] !== '\n'
+          ? '\n'
+          : ''
+        : '';
+    const insertion = `${needsLeadingNewline}${prefix}${selected}${suffix}`;
+    const nextValue = body.slice(0, start) + insertion + body.slice(end);
+    setBody(nextValue);
+    setBodyPreviewMode(false);
+    window.requestAnimationFrame(() => {
+      el.focus();
+      const cursor = start + insertion.length;
+      el.setSelectionRange(cursor, cursor);
+    });
+  };
+
+  const handleAutoFormatBody = () => {
+    if (!body.trim()) return;
+    setBody((prev) => autoFormatScholarlyText(prev));
+    onToast(
+      tr(
+        'Makala imepangwa kisomi (vichwa, orodha na aya)!',
+        'Article formatted cleanly with headings, bullets, and paragraphs!'
+      )
+    );
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -214,48 +239,7 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
   };
 
   if (!expanded) {
-    return (
-      <div className="border border-slate-200 bg-white px-4 py-3">
-        <div className="flex items-center gap-3">
-          <Avatar
-            name={userUid ? userDisplayName : 'M'}
-            photoURL={userUid ? userPhoto : ''}
-            size="md"
-          />
-          <button
-            type="button"
-            onClick={() => handleExpand(false)}
-            className="min-h-[44px] flex-1 border border-slate-200 bg-[#F6F6F6] px-4 py-2 text-left text-sm text-slate-700 transition-colors hover:bg-slate-200/70"
-          >
-            {isSuspended
-              ? tr(
-                  'Akaunti yako imefungwa — huwezi kuandika makala.',
-                  'Your account is suspended — writing articles is disabled.'
-                )
-              : userUid
-                ? tr(
-                    'Una habari, ripoti au uchambuzi mpya? Andika makala hapa...',
-                    'Have a news report or in-depth analysis? Write an article here...'
-                  )
-                : tr(
-                    'Tengeneza akaunti (Google / Jisajili) ili uandike makala mpya...',
-                    'Create an account (Google / Register) to write a new article...'
-                  )}
-          </button>
-          <button
-            type="button"
-            onClick={() => handleExpand(true)}
-            aria-label={tr('Ambatanisha picha ya makala', 'Attach article cover image')}
-            className="inline-flex min-h-[44px] items-center gap-1.5 border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-800 transition-colors hover:border-[#B80000] hover:text-[#B80000] whitespace-nowrap shrink-0"
-          >
-            <ImagePlus className="h-4 w-4 text-[#B80000]" aria-hidden="true" />
-            <span className="hidden sm:inline">
-              {tr('Ambatanisha Picha', 'Attach Image')}
-            </span>
-          </button>
-        </div>
-      </div>
-    );
+    return null;
   }
 
   return (
@@ -455,29 +439,117 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
         </div>
 
         <div>
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <label htmlFor="inline-makala-body" className="block text-xs font-bold text-slate-800">
               {tr('Matini Kamili ya Makala / Habari', 'Full Article / Report Body')}
             </label>
-            <span className="text-[11px] text-slate-500">
-              {tr(
-                '**nzito** · *italiki* · > nukuu · viungo (https://...)',
-                '**bold** · *italic* · > quote · links (https://...)'
-              )}
-            </span>
+            <div className="inline-flex border border-slate-300 bg-white p-0.5 text-[11px] font-bold">
+              <button
+                type="button"
+                onClick={() => setBodyPreviewMode(false)}
+                className={`px-2.5 py-1 transition-colors ${
+                  !bodyPreviewMode ? 'bg-[#141414] text-white' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {tr('Andika', 'Write')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setBodyPreviewMode(true)}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 transition-colors ${
+                  bodyPreviewMode ? 'bg-[#B80000] text-white' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Eye className="h-3 w-3" aria-hidden="true" />
+                <span>{tr('Hakiki (BBC)', 'Preview')}</span>
+              </button>
+            </div>
           </div>
-          <textarea
-            id="inline-makala-body"
-            rows={7}
-            maxLength={8000}
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            placeholder={tr(
-              'Anza na aya ya muhtasari (lead), kisha uendelee na maelezo yenye takwimu, nukuu, na vyanzo...',
-              'Start with a strong lead paragraph, followed by facts, quotes, and analysis...'
-            )}
-            className="mt-1.5 w-full resize-y border border-slate-300 bg-[#F9FAFB] p-3.5 text-sm leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-[#B80000] focus:bg-white focus:outline-none"
-          />
+
+          {/* Scholarly BBC Formatting Toolbar */}
+          <div className="mt-1.5 flex flex-wrap items-center gap-1 border border-b-0 border-slate-300 bg-[#F6F6F6] px-2 py-1.5">
+            <button
+              type="button"
+              onClick={() => insertBodySyntax('## ', '', tr('Kichwa cha Sehemu', 'Section Title'))}
+              className="inline-flex min-h-[30px] items-center gap-1 border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000] hover:text-[#B80000]"
+            >
+              <Heading2 className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>{tr('Kichwa', 'Heading')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => insertBodySyntax('### ', '', tr('Kichwa Kidogo', 'Subtitle'))}
+              className="inline-flex min-h-[30px] items-center gap-1 border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000] hover:text-[#B80000]"
+            >
+              <Heading3 className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>{tr('Kichwa Kidogo', 'Subtitle')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => insertBodySyntax('- ', '', tr('Hoja muhimu hapa', 'Bullet point'))}
+              className="inline-flex min-h-[30px] items-center gap-1 border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000] hover:text-[#B80000]"
+            >
+              <List className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>{tr('Orodha', 'Bullets')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => insertBodySyntax('1. ', '', tr('Hatua ya kwanza', 'First point'))}
+              className="inline-flex min-h-[30px] items-center gap-1 border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000] hover:text-[#B80000]"
+            >
+              <ListOrdered className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>{tr('Namba', 'Numbered')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => insertBodySyntax('> ', '', tr('Nukuu ya msemaji...', 'Quote text...'))}
+              className="inline-flex min-h-[30px] items-center gap-1 border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000] hover:text-[#B80000]"
+            >
+              <Quote className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>{tr('Nukuu', 'Quote')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => insertBodySyntax('**', '**', tr('maneno mazito', 'bold text'))}
+              className="inline-flex min-h-[30px] items-center gap-1 border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000] hover:text-[#B80000]"
+            >
+              <Bold className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>{tr('Nzito', 'Bold')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleAutoFormatBody}
+              className="ml-auto inline-flex min-h-[30px] items-center gap-1 bg-[#0E2640] px-2.5 py-1 text-[11px] font-bold text-white hover:bg-[#163A5F]"
+            >
+              <Sparkles className="h-3.5 w-3.5 text-amber-300" aria-hidden="true" />
+              <span>{tr('Panga Kisomi', 'Auto-Format')}</span>
+            </button>
+          </div>
+
+          {bodyPreviewMode ? (
+            <div className="min-h-[190px] border border-slate-300 bg-white p-4 sm:p-6">
+              {title.trim() && (
+                <h2 className="mb-4 border-b border-slate-200 pb-3 font-display text-2xl font-bold text-slate-950">
+                  {title.trim()}
+                </h2>
+              )}
+              <MakalaArticleRenderer body={body} previewMode />
+            </div>
+          ) : (
+            <textarea
+              id="inline-makala-body"
+              ref={bodyTextareaRef}
+              rows={8}
+              maxLength={8000}
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              placeholder={tr(
+                'Anza na aya ya muhtasari (lead), kisha tumia ## Vichwa, ### Vichwa Vidogo, - Orodha, na > Nukuu — au paste kisha bonyeza "Panga Kisomi"...',
+                'Start with a strong lead paragraph, then use ## Headings, ### Subtitles, - Bullets, and > Quotes — or paste and click "Auto-Format"...'
+              )}
+              className="w-full resize-y border border-slate-300 bg-[#F9FAFB] p-3.5 text-sm leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-[#B80000] focus:bg-white focus:outline-none"
+            />
+          )}
           <div className="mt-1 flex justify-end font-mono text-[11px] text-slate-500 tabular-nums">
             {body.length}/8000
           </div>

@@ -32,6 +32,7 @@ import { optimizeCloudinaryUrl } from '../services/cloudinaryService';
 import { estimateReadMinutes } from '../utils/formatters';
 import { useLanguage } from '../context/LanguageContext';
 import { Avatar, OnlineStatusPill } from './Avatar';
+import { MakalaArticleRenderer } from './MakalaArticleRenderer';
 import { LinkedText, RichText, extractFirstUrl } from './RichText';
 import { FacebookCommentsThread } from './FacebookCommentsThread';
 import { AuthorVerificationBadge } from './VerificationBadge';
@@ -175,11 +176,21 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
       {/* Main Content Presentation */}
       {isMakala ? (
         /* ── MAKALA: BBC News Swahili Reader & Latest News Sidebar ─────────────── */
-        <div className="space-y-6">
-          {/* BBC Crimson Top Strip */}
-          <div className="flex flex-wrap items-center justify-between gap-3 bg-[#B80000] px-4 py-3 text-white sm:px-6">
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-1" aria-hidden="true">
+        <div className="space-y-4 sm:space-y-6">
+          {/* BBC Crimson Top Strip — single sleek row on mobile, full 7-block masthead on sm+ */}
+          <div className="-mx-3.5 flex items-center justify-between gap-2 bg-[#B80000] px-3.5 py-2.5 text-white sm:mx-0 sm:px-6 sm:py-3">
+            <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+              <div className="flex shrink-0 items-center gap-0.5 sm:hidden" aria-hidden="true">
+                {['M', 'L', 'S'].map((letter, idx) => (
+                  <span
+                    key={idx}
+                    className="inline-flex h-5 w-4 items-center justify-center bg-white font-sans text-[11px] font-black text-[#B80000]"
+                  >
+                    {letter}
+                  </span>
+                ))}
+              </div>
+              <div className="hidden shrink-0 items-center gap-1 sm:flex" aria-hidden="true">
                 {['M', 'A', 'L', 'O', 'S', 'H', 'A'].map((letter, idx) => (
                   <span
                     key={idx}
@@ -189,7 +200,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                   </span>
                 ))}
               </div>
-              <span className="border-l border-white/30 pl-3 text-xs font-black tracking-wide uppercase">
+              <span className="min-w-0 truncate border-l border-white/30 pl-2 text-[11px] font-black tracking-wide uppercase sm:pl-3 sm:text-xs">
                 {tr('Makala', 'Articles')} · {getMakalaSectionLabel(makalaSection)}
               </span>
             </div>
@@ -197,28 +208,29 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
             <button
               type="button"
               onClick={() => onSelectBoard('Makala')}
-              className="text-xs font-bold text-white/95 underline-offset-4 hover:underline whitespace-nowrap shrink-0"
+              className="shrink-0 text-[11px] font-bold text-white/95 underline-offset-4 hover:underline whitespace-nowrap sm:text-xs"
             >
-              {tr('Makala Zote Mpya →', 'All Latest Articles →')}
+              <span className="sm:hidden">{tr('Habari Zote →', 'All News →')}</span>
+              <span className="hidden sm:inline">{tr('Makala Zote Mpya →', 'All Latest Articles →')}</span>
             </button>
           </div>
 
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 lg:items-start">
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-12 lg:items-start lg:gap-6">
             {/* Main Essay Column (8 cols) */}
-            <div className="space-y-5 lg:col-span-8">
+            <div className="min-w-0 space-y-5 lg:col-span-8">
               <article className="-mx-3.5 overflow-hidden border-y border-slate-200 bg-white sm:mx-0 sm:border">
-                <div className="px-4 py-5 sm:px-8 sm:py-8">
-                  <div className="mb-2 flex items-center gap-2 text-xs font-bold text-[#B80000] uppercase">
+                <div className="min-w-0 px-4 py-4 sm:px-8 sm:py-8">
+                  <div className="mb-1.5 flex items-center gap-2 text-[11px] font-black tracking-wide text-[#B80000] uppercase sm:mb-2 sm:text-xs">
                     <span>{getMakalaSectionLabel(makalaSection)}</span>
                   </div>
 
-                  <h1 className="font-display text-2xl font-bold leading-tight text-slate-950 sm:text-4xl [text-wrap:balance]">
+                  <h1 className="break-words font-display text-[22px] font-bold leading-[1.24] text-slate-950 sm:text-4xl sm:leading-tight [text-wrap:balance]">
                     {topic.title}
                   </h1>
 
-                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-y border-slate-200 py-3 text-xs text-slate-600">
-                    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-                      <span className="inline-flex items-center gap-1.5 font-bold text-slate-900">
+                  <div className="mt-3.5 flex flex-wrap items-center justify-between gap-2.5 border-y border-slate-200 py-2.5 text-xs text-slate-600 sm:mt-4 sm:gap-3 sm:py-3">
+                    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="inline-flex min-w-0 items-center gap-1.5 font-bold text-slate-900">
                         <Avatar
                           name={topic.authorName}
                           photoURL={topic.authorPhoto}
@@ -226,7 +238,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                           showOnlineIndicator
                           size="sm"
                         />
-                        <span>
+                        <span className="truncate">
                           {tr('Na', 'By')} {topic.authorName}
                         </span>
                         <AuthorVerificationBadge uid={topic.authorId} size="xs" />
@@ -235,7 +247,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                       <span aria-hidden="true">·</span>
                       <span>{formatTime(topic.createdAt)}</span>
                       <span aria-hidden="true">·</span>
-                      <span className="inline-flex items-center gap-1">
+                      <span className="inline-flex items-center gap-1 whitespace-nowrap">
                         <Clock className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
                         <span>
                           {tr(
@@ -246,11 +258,11 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                       </span>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                       <button
                         type="button"
                         onClick={() => onShareTopic(topic)}
-                        className="inline-flex min-h-[34px] items-center gap-1 border border-slate-200 bg-white px-2.5 py-1 font-semibold text-slate-700 hover:bg-slate-50"
+                        className="inline-flex min-h-[32px] items-center gap-1 border border-slate-200 bg-white px-2.5 py-1 font-semibold text-slate-700 hover:bg-slate-50 sm:min-h-[34px]"
                       >
                         <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
                         <span>{tr('Shiriki', 'Share')}</span>
@@ -259,7 +271,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                         <button
                           type="button"
                           onClick={() => onEditTopic(topic)}
-                          className="inline-flex min-h-[34px] items-center gap-1 border border-slate-200 px-2.5 py-1 font-medium text-slate-700 hover:bg-slate-50"
+                          className="inline-flex min-h-[32px] items-center gap-1 border border-slate-200 px-2.5 py-1 font-medium text-slate-700 hover:bg-slate-50 sm:min-h-[34px]"
                         >
                           <Edit3 className="h-3 w-3" aria-hidden="true" />
                           <span>{tr('Hariri', 'Edit')}</span>
@@ -269,7 +281,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                         <button
                           type="button"
                           onClick={() => onToggleArchive(topic)}
-                          className="inline-flex min-h-[34px] items-center gap-1 border border-amber-300 bg-amber-50 px-2.5 py-1 font-semibold text-amber-900 hover:bg-amber-100"
+                          className="inline-flex min-h-[32px] items-center gap-1 border border-amber-300 bg-amber-50 px-2.5 py-1 font-semibold text-amber-900 hover:bg-amber-100 sm:min-h-[34px]"
                         >
                           {topic.status === 'archived' ? (
                             <>
@@ -288,7 +300,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                         <button
                           type="button"
                           onClick={() => onDeleteTopic(topic)}
-                          className="inline-flex min-h-[34px] items-center gap-1 border border-red-200 px-2.5 py-1 font-medium text-red-700 hover:bg-red-50"
+                          className="inline-flex min-h-[32px] items-center gap-1 border border-red-200 px-2.5 py-1 font-medium text-red-700 hover:bg-red-50 sm:min-h-[34px]"
                         >
                           <Trash2 className="h-3 w-3" aria-hidden="true" />
                           <span>{tr('Futa', 'Delete')}</span>
@@ -298,7 +310,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                   </div>
 
                   {topic.coverImage && !coverFailed && (
-                    <figure className="-mx-4 my-5 overflow-hidden border-y border-slate-200 bg-slate-100 sm:mx-0 sm:my-6 sm:border">
+                    <figure className="-mx-4 my-4 overflow-hidden border-y border-slate-200 bg-slate-100 sm:mx-0 sm:my-6 sm:border">
                       <img
                         src={optimizeCloudinaryUrl(resolveMakalaCover(topic.coverImage), 1080)}
                         alt={topic.title}
@@ -308,21 +320,18 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                         onError={() => setCoverFailed(true)}
                         className="block h-auto w-full"
                       />
-                      <figcaption className="border-t border-slate-200 bg-[#F6F6F6] px-4 py-2 text-xs text-slate-600">
+                      <figcaption className="break-words border-t border-slate-200 bg-[#F6F6F6] px-4 py-2 text-[11px] leading-snug text-slate-600 sm:text-xs">
                         {tr('Picha', 'Photo')}: Malosha Forums · {topic.title}
                       </figcaption>
                     </figure>
                   )}
 
-                  <div className="mx-auto max-w-prose py-2">
-                    <RichText
-                      content={topic.body}
-                      className="[&>p:first-of-type]:first-letter:float-left [&>p:first-of-type]:first-letter:mr-3 [&>p:first-of-type]:first-letter:mt-1 [&>p:first-of-type]:first-letter:font-display [&>p:first-of-type]:first-letter:text-5xl [&>p:first-of-type]:first-letter:font-bold [&>p:first-of-type]:first-letter:text-[#B80000]"
-                    />
+                  <div className="min-w-0 py-1 sm:py-2">
+                    <MakalaArticleRenderer body={topic.body} />
                   </div>
 
                   {topic.tags.length > 0 && (
-                    <div className="mt-6 border-t border-slate-100 pt-3 text-xs text-slate-500">
+                    <div className="mt-5 break-words border-t border-slate-100 pt-3 text-xs text-slate-500 sm:mt-6">
                       {tr('Mada husika:', 'Tags:')} {topic.tags.map((t) => `#${t}`).join(' ')}
                     </div>
                   )}
@@ -375,7 +384,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
               <section
                 id="comments-thread"
                 aria-label={tr('Maoni na majibu', 'Comments and replies')}
-                className="border border-slate-200 bg-white p-4 sm:p-6"
+                className="-mx-3.5 border-y border-slate-200 bg-white p-4 sm:mx-0 sm:border sm:p-6"
               >
                 <h2 className="mb-3 font-sans text-sm font-black tracking-wide text-slate-900 uppercase">
                   {tr('Maoni ya Wasomaji', 'Reader Comments')} ({topic.repliesCount})

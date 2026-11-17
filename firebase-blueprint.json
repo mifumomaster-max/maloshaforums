@@ -268,6 +268,31 @@
         "uid", "displayName", "isOnline", "isTypingInMchart",
         "replyingToName", "activeArea", "lastSeenAt", "typingUpdatedAt", "updatedAt"
       ]
+    },
+    "UserNotification": {
+      "title": "UserNotification",
+      "description": "Facebook-style real-time reply and comment notification stored privately per recipient user.",
+      "type": "object",
+      "properties": {
+        "recipientId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "actorPhoto": { "type": "string", "maxLength": 500 },
+        "type": { "type": "string", "enum": ["comment_reply", "post_comment"] },
+        "topicId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "topicTitle": { "type": "string", "maxLength": 140 },
+        "topicCategory": { "type": "string", "enum": ["Kijiweni", "Fursa", "Makala"] },
+        "replyId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "parentReplyId": { "type": "string", "maxLength": 128 },
+        "replyPreview": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "isRead": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "recipientId", "actorId", "actorName", "actorPhoto",
+        "type", "topicId", "topicTitle", "topicCategory",
+        "replyId", "parentReplyId", "replyPreview", "isRead", "createdAt"
+      ]
     }
   },
   "firestore": {
@@ -278,6 +303,10 @@
     "/users/{userId}/private/{docId}": {
       "schema": { "$ref": "#/entities/UserPrivateInfo" },
       "description": "Private PII document (docId='info') isolated to owner and admin."
+    },
+    "/users/{userId}/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/UserNotification" },
+      "description": "Private Facebook-style reply and comment notifications for a recipient user."
     },
     "/topics/{topicId}": {
       "schema": { "$ref": "#/entities/Topic" },

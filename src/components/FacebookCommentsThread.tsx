@@ -99,6 +99,10 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
 
   // Inline nested reply state (keyed by root parent comment id)
   const [activeReplyThreadId, setActiveReplyThreadId] = useState<string | null>(null);
+  const [activeReplyTarget, setActiveReplyTarget] = useState<{
+    targetAuthorId: string;
+    rootAuthorId: string;
+  } | null>(null);
   const [replyMentionPrefix, setReplyMentionPrefix] = useState('');
   const [nestedReplyText, setNestedReplyText] = useState('');
   const [submittingNested, setSubmittingNested] = useState(false);
@@ -316,7 +320,12 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
         onSignIn('comment');
         return;
       }
-      await createReply(auth.currentUser, userDisplayName, topic.id, clean, '');
+      await createReply(auth.currentUser, userDisplayName, topic.id, clean, '', {
+        topicTitle: topic.title,
+        topicCategory: topic.category,
+        topicAuthorId: topic.authorId,
+        replyActorPhoto: userPhoto,
+      });
       setNewComment('');
       setLastSubmitAt(Date.now());
       onToast(tr('Maoni yako yamechapishwa.', 'Your comment has been posted.'));
@@ -376,7 +385,15 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
         userDisplayName,
         topic.id,
         combined,
-        activeReplyThreadId
+        activeReplyThreadId,
+        {
+          topicTitle: topic.title,
+          topicCategory: topic.category,
+          topicAuthorId: topic.authorId,
+          targetReplyAuthorId: activeReplyTarget?.targetAuthorId,
+          rootReplyAuthorId: activeReplyTarget?.rootAuthorId,
+          replyActorPhoto: userPhoto,
+        }
       );
       setExpandedThreadIds((prev) => {
         const next = new Set(prev);
@@ -386,6 +403,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
       setNestedReplyText('');
       setReplyMentionPrefix('');
       setActiveReplyThreadId(null);
+      setActiveReplyTarget(null);
       setLastSubmitAt(Date.now());
       onToast(tr('Jibu lako limechapishwa.', 'Your reply has been posted.'));
     } catch (err) {
@@ -418,7 +436,12 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
       return;
     }
     if (topic.status !== 'open') return;
+    const rootComment = replies.find((r) => r.id === rootId);
     setActiveReplyThreadId(rootId);
+    setActiveReplyTarget({
+      targetAuthorId: targetReply.authorId,
+      rootAuthorId: rootComment?.authorId || targetReply.authorId,
+    });
     setReplyMentionPrefix(isChild ? `@${targetReply.authorName}` : '');
     setNestedReplyText('');
     setExpandedThreadIds((prev) => {

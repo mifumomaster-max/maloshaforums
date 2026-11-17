@@ -326,6 +326,32 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidUserNotification(data, userId) {
+      return data.keys().hasAll([
+          'recipientId', 'actorId', 'actorName', 'actorPhoto',
+          'type', 'topicId', 'topicTitle', 'topicCategory',
+          'replyId', 'parentReplyId', 'replyPreview', 'isRead', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'recipientId', 'actorId', 'actorName', 'actorPhoto',
+          'type', 'topicId', 'topicTitle', 'topicCategory',
+          'replyId', 'parentReplyId', 'replyPreview', 'isRead', 'createdAt'
+        ])
+        && data.recipientId is string && data.recipientId == userId && isValidId(data.recipientId)
+        && data.actorId is string && isValidId(data.actorId)
+        && data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 80
+        && data.actorPhoto is string && data.actorPhoto.size() <= 500
+        && data.type in ['comment_reply', 'post_comment']
+        && data.topicId is string && isValidId(data.topicId)
+        && data.topicTitle is string && data.topicTitle.size() <= 140
+        && data.topicCategory in ['Kijiweni', 'Fursa', 'Makala']
+        && data.replyId is string && isValidId(data.replyId)
+        && data.parentReplyId is string && data.parentReplyId.size() <= 128
+        && data.replyPreview is string && data.replyPreview.size() >= 1 && data.replyPreview.size() <= 200
+        && data.isRead is bool
+        && data.createdAt is timestamp;
+    }
+
     function noteDocData(noteId) {
       return get(/databases/$(database)/documents/mchart_notes/$(noteId)).data;
     }
@@ -433,6 +459,43 @@ service cloud.firestore {
           && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'phoneNumber', 'updatedAt']);
 
         allow delete: if (isOwner(userId) || isAdmin()) && isValidId(userId) && docId == 'info';
+      }
+
+      match /notifications/{notificationId} {
+        allow get: if isSignedIn()
+          && isValidId(userId)
+          && isValidId(notificationId)
+          && (isOwner(userId) || isAdmin());
+
+        allow list: if isSignedIn()
+          && (resource.data.recipientId == request.auth.uid || isAdmin());
+
+        allow create: if isNotSuspended()
+          && isValidId(userId)
+          && isValidId(notificationId)
+          && isValidUserNotification(incoming(), userId)
+          && incoming().actorId == request.auth.uid
+          && incoming().recipientId != request.auth.uid
+          && incoming().isRead == false
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/topics/$(incoming().topicId));
+
+        allow update: if isSignedIn()
+          && isValidId(userId)
+          && isValidId(notificationId)
+          && isValidUserNotification(incoming(), userId)
+          && isOwner(userId)
+          && incoming().recipientId == existing().recipientId
+          && incoming().actorId == existing().actorId
+          && incoming().topicId == existing().topicId
+          && incoming().replyId == existing().replyId
+          && incoming().createdAt == existing().createdAt
+          && incoming().diff(existing()).affectedKeys().hasOnly(['isRead']);
+
+        allow delete: if isSignedIn()
+          && isValidId(userId)
+          && isValidId(notificationId)
+          && (isOwner(userId) || isAdmin());
       }
     }
 

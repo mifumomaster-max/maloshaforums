@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Lock } from 'lucide-react';
+import { Lock, Plus } from 'lucide-react';
 import {
   User,
   getRedirectResult,
@@ -30,12 +30,16 @@ import {
   ChatMessage,
   MchartNote,
   NavTab,
+  NavUnreadCounts,
   PresenceArea,
+  PrimaryBoard,
   Report,
   ReportReason,
   SortMode,
   Topic,
   TopicCategory,
+  UserNotification,
+  UserNotificationType,
   UserProfile,
   normalizeAccountStatus,
   normalizeBoardCategory,
@@ -46,6 +50,8 @@ import {
   deleteTopic,
   editTopic,
   getPrivateUserInfo,
+  markAllUserNotificationsRead,
+  markUserNotificationRead,
   seedStarterTopics,
   submitReport,
   syncUserProfile,
@@ -86,6 +92,13 @@ import {
 const CHAT_LAST_SEEN_KEY = 'malosha_chat_last_seen_ms_v1';
 const NOTES_LAST_SEEN_KEY = 'malosha_notes_last_seen_ms_v1';
 const READ_NOTE_IDS_KEY = 'malosha_read_note_ids_v1';
+const BOARD_LAST_SEEN_KEY = 'malosha_board_last_seen_v1';
+const READ_TOPIC_IDS_KEY = 'malosha_read_topic_ids_v1';
+
+function getStartOfTodayBoundaryMs(): number {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).getTime() - 1;
+}
 
 function getLocalDateKey(date = new Date()): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -104,17 +117,63 @@ function ForumShell() {
   const [loadingTopics, setLoadingTopics] = useState(true);
   const [votedTopicIds, setVotedTopicIds] = useState<Set<string>>(new Set());
   const [reports, setReports] = useState<Report[]>([]);
+  const [userNotifications, setUserNotifications] = useState<UserNotification[]>([]);
 
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [loadingChat, setLoadingChat] = useState(true);
   const [todayKey, setTodayKey] = useState<string>(() => getLocalDateKey());
   const [lastSeenChatMs, setLastSeenChatMs] = useState<number>(() => {
-    if (typeof window === 'undefined') return Date.now();
+    if (typeof window === 'undefined') return getStartOfTodayBoundaryMs();
     try {
       const saved = Number(window.localStorage.getItem(CHAT_LAST_SEEN_KEY) || 0);
-      return Number.isFinite(saved) && saved > 0 ? saved : Date.now();
+      return Number.isFinite(saved) && saved > 0 ? saved : getStartOfTodayBoundaryMs();
     } catch {
-      return Date.now();
+      return getStartOfTodayBoundaryMs();
+    }
+  });
+
+  const [boardLastSeen, setBoardLastSeen] = useState<Record<PrimaryBoard, number>>(() => {
+    const defaultCutoff = Date.now() - 14 * 86_400_000;
+    const fallback: Record<PrimaryBoard, number> = {
+      Kijiweni: defaultCutoff,
+      Fursa: defaultCutoff,
+      Makala: defaultCutoff,
+    };
+    if (typeof window === 'undefined') return fallback;
+    try {
+      const raw = window.localStorage.getItem(BOARD_LAST_SEEN_KEY);
+      if (!raw) return fallback;
+      const parsed = JSON.parse(raw) as Partial<Record<PrimaryBoard, unknown>>;
+      return {
+        Kijiweni:
+          typeof parsed.Kijiweni === 'number' && Number.isFinite(parsed.Kijiweni)
+            ? parsed.Kijiweni
+            : defaultCutoff,
+        Fursa:
+          typeof parsed.Fursa === 'number' && Number.isFinite(parsed.Fursa)
+            ? parsed.Fursa
+            : defaultCutoff,
+        Makala:
+          typeof parsed.Makala === 'number' && Number.isFinite(parsed.Makala)
+            ? parsed.Makala
+            : defaultCutoff,
+      };
+    } catch {
+      return fallback;
+    }
+  });
+
+  const [readTopicIds, setReadTopicIds] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set();
+    try {
+      const raw = window.localStorage.getItem(READ_TOPIC_IDS_KEY);
+      if (!raw) return new Set();
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed)
+        ? new Set(parsed.filter((x): x is string => typeof x === 'string'))
+        : new Set();
+    } catch {
+      return new Set();
     }
   });
 
@@ -144,9 +203,13 @@ function ForumShell() {
   });
 
   const [activeTab, setActiveTab] = useState<NavTab>(() => {
-    if (typeof window === 'undefined') return 'all';
+    if (typeof window === 'undefined') return 'kijiweni';
     const tabParam = new URLSearchParams(window.location.search).get('tab');
-    return tabParam === 'mchart' || tabParam === 'chat' ? 'chat' : 'all';
+    if (tabParam === 'mchart' || tabParam === 'chat') return 'chat';
+    if (tabParam === 'fursa') return 'fursa';
+    if (tabParam === 'makala') return 'makala';
+    if (tabParam === 'trending') return 'trending';
+    return 'kijiweni';
   });
   const [mchartSubTab, setMchartSubTab] = useState<'messages' | 'notes'>(() => {
     if (typeof window === 'undefined') return 'messages';
@@ -155,14 +218,22 @@ function ForumShell() {
   });
   const [authPromptReason, setAuthPromptReason] = useState<AuthPromptReason | null>(null);
   const returnDestinationRef = useRef<{ tab: NavTab; topicId: string | null }>({
-    tab: 'all',
+    tab: 'kijiweni',
     topicId: null,
   });
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
-    return new URLSearchParams(window.location.search).get('mada');
+    const raw = new URLSearchParams(window.location.search).get('mada');
+    return raw && raw.trim() ? raw.trim() : null;
   });
-  const [selectedCategory, setSelectedCategory] = useState<TopicCategory | 'all'>('all');
+  const [selectedCategory, setSelectedCategory] = useState<TopicCategory | 'all'>(() => {
+    if (typeof window === 'undefined') return 'Kijiweni';
+    const tabParam = new URLSearchParams(window.location.search).get('tab');
+    if (tabParam === 'fursa') return 'Fursa';
+    if (tabParam === 'makala') return 'Makala';
+    if (tabParam === 'mchart' || tabParam === 'chat' || tabParam === 'trending') return 'all';
+    return 'Kijiweni';
+  });
   const [sortMode, setSortMode] = useState<SortMode>('newest');
   const [searchQuery, setSearchQuery] = useState('');
   const [onlyMine, setOnlyMine] = useState(false);
@@ -197,6 +268,8 @@ function ForumShell() {
   const knownChatIdsRef = useRef<Set<string>>(new Set());
   const initialNotesLoadedRef = useRef(false);
   const knownNoteIdsRef = useRef<Set<string>>(new Set());
+  const initialUserNotifsLoadedRef = useRef(false);
+  const knownUserNotifIdsRef = useRef<Set<string>>(new Set());
   const activeTabRef = useRef<NavTab>(activeTab);
   const mchartSubTabRef = useRef<'messages' | 'notes'>(mchartSubTab);
   const selectedTopicIdRef = useRef<string | null>(selectedTopicId);
@@ -724,16 +797,192 @@ function ForumShell() {
     }).length;
   }, [activeTab, mchartSubTab, selectedTopicId, mchartNotes, user?.uid, lastSeenNotesMs, readNoteIds]);
 
+  const currentlyViewedBoard: PrimaryBoard | null = useMemo(() => {
+    if (selectedTopicId) return null;
+    if (activeTab === 'kijiweni') return 'Kijiweni';
+    if (activeTab === 'fursa') return 'Fursa';
+    if (activeTab === 'makala') return 'Makala';
+    if (activeTab === 'all' && selectedCategory !== 'all') {
+      return normalizeBoardCategory(selectedCategory);
+    }
+    return null;
+  }, [activeTab, selectedCategory, selectedTopicId]);
+
+  // Clear board unread badge immediately when user opens that section
+  useEffect(() => {
+    if (!currentlyViewedBoard) return;
+    let latestBoardMs = Date.now();
+    topics.forEach((t) => {
+      if (normalizeBoardCategory(t.category) !== currentlyViewedBoard) return;
+      const ms = t.createdAt ? t.createdAt.toMillis() : 0;
+      if (ms > latestBoardMs) latestBoardMs = ms;
+    });
+    setBoardLastSeen((prev) => {
+      if (prev[currentlyViewedBoard] >= latestBoardMs) return prev;
+      const next = { ...prev, [currentlyViewedBoard]: latestBoardMs + 500 };
+      try {
+        window.localStorage.setItem(BOARD_LAST_SEEN_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore storage errors
+      }
+      return next;
+    });
+  }, [currentlyViewedBoard, topics]);
+
+  const markTopicRead = useCallback((topicId: string) => {
+    if (!topicId) return;
+    setReadTopicIds((prev) => {
+      if (prev.has(topicId)) return prev;
+      const next = new Set(prev);
+      next.add(topicId);
+      try {
+        window.localStorage.setItem(
+          READ_TOPIC_IDS_KEY,
+          JSON.stringify(Array.from(next).slice(-300))
+        );
+      } catch {
+        // Ignore storage errors
+      }
+      return next;
+    });
+  }, []);
+
+  const unreadCounts: NavUnreadCounts = useMemo(() => {
+    const countBoard = (board: PrimaryBoard): number => {
+      if (currentlyViewedBoard === board) return 0;
+      const cutoff = boardLastSeen[board] || 0;
+      return topics.filter((t) => {
+        if (normalizeBoardCategory(t.category) !== board) return false;
+        if (user?.uid && t.authorId === user.uid) return false;
+        if (readTopicIds.has(t.id)) return false;
+        const createdMs = t.createdAt ? t.createdAt.toMillis() : 0;
+        return createdMs > cutoff;
+      }).length;
+    };
+
+    return {
+      kijiweni: countBoard('Kijiweni'),
+      fursa: countBoard('Fursa'),
+      makala: countBoard('Makala'),
+      chat: unreadChatCount + unreadNotesCount,
+    };
+  }, [
+    currentlyViewedBoard,
+    boardLastSeen,
+    topics,
+    user?.uid,
+    readTopicIds,
+    unreadChatCount,
+    unreadNotesCount,
+  ]);
+
+  // Real-time Facebook-style reply & comment notifications for the signed-in user
+  useEffect(() => {
+    initialUserNotifsLoadedRef.current = false;
+    knownUserNotifIdsRef.current.clear();
+
+    if (!authReady || !user) {
+      setUserNotifications([]);
+      return;
+    }
+
+    const path = `users/${user.uid}/notifications`;
+    const q = query(collection(db, path), where('recipientId', '==', user.uid));
+
+    const unsub = onSnapshot(
+      q,
+      (snapshot) => {
+        const list: UserNotification[] = snapshot.docs.map((d) => {
+          const data = d.data();
+          const nType: UserNotificationType =
+            data.type === 'post_comment' ? 'post_comment' : 'comment_reply';
+          return {
+            id: d.id,
+            recipientId: String(data.recipientId || user.uid),
+            actorId: String(data.actorId || ''),
+            actorName: String(data.actorName || 'Mwanachama'),
+            actorPhoto: String(data.actorPhoto || ''),
+            type: nType,
+            topicId: String(data.topicId || ''),
+            topicTitle: String(data.topicTitle || ''),
+            topicCategory: normalizeBoardCategory(String(data.topicCategory || 'Kijiweni')),
+            replyId: String(data.replyId || ''),
+            parentReplyId: String(data.parentReplyId || ''),
+            replyPreview: String(data.replyPreview || ''),
+            isRead: Boolean(data.isRead),
+            createdAt: data.createdAt || null,
+          };
+        });
+
+        list.sort((a, b) => {
+          const am = a.createdAt ? a.createdAt.toMillis() : Date.now();
+          const bm = b.createdAt ? b.createdAt.toMillis() : Date.now();
+          return bm - am;
+        });
+
+        const capped = list.slice(0, 40);
+        setUserNotifications(capped);
+
+        if (!initialUserNotifsLoadedRef.current) {
+          knownUserNotifIdsRef.current = new Set(capped.map((n) => n.id));
+          initialUserNotifsLoadedRef.current = true;
+          return;
+        }
+
+        const newestUnread = capped.find(
+          (n) => !n.isRead && !knownUserNotifIdsRef.current.has(n.id)
+        );
+        capped.forEach((n) => knownUserNotifIdsRef.current.add(n.id));
+
+        if (newestUnread) {
+          const isViewingSameTopic =
+            selectedTopicIdRef.current === newestUnread.topicId &&
+            typeof document !== 'undefined' &&
+            !document.hidden;
+
+          if (isViewingSameTopic) {
+            void markUserNotificationRead(user.uid, newestUnread.id);
+          } else {
+            const actionText =
+              newestUnread.type === 'comment_reply'
+                ? tr(
+                    `${newestUnread.actorName} amejibu maoni yako`,
+                    `${newestUnread.actorName} replied to your comment`
+                  )
+                : tr(
+                    `${newestUnread.actorName} ametoa maoni kwenye chapisho lako`,
+                    `${newestUnread.actorName} commented on your post`
+                  );
+            const topicLabel = newestUnread.topicTitle
+              ? ` · ${newestUnread.topicTitle.slice(0, 50)}`
+              : '';
+            if (typeof document !== 'undefined' && !document.hidden) {
+              showToast(`${actionText}: "${newestUnread.replyPreview.slice(0, 75)}"`);
+            }
+            void sendPhoneNotification({
+              title: `${actionText}${topicLabel}`,
+              body: newestUnread.replyPreview.slice(0, 140),
+              topicId: newestUnread.topicId,
+              tag: `malosha-reply-${newestUnread.id}`,
+            });
+          }
+        }
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, path);
+      }
+    );
+
+    return () => unsub();
+  }, [authReady, user, showToast, tr]);
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const url = new URL(window.location.href);
     let changed = false;
-    if (selectedTopicId) {
-      if (url.searchParams.get('mada') !== selectedTopicId) {
-        url.searchParams.set('mada', selectedTopicId);
-        changed = true;
-      }
-    } else if (url.searchParams.has('mada')) {
+
+    // Never keep stale ?mada= query parameter when returning to feed or switching tabs
+    if (!selectedTopicId && url.searchParams.has('mada')) {
       url.searchParams.delete('mada');
       changed = true;
     }
@@ -789,11 +1038,17 @@ function ForumShell() {
         if (cancelled) return;
         if (!snap.exists()) {
           setSharedTopicFallback(null);
+          setSelectedTopicId(null);
+          setActiveTab('kijiweni');
+          setSelectedCategory('Kijiweni');
           return;
         }
         const data = snap.data();
         if (!isAdmin && data.status !== 'open' && data.status !== 'locked') {
           setSharedTopicFallback(null);
+          setSelectedTopicId(null);
+          setActiveTab('kijiweni');
+          setSelectedCategory('Kijiweni');
           return;
         }
         setSharedTopicFallback({
@@ -825,6 +1080,9 @@ function ForumShell() {
         if (!cancelled) {
           console.error(err);
           setSharedTopicFallback(null);
+          setSelectedTopicId(null);
+          setActiveTab('kijiweni');
+          setSelectedCategory('Kijiweni');
         }
       })
       .finally(() => {
@@ -913,9 +1171,27 @@ function ForumShell() {
     if (user && activeTab === 'auth') {
       const dest = returnDestinationRef.current;
       setAuthPromptReason(null);
-      setActiveTab(dest.tab === 'auth' ? 'all' : dest.tab);
       if (dest.topicId) {
+        const nextTab = dest.tab === 'auth' || dest.tab === 'all' ? 'kijiweni' : dest.tab;
+        setActiveTab(nextTab);
+        setSelectedCategory(
+          nextTab === 'kijiweni'
+            ? 'Kijiweni'
+            : nextTab === 'fursa'
+              ? 'Fursa'
+              : nextTab === 'makala'
+                ? 'Makala'
+                : 'all'
+        );
         setSelectedTopicId(dest.topicId);
+      } else if (dest.tab === 'chat') {
+        setActiveTab('chat');
+        setSelectedCategory('all');
+        setSelectedTopicId(null);
+      } else {
+        setActiveTab('kijiweni');
+        setSelectedCategory('Kijiweni');
+        setSelectedTopicId(null);
       }
     }
   }, [user, activeTab]);
@@ -985,13 +1261,50 @@ function ForumShell() {
       });
   }, [topics]);
 
-  const openTopicFromFeed = useCallback((topicId: string) => {
-    if (typeof window !== 'undefined') {
-      feedScrollYRef.current = window.scrollY || window.pageYOffset || 0;
-      window.scrollTo({ top: 0, behavior: 'auto' });
+  const openTopicFromFeed = useCallback(
+    (topicId: string) => {
+      markTopicRead(topicId);
+      if (typeof window !== 'undefined') {
+        feedScrollYRef.current = window.scrollY || window.pageYOffset || 0;
+        window.scrollTo({ top: 0, behavior: 'auto' });
+      }
+      setSelectedTopicId(topicId);
+    },
+    [markTopicRead]
+  );
+
+  // When a topic detail is open (e.g. via deep link or notification), mark topic + its reply alerts read
+  useEffect(() => {
+    if (!selectedTopicId) return;
+    markTopicRead(selectedTopicId);
+    if (!user?.uid) return;
+    const matchingUnreadIds = userNotifications
+      .filter((n) => !n.isRead && n.topicId === selectedTopicId)
+      .map((n) => n.id);
+    if (matchingUnreadIds.length > 0) {
+      void markAllUserNotificationsRead(user.uid, matchingUnreadIds);
+      matchingUnreadIds.forEach((id) => {
+        void dismissPhoneNotifications(`malosha-reply-${id}`);
+      });
     }
-    setSelectedTopicId(topicId);
-  }, []);
+  }, [selectedTopicId, user?.uid, userNotifications, markTopicRead]);
+
+  const handleMarkNotificationRead = useCallback(
+    async (notificationId: string) => {
+      if (!user?.uid) return;
+      await markUserNotificationRead(user.uid, notificationId);
+      void dismissPhoneNotifications(`malosha-reply-${notificationId}`);
+    },
+    [user?.uid]
+  );
+
+  const handleMarkAllNotificationsRead = useCallback(
+    async (notificationIds: string[]) => {
+      if (!user?.uid || notificationIds.length === 0) return;
+      await markAllUserNotificationsRead(user.uid, notificationIds);
+    },
+    [user?.uid]
+  );
 
   const returnToFeed = useCallback(() => {
     setSelectedTopicId(null);
@@ -1376,23 +1689,6 @@ function ForumShell() {
           ? 'Makala'
           : selectedCategory;
 
-  const handleTriggerInstallApp = useCallback(async () => {
-    if (pwa.isInstallable) {
-      const outcome = await pwa.install();
-      if (outcome === 'accepted') {
-        showToast(
-          tr(
-            'Malosha Forums imesakinishwa kwenye kifaa chako!',
-            'Malosha Forums has been installed on your device!'
-          )
-        );
-        return;
-      }
-      if (outcome === 'dismissed') return;
-    }
-    setInstallGuideOpen(true);
-  }, [pwa, showToast, tr]);
-
   const appReady = authReady;
   const isMchartView = activeTab === 'chat' && !selectedTopic && !selectedTopicId;
   const [mobileKeyboardOpen, setMobileKeyboardOpen] = useState(false);
@@ -1459,16 +1755,14 @@ function ForumShell() {
         userPhoto={user?.photoURL || ''}
         isAdmin={isAdmin}
         isSuspended={isSuspended}
-        onOpenComposer={handleOpenNewTopic}
         onSignIn={handleSignIn}
         onSignOut={handleSignOut}
         authBusy={authBusy}
-        canInstallApp={!pwa.isInstalled}
-        onTriggerInstallApp={() => {
-          void handleTriggerInstallApp();
-        }}
         onToast={showToast}
-        unreadChatCount={unreadChatCount + unreadNotesCount}
+        unreadCounts={unreadCounts}
+        userNotifications={userNotifications}
+        onMarkNotificationRead={handleMarkNotificationRead}
+        onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
       />
 
       <main className={`flex-1 pt-[var(--malosha-header-h,118px)] ${isMchartView ? '' : 'pb-16 md:pb-0'}`}>
@@ -1543,49 +1837,24 @@ function ForumShell() {
             onToast={showToast}
             onRequestConfirm={(opts) => setConfirmState(opts)}
           />
-        ) : selectedTopicId && (loadingTopics || loadingSharedTopic) ? (
-          <div className="mx-auto max-w-4xl px-3.5 py-6 sm:px-6 sm:py-8">
-            <div className="rounded-xl border border-slate-200 bg-white p-6 animate-pulse sm:rounded-lg">
-              <p className="text-xs font-semibold text-[#1D4E89]">
-                {tr('Inafungua tangazo...', 'Loading post...')}
-              </p>
-              <div className="mt-3 h-6 w-3/4 rounded bg-slate-100" />
-              <div className="mt-2 h-4 w-1/2 rounded bg-slate-100" />
-              <div className="mt-5 space-y-2.5">
-                <div className="h-4 w-full rounded bg-slate-100" />
-                <div className="h-4 w-5/6 rounded bg-slate-100" />
-                <div className="h-4 w-2/3 rounded bg-slate-100" />
-              </div>
-            </div>
-          </div>
-        ) : selectedTopicId ? (
-          <div className="mx-auto max-w-2xl px-3.5 py-10 sm:px-6">
-            <div className="rounded-xl border border-slate-200 bg-white px-6 py-10 text-center sm:rounded-lg">
-              <h1 className="font-display text-xl font-bold text-slate-900">
-                {tr('Tangazo hili halikupatikana', 'This post could not be found')}
-              </h1>
-              <p className="mx-auto mt-2 max-w-md text-sm text-slate-600">
-                {tr(
-                  'Huenda tangazo au mada hii imeondolewa na mwandishi au kiungo si sahihi.',
-                  'This post or listing may have been removed by the author, or the link is invalid.'
-                )}
-              </p>
-              <button
-                type="button"
-                onClick={() => setSelectedTopicId(null)}
-                className="mt-5 inline-flex min-h-[42px] items-center rounded-lg bg-[#1D4E89] px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#163A5F]"
-              >
-                {tr('Rudi Kwenye Jukwaa', 'Back to Forum')}
-              </button>
-            </div>
-          </div>
         ) : activeTab === 'auth' && !user ? (
           <AuthView
             promptReason={authPromptReason}
             onBack={() => {
               const dest = returnDestinationRef.current;
               setAuthPromptReason(null);
-              setActiveTab(dest.tab === 'auth' ? 'all' : dest.tab);
+              const fallbackTab =
+                dest.tab === 'auth' || dest.tab === 'all' ? 'kijiweni' : dest.tab;
+              setActiveTab(fallbackTab);
+              setSelectedCategory(
+                fallbackTab === 'kijiweni'
+                  ? 'Kijiweni'
+                  : fallbackTab === 'fursa'
+                    ? 'Fursa'
+                    : fallbackTab === 'makala'
+                      ? 'Makala'
+                      : 'all'
+              );
               if (dest.topicId) {
                 setSelectedTopicId(dest.topicId);
               }
@@ -1597,19 +1866,38 @@ function ForumShell() {
               }
               const dest = returnDestinationRef.current;
               setAuthPromptReason(null);
-              setActiveTab(dest.tab === 'auth' ? 'all' : dest.tab);
-              if (dest.topicId) {
+              if (dest.topicId && !isNewUser) {
+                const targetTab =
+                  dest.tab === 'auth' || dest.tab === 'all' ? 'kijiweni' : dest.tab;
+                setActiveTab(targetTab);
+                setSelectedCategory(
+                  targetTab === 'kijiweni'
+                    ? 'Kijiweni'
+                    : targetTab === 'fursa'
+                      ? 'Fursa'
+                      : targetTab === 'makala'
+                        ? 'Makala'
+                        : 'all'
+                );
                 setSelectedTopicId(dest.topicId);
+              } else if (dest.tab === 'chat' && !isNewUser) {
+                setActiveTab('chat');
+                setSelectedCategory('all');
+                setSelectedTopicId(null);
+              } else {
+                setActiveTab('kijiweni');
+                setSelectedCategory('Kijiweni');
+                setSelectedTopicId(null);
               }
               showToast(
                 isNewUser
                   ? tr(
-                      'Akaunti yako imesajiliwa kikamilifu! Karibu Malosha Forums.',
-                      'Your account has been created! Welcome to Malosha Forums.'
+                      'Akaunti yako imesajiliwa kikamilifu! Karibu Kijiweni.',
+                      'Your account has been created! Welcome to Kijiweni.'
                     )
                   : tr(
-                      'Karibu Malosha Forums! Umeingia kikamilifu.',
-                      'Welcome to Malosha Forums! You are signed in.'
+                      'Karibu Kijiweni! Umeingia kikamilifu.',
+                      'Welcome to Kijiweni! You are signed in.'
                     )
               );
             }}
@@ -1629,6 +1917,15 @@ function ForumShell() {
             myReports={reports}
             onSaveProfile={handleSaveProfile}
             onUpdateProfilePhoto={handleUpdateProfilePhoto}
+            onPublishPosterTopic={async (data) => {
+              if (!user) throw new Error('Ingia kwanza.');
+              return await createTopic(
+                user,
+                userProfile?.displayName || user.displayName || 'Mwanachama',
+                data
+              );
+            }}
+            onSelectBoard={handleSelectBoard}
             onSignIn={() => handleSignIn()}
             onUpdateReportStatus={async (id, status) => {
               await updateReportStatus(id, status);
@@ -1711,6 +2008,7 @@ function ForumShell() {
             onSeedStarterTopics={handleSeedStarterTopics}
             seeding={seeding}
             onVisibleTopicIdsChange={setVisibleTopicIds}
+            unreadCounts={unreadCounts}
           />
         )}
       </main>
@@ -1767,12 +2065,41 @@ function ForumShell() {
       <MobileBottomNav
         activeTab={activeTab}
         onSelectTab={handleSelectTab}
-        unreadChatCount={unreadChatCount + unreadNotesCount}
+        unreadCounts={unreadCounts}
         hidden={isMchartView && mobileKeyboardOpen}
       />
 
       {activeTab !== 'chat' && (
         <FloatingScrollButton resetKey={`${activeTab}:${selectedTopicId || ''}`} />
+      )}
+
+      {/* Floating Add Topic / Post Action Icon */}
+      {activeTab !== 'chat' && activeTab !== 'auth' && (
+        <button
+          type="button"
+          onClick={handleOpenNewTopic}
+          aria-label={
+            isSuspended && !isAdmin
+              ? tr('Akaunti Imefungwa', 'Account Closed')
+              : tr('Ongeza Mada Mpya', 'Add New Post')
+          }
+          title={
+            isSuspended && !isAdmin
+              ? tr('Akaunti Imefungwa', 'Account Closed')
+              : tr('Ongeza Mada', 'Add Post')
+          }
+          className={`fixed right-4 bottom-[calc(86px+env(safe-area-inset-bottom,0px))] z-[42] flex h-[54px] w-[54px] items-center justify-center rounded-full text-white shadow-[0_10px_26px_rgba(14,38,64,0.34)] ring-2 ring-white/85 transition-transform hover:scale-105 active:scale-95 md:right-6 md:bottom-6 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-amber-400 ${
+            isSuspended && !isAdmin
+              ? 'bg-red-800 hover:bg-red-700'
+              : 'bg-gradient-to-br from-[#F59E0B] via-[#D97706] to-[#B45309] hover:brightness-105'
+          }`}
+        >
+          {isSuspended && !isAdmin ? (
+            <Lock className="h-5 w-5" aria-hidden="true" />
+          ) : (
+            <Plus className="h-6 w-6 stroke-[2.6]" aria-hidden="true" />
+          )}
+        </button>
       )}
 
       {/* Modals */}
@@ -1826,7 +2153,7 @@ function ForumShell() {
         <div
           role="status"
           aria-live="polite"
-          className={`fixed right-4 bottom-20 z-50 max-w-sm rounded-lg border px-4 py-3 text-sm font-medium shadow-lg md:bottom-4 ${
+          className={`fixed right-20 bottom-[calc(86px+env(safe-area-inset-bottom,0px))] z-50 max-w-sm rounded-lg border px-4 py-3 text-sm font-medium shadow-lg md:right-24 md:bottom-6 ${
             toast.kind === 'error'
               ? 'border-red-200 bg-red-50 text-red-900'
               : 'border-slate-200 bg-[#163A5F] text-white'

@@ -69,7 +69,7 @@ export const FloatingScrollButton: React.FC<FloatingScrollButtonProps> = ({
           ? tr('Peleka mwanzo / juu', 'Jump to top')
           : tr('Rudi pale ulipokuwa', 'Return to previous spot')
       }
-      className={`fixed right-3.5 bottom-[74px] z-30 inline-flex min-h-[46px] items-center gap-1.5 rounded-full border px-3.5 py-2 text-xs font-bold shadow-[0_8px_24px_rgba(14,38,64,0.28)] transition-all active:scale-95 md:right-6 md:bottom-6 ${
+      className={`fixed right-4 bottom-[calc(154px+env(safe-area-inset-bottom,0px))] z-[41] inline-flex min-h-[44px] items-center gap-1.5 rounded-full border px-3.5 py-2 text-xs font-bold shadow-[0_8px_24px_rgba(14,38,64,0.28)] transition-all active:scale-95 md:right-6 md:bottom-[92px] ${
         showGoTop
           ? 'border-amber-400/40 bg-[#0E2640] text-white hover:bg-[#163A5F]'
           : 'border-[#D97706] bg-[#D97706] text-white hover:bg-[#B45309]'

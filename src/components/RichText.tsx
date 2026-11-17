@@ -155,6 +155,7 @@ export const RichText: React.FC<RichTextProps> = ({ content, className = '' }) =
   const lines = content.split('\n');
   const blocks: React.ReactNode[] = [];
   let listItems: string[] = [];
+  let numberedItems: { num: string; text: string }[] = [];
   let quoteLines: string[] = [];
 
   const flushList = (keyPrefix: number) => {
@@ -169,12 +170,24 @@ export const RichText: React.FC<RichTextProps> = ({ content, className = '' }) =
     listItems = [];
   };
 
+  const flushNumbered = (keyPrefix: number) => {
+    if (numberedItems.length === 0) return;
+    blocks.push(
+      <ol key={`num-${keyPrefix}`} className="my-2.5 list-decimal space-y-1.5 pl-5 text-slate-800">
+        {numberedItems.map((item, idx) => (
+          <li key={idx}>{renderLinkedInline(item.text)}</li>
+        ))}
+      </ol>
+    );
+    numberedItems = [];
+  };
+
   const flushQuote = (keyPrefix: number) => {
     if (quoteLines.length === 0) return;
     blocks.push(
       <blockquote
         key={`quote-${keyPrefix}`}
-        className="my-3.5 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-slate-700 italic"
+        className="my-3.5 border-y border-slate-200 bg-slate-50 px-4 py-3 text-slate-700 italic"
       >
         {quoteLines.map((q, idx) => (
           <p key={idx} className={idx > 0 ? 'mt-1.5' : ''}>
@@ -189,19 +202,60 @@ export const RichText: React.FC<RichTextProps> = ({ content, className = '' }) =
   lines.forEach((line, index) => {
     const trimmed = line.trim();
 
-    if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+    if (/^(?:-{3,}|\*{3,})$/.test(trimmed)) {
+      flushList(index);
+      flushNumbered(index);
       flushQuote(index);
-      listItems.push(trimmed.slice(2));
+      blocks.push(<hr key={`hr-${index}`} className="my-4 border-slate-200" />);
+      return;
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,4})\s+(.+)$/);
+    if (headingMatch) {
+      flushList(index);
+      flushNumbered(index);
+      flushQuote(index);
+      const level = headingMatch[1].length;
+      const text = headingMatch[2].trim();
+      blocks.push(
+        level <= 2 ? (
+          <h3 key={`h2-${index}`} className="mt-4 mb-1.5 font-display text-lg font-bold text-slate-900">
+            {text}
+          </h3>
+        ) : (
+          <h4 key={`h3-${index}`} className="mt-3 mb-1 font-sans text-[15px] font-bold text-[#0E2640]">
+            {text}
+          </h4>
+        )
+      );
+      return;
+    }
+
+    const bulletMatch = trimmed.match(/^(?:[-*•▪‣]|–(?=\s))\s+(.+)$/);
+    if (bulletMatch) {
+      flushQuote(index);
+      flushNumbered(index);
+      listItems.push(bulletMatch[1]);
+      return;
+    }
+
+    const numMatch = trimmed.match(/^(\d{1,2})[.)]\s+(.+)$/);
+    if (numMatch) {
+      flushQuote(index);
+      flushList(index);
+      numberedItems.push({ num: numMatch[1], text: numMatch[2] });
       return;
     }
 
     if (trimmed.startsWith('> ')) {
       flushList(index);
+      flushNumbered(index);
       quoteLines.push(trimmed.slice(2));
       return;
     }
 
     flushList(index);
+    flushNumbered(index);
     flushQuote(index);
 
     if (trimmed === '') {
@@ -209,13 +263,14 @@ export const RichText: React.FC<RichTextProps> = ({ content, className = '' }) =
     }
 
     blocks.push(
-      <p key={`p-${index}`} className="my-2 leading-relaxed text-slate-800">
+      <p key={`p-${index}`} className="my-2.5 leading-relaxed text-slate-800">
         {renderLinkedInline(trimmed)}
       </p>
     );
   });
 
   flushList(lines.length);
+  flushNumbered(lines.length);
   flushQuote(lines.length);
 
   return <div className={`text-[15px] ${className}`}>{blocks}</div>;

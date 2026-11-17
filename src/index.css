@@ -88,6 +88,142 @@
   }
 }
 
+@keyframes malosha-fish-swim {
+  0% {
+    transform: translate3d(-44px, 0, 0);
+  }
+  100% {
+    transform: translate3d(calc(100vw + 44px), 0, 0);
+  }
+}
+
+@keyframes malosha-fish-bob {
+  0%, 100% {
+    transform: translate3d(0, -1.5px, 0) rotate(-1.5deg);
+  }
+  50% {
+    transform: translate3d(0, 1.5px, 0) rotate(1.5deg);
+  }
+}
+
+@keyframes malosha-tail-wag {
+  0%, 100% {
+    transform: scaleX(1);
+  }
+  50% {
+    transform: scaleX(0.72);
+  }
+}
+
+@keyframes malosha-bubble-rise {
+  0% {
+    transform: translate3d(0, 2px, 0) scale(0.75);
+    opacity: 0.75;
+  }
+  100% {
+    transform: translate3d(-4px, -11px, 0) scale(1.15);
+    opacity: 0;
+  }
+}
+
+.animate-malosha-fish-swim {
+  animation: malosha-fish-swim 16s linear infinite;
+}
+
+.animate-malosha-fish-bob {
+  animation: malosha-fish-bob 2.2s ease-in-out infinite;
+}
+
+.animate-malosha-tail-wag {
+  transform-box: fill-box;
+  transform-origin: right center;
+  animation: malosha-tail-wag 0.55s ease-in-out infinite;
+}
+
+.animate-malosha-bubble-1 {
+  animation: malosha-bubble-rise 1.9s ease-out infinite;
+}
+
+.animate-malosha-bubble-2 {
+  animation: malosha-bubble-rise 2.4s ease-out 0.7s infinite;
+}
+
+@keyframes malosha-youth-left {
+  0% {
+    transform: translate3d(-48px, 0, 0);
+    opacity: 0;
+  }
+  10%, 40% {
+    transform: translate3d(0, 0, 0);
+    opacity: 1;
+  }
+  52%, 100% {
+    transform: translate3d(-66px, 0, 0);
+    opacity: 0;
+  }
+}
+
+@keyframes malosha-youth-right {
+  0% {
+    transform: translate3d(48px, 0, 0);
+    opacity: 0;
+  }
+  10%, 40% {
+    transform: translate3d(0, 0, 0);
+    opacity: 1;
+  }
+  52%, 100% {
+    transform: translate3d(66px, 0, 0);
+    opacity: 0;
+  }
+}
+
+@keyframes malosha-handshake-clasp {
+  0%, 9%, 44%, 100% {
+    transform: translate3d(0, 0, 0) scale(0.85);
+    opacity: 0;
+  }
+  14%, 22%, 30%, 38% {
+    transform: translate3d(0, -1.8px, 0) scale(1.05);
+    opacity: 1;
+  }
+  18%, 26%, 34% {
+    transform: translate3d(0, 1.8px, 0) scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes malosha-welcome-name {
+  0%, 45% {
+    transform: translate3d(0, 8px, 0) scale(0.92);
+    opacity: 0;
+  }
+  54%, 90% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 1;
+  }
+  97%, 100% {
+    transform: translate3d(0, -6px, 0) scale(0.95);
+    opacity: 0;
+  }
+}
+
+.animate-malosha-youth-left {
+  animation: malosha-youth-left 9s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+.animate-malosha-youth-right {
+  animation: malosha-youth-right 9s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+.animate-malosha-handshake-clasp {
+  animation: malosha-handshake-clasp 9s ease-in-out infinite;
+}
+
+.animate-malosha-welcome-name {
+  animation: malosha-welcome-name 9s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
 .animate-malosha-float-a {
   animation: malosha-float-a 11s ease-in-out infinite;
 }
@@ -104,6 +240,15 @@
   .animate-malosha-spin,
   .animate-malosha-spin-rev,
   .animate-malosha-slide,
+  .animate-malosha-fish-swim,
+  .animate-malosha-fish-bob,
+  .animate-malosha-tail-wag,
+  .animate-malosha-bubble-1,
+  .animate-malosha-bubble-2,
+  .animate-malosha-youth-left,
+  .animate-malosha-youth-right,
+  .animate-malosha-handshake-clasp,
+  .animate-malosha-welcome-name,
   .animate-malosha-float-a,
   .animate-malosha-float-b,
   .animate-malosha-beam {

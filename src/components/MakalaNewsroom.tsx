@@ -19,6 +19,7 @@ import {
   resolveMakalaCover,
 } from '../types';
 import { optimizeCloudinaryUrl } from '../services/cloudinaryService';
+import { extractEditorialPreview } from '../utils/editorialFormatter';
 import { estimateReadMinutes } from '../utils/formatters';
 import { useLanguage } from '../context/LanguageContext';
 import { Avatar } from './Avatar';
@@ -52,6 +53,7 @@ interface MakalaNewsroomProps {
   onBackToAll: () => void;
   inlineExpanded: boolean;
   onInlineExpandedChange: (next: boolean) => void;
+  expandTrigger?: number;
   onVisibleTopicIdsChange?: (ids: string[]) => void;
 }
 
@@ -102,12 +104,8 @@ const BbcCoverImage: React.FC<{
   );
 };
 
-function stripMarkdownPreview(raw: string): string {
-  return raw
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-    .replace(/[*`>#-]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+function getLeadPreviewText(raw: string): string {
+  return extractEditorialPreview(raw).leadText;
 }
 
 function getCreatedMillis(topic: Topic): number {
@@ -138,16 +136,36 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
   onBackToAll,
   inlineExpanded,
   onInlineExpandedChange,
+  expandTrigger = 0,
   onVisibleTopicIdsChange,
 }) => {
   const { lang, tr, formatTime, getMakalaSectionLabel } = useLanguage();
   const [selectedSection, setSelectedSection] = useState<string>('all');
   const [visibleCount, setVisibleCount] = useState<number>(INITIAL_MAKALA_PAGE_SIZE);
   const composerAnchorRef = useRef<HTMLDivElement>(null);
+  const prevExpandedRef = useRef(inlineExpanded);
+  const lastExpandTriggerRef = useRef(expandTrigger);
 
   useEffect(() => {
     setVisibleCount(INITIAL_MAKALA_PAGE_SIZE);
   }, [selectedSection, sortMode, searchQuery]);
+
+  useEffect(() => {
+    const justOpened = inlineExpanded && !prevExpandedRef.current;
+    const triggered = expandTrigger > lastExpandTriggerRef.current;
+    prevExpandedRef.current = inlineExpanded;
+    lastExpandTriggerRef.current = expandTrigger;
+
+    if ((justOpened || triggered) && inlineExpanded) {
+      const timer = window.setTimeout(() => {
+        composerAnchorRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+      }, 70);
+      return () => window.clearTimeout(timer);
+    }
+  }, [inlineExpanded, expandTrigger]);
 
   const todayFormatted = useMemo(() => {
     try {
@@ -254,10 +272,12 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
       return;
     }
     onInlineExpandedChange(true);
-    composerAnchorRef.current?.scrollIntoView({
-      behavior: 'smooth',
-      block: 'nearest',
-    });
+    window.setTimeout(() => {
+      composerAnchorRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    }, 70);
   };
 
   const leadArticle = paginatedArticles[0];
@@ -308,25 +328,35 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
 
       {/* BBC News Swahili Signature Crimson Masthead */}
       <header className="overflow-hidden border border-slate-200 bg-white">
-        <div className="bg-[#B80000] px-4 py-3.5 text-white sm:px-6 sm:py-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              {/* BBC-style white letter blocks */}
-              <div className="flex items-center gap-1" aria-hidden="true">
-                {['M', 'A', 'L', 'O', 'S', 'H', 'A'].map((letter, idx) => (
+        <div className="bg-[#B80000] px-3.5 py-3 text-white sm:px-6 sm:py-4">
+          <div className="flex items-center justify-between gap-2.5 sm:flex-wrap sm:gap-3">
+            <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
+              {/* Compact BBC emblem on mobile, full 7-block MALOSHA on tablet/PC */}
+              <div className="flex shrink-0 items-center gap-0.5 sm:hidden" aria-hidden="true">
+                {['M', 'L', 'S'].map((letter, idx) => (
                   <span
                     key={idx}
-                    className="inline-flex h-7 w-6 items-center justify-center bg-white font-sans text-sm font-black text-[#B80000] sm:h-8 sm:w-7 sm:text-base"
+                    className="inline-flex h-6 w-5 items-center justify-center bg-white font-sans text-xs font-black text-[#B80000]"
                   >
                     {letter}
                   </span>
                 ))}
               </div>
-              <div className="border-l border-white/30 pl-3">
-                <h1 className="font-sans text-base font-extrabold tracking-tight text-white sm:text-xl">
-                  {tr('FORUMS · HABARI & MAKALA', 'FORUMS · NEWS & ARTICLES')}
+              <div className="hidden shrink-0 items-center gap-1 sm:flex" aria-hidden="true">
+                {['M', 'A', 'L', 'O', 'S', 'H', 'A'].map((letter, idx) => (
+                  <span
+                    key={idx}
+                    className="inline-flex h-8 w-7 items-center justify-center bg-white font-sans text-base font-black text-[#B80000]"
+                  >
+                    {letter}
+                  </span>
+                ))}
+              </div>
+              <div className="min-w-0 border-l border-white/30 pl-2.5 sm:pl-3">
+                <h1 className="truncate font-sans text-sm font-extrabold tracking-tight text-white sm:text-xl">
+                  {tr('HABARI & MAKALA', 'NEWS & ARTICLES')}
                 </h1>
-                <p className="text-[11px] text-white/90 sm:text-xs">
+                <p className="truncate text-[11px] text-white/90 sm:text-xs">
                   {tr(
                     'Uchambuzi wa kina, ripoti maalum, na habari za jamii',
                     'In-depth analysis, special reports, and community news'
@@ -338,10 +368,11 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
             <button
               type="button"
               onClick={handleOpenInlineWriter}
-              className="inline-flex min-h-[40px] items-center gap-1.5 bg-white px-4 py-2 text-xs font-bold text-[#B80000] transition-colors hover:bg-slate-100 whitespace-nowrap shrink-0 sm:text-sm"
+              className="inline-flex min-h-[36px] shrink-0 items-center gap-1.5 bg-white px-3 py-1.5 text-xs font-bold text-[#B80000] transition-colors hover:bg-slate-100 whitespace-nowrap sm:min-h-[40px] sm:px-4 sm:py-2 sm:text-sm"
             >
-              <PenSquare className="h-4 w-4" aria-hidden="true" />
-              <span>{tr('Andika Makala', 'Write Article')}</span>
+              <PenSquare className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
+              <span className="sm:hidden">{tr('Andika', 'Write')}</span>
+              <span className="hidden sm:inline">{tr('Andika Makala', 'Write Article')}</span>
             </button>
           </div>
         </div>
@@ -443,7 +474,12 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
       </header>
 
       {/* Inline Makala Composer (Always Inline Inside the Page, Never a Popup) */}
-      <div ref={composerAnchorRef} className="mt-4">
+      <div
+        ref={composerAnchorRef}
+        className={`scroll-mt-[calc(var(--malosha-header-h,106px)+14px)] ${
+          inlineExpanded ? 'mt-4' : ''
+        }`}
+      >
         <MakalaInlineComposer
           expanded={inlineExpanded}
           onExpandedChange={onInlineExpandedChange}
@@ -490,7 +526,7 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
         </div>
       )}
 
-      {/* Latest Articles Quick-Access Strip ("Hivi Punde") — shown only in default All + Newest view */}
+      {/* Latest Articles Quick-Access Strip ("Hivi Punde") — desktop/tablet only so mobile shows Lead Story immediately */}
       {!loading &&
         selectedSection === 'all' &&
         sortMode === 'newest' &&
@@ -498,7 +534,7 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
         latestMakala.length > 0 && (
           <section
             aria-label={tr('Makala mpya hivi punde', 'Just in articles')}
-            className="mt-4 border border-slate-200 bg-white"
+            className="mt-4 hidden border border-slate-200 bg-white md:block"
           >
             <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2">
               <span className="text-xs font-black tracking-wide text-[#B80000] uppercase">
@@ -598,8 +634,8 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
             {leadArticle && (
               <article className="group -mx-3.5 overflow-hidden border-y border-slate-200 bg-white sm:mx-0 sm:border">
                 <div className="grid grid-cols-1 md:grid-cols-12 md:items-center">
-                  <div className="order-2 p-4 sm:p-6 md:order-1 md:col-span-5 flex flex-col justify-between">
-                    <div>
+                  <div className="order-2 flex min-w-0 flex-col justify-between p-4 sm:p-6 md:order-1 md:col-span-5">
+                    <div className="min-w-0">
                       <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600">
                         <span className="font-black tracking-wide text-[#B80000] uppercase">
                           {leadKickerLabel}
@@ -615,14 +651,34 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                       <button
                         type="button"
                         onClick={() => onOpenTopic(leadArticle.id)}
-                        className="block text-left font-display text-xl font-bold leading-snug text-slate-950 transition-colors hover:text-[#B80000] sm:text-2xl [text-wrap:balance]"
+                        className="block w-full break-words text-left font-display text-[20px] font-bold leading-snug text-slate-950 transition-colors hover:text-[#B80000] sm:text-2xl [text-wrap:balance]"
                       >
                         {leadArticle.title}
                       </button>
 
-                      <p className="mt-2.5 line-clamp-4 text-sm leading-relaxed text-slate-600">
-                        {stripMarkdownPreview(leadArticle.body)}
-                      </p>
+                      {(() => {
+                        const preview = extractEditorialPreview(leadArticle.body);
+                        return (
+                          <>
+                            <p className="mt-2.5 line-clamp-3 break-words text-[14.5px] leading-relaxed text-slate-700 sm:text-sm">
+                              {preview.leadText}
+                            </p>
+                            {preview.bulletHighlights.length > 0 && (
+                              <ul className="mt-2.5 space-y-1.5 border-t border-slate-100 pt-2.5 text-xs text-slate-600">
+                                {preview.bulletHighlights.map((bullet, bIdx) => (
+                                  <li key={bIdx} className="flex min-w-0 items-start gap-2">
+                                    <span
+                                      aria-hidden="true"
+                                      className="mt-1.5 h-1.5 w-1.5 shrink-0 bg-[#B80000]"
+                                    />
+                                    <span className="min-w-0 flex-1 line-clamp-1 break-words">{bullet}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
 
                     <div className="mt-4 space-y-3 border-t border-slate-100 pt-3">
@@ -793,7 +849,7 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                             </button>
 
                             <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-slate-600">
-                              {stripMarkdownPreview(article.body)}
+                              {getLeadPreviewText(article.body)}
                             </p>
                           </div>
 
@@ -917,7 +973,7 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                           {art.title}
                         </button>
                         <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-600">
-                          {stripMarkdownPreview(art.body)}
+                          {getLeadPreviewText(art.body)}
                         </p>
                       </div>
                     </article>

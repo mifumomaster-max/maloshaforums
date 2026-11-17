@@ -525,3 +525,29 @@ export type NavTab =
   | 'safety'
   | 'auth';
 export type SortMode = 'newest' | 'votes' | 'oldest';
+
+export type UserNotificationType = 'comment_reply' | 'post_comment';
+
+export interface UserNotification {
+  id: string;
+  recipientId: string;
+  actorId: string;
+  actorName: string;
+  actorPhoto: string;
+  type: UserNotificationType;
+  topicId: string;
+  topicTitle: string;
+  topicCategory: PrimaryBoard;
+  replyId: string;
+  parentReplyId: string;
+  replyPreview: string;
+  isRead: boolean;
+  createdAt: Timestamp | null;
+}
+
+export interface NavUnreadCounts {
+  kijiweni: number;
+  fursa: number;
+  makala: number;
+  chat: number;
+}
