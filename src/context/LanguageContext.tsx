@@ -73,22 +73,37 @@ const BADGE_EN: Record<
     description: 'Standard Malosha Forums member',
   },
   individual: {
-    label: 'Verified Individual',
+    label: 'Verified Individual (Blue)',
     shortLabel: 'Individual',
     description: 'Verified individual member or public figure',
   },
   organization: {
-    label: 'Verified Organization / Company',
+    label: 'Verified Organization (Purple)',
     shortLabel: 'Organization',
     description: 'Verified company, NGO, private institution, or media outlet',
   },
   government: {
-    label: 'Government Institution',
+    label: 'Government Institution (Green)',
     shortLabel: 'Government',
     description: 'Official ministry, council, agency, or government department',
   },
+  journalist: {
+    label: 'Journalist / Editor (Red)',
+    shortLabel: 'Journalist',
+    description: 'Verified journalist, media correspondent, or newsroom editor',
+  },
+  educator: {
+    label: 'Educator / Researcher (Teal)',
+    shortLabel: 'Educator',
+    description: 'Verified teacher, academic researcher, or career mentor',
+  },
+  creator: {
+    label: 'Top Creator / Analyst (Pink)',
+    shortLabel: 'Creator',
+    description: 'Verified top content creator and community contributor',
+  },
   owner: {
-    label: 'Platform Owner',
+    label: 'Platform Owner (Gold)',
     shortLabel: 'Owner',
     description: 'Official founder and owner of Malosha Forums',
   },

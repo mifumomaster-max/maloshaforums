@@ -18,6 +18,7 @@ import {
   NavTab,
   NavUnreadCounts,
   PrimaryBoard,
+  SharedMediaPayload,
   SortMode,
   Topic,
   TopicCategory,
@@ -56,12 +57,15 @@ interface TopicListProps {
   onShareTopic: (topic: Topic) => void;
   onOpenTopic: (topicId: string) => void;
   onOpenComposer: () => void;
-  onCreateKijiweniPost: (data: {
-    title: string;
-    body: string;
-    tags: string[];
-    coverImage?: string;
-  }) => Promise<void>;
+  onCreateKijiweniPost: (
+    data: {
+      title: string;
+      body: string;
+      tags: string[];
+      coverImage?: string;
+    },
+    options?: { silent?: boolean }
+  ) => Promise<void>;
   onCreateFursaPost: (data: {
     title: string;
     body: string;
@@ -80,9 +84,12 @@ interface TopicListProps {
     coverImage?: string;
   }) => Promise<void>;
   inlineExpandRequest?: number;
+  sharedKijiweniPayload?: SharedMediaPayload | null;
+  onClearSharedKijiweniPayload?: (id: number) => void;
   onEditTopic: (topic: Topic) => void;
   onDeleteTopic: (topic: Topic) => void;
   onOpenReport: (targetType: 'topic' | 'reply', targetId: string, topicId: string) => void;
+  onAuthorClick?: (author: { uid: string; displayName: string; photoURL?: string }) => void;
   onSignIn: (reason?: AuthPromptReason) => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
   onRequestConfirm: (opts: {
@@ -135,9 +142,12 @@ export const TopicList: React.FC<TopicListProps> = ({
   onCreateFursaPost,
   onCreateMakalaPost,
   inlineExpandRequest = 0,
+  sharedKijiweniPayload = null,
+  onClearSharedKijiweniPayload,
   onEditTopic,
   onDeleteTopic,
   onOpenReport,
+  onAuthorClick,
   onSignIn,
   onToast,
   onRequestConfirm,
@@ -194,10 +204,25 @@ export const TopicList: React.FC<TopicListProps> = ({
     if (effectiveCategory !== 'Fursa') {
       setSelectedJobType('all');
     }
-    setInlineComposerOpen(false);
+    if (!sharedKijiweniPayload) {
+      setInlineComposerOpen(false);
+    }
     setFursaInlineOpen(false);
     setMakalaInlineOpen(false);
-  }, [effectiveCategory]);
+  }, [effectiveCategory, sharedKijiweniPayload]);
+
+  useEffect(() => {
+    if (sharedKijiweniPayload && effectiveCategory === 'Kijiweni') {
+      setInlineComposerOpen(true);
+      const timer = window.setTimeout(() => {
+        inlineComposerAnchorRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+      }, 90);
+      return () => window.clearTimeout(timer);
+    }
+  }, [sharedKijiweniPayload, effectiveCategory]);
 
   useEffect(() => {
     if (inlineExpandRequest <= lastHandledExpandRef.current) return;
@@ -428,6 +453,7 @@ export const TopicList: React.FC<TopicListProps> = ({
         onInlineExpandedChange={setMakalaInlineOpen}
         expandTrigger={makalaExpandTrigger}
         onVisibleTopicIdsChange={onVisibleTopicIdsChange}
+        onAuthorClick={onAuthorClick}
       />
     );
   }
@@ -700,6 +726,8 @@ export const TopicList: React.FC<TopicListProps> = ({
                 userDisplayName={userDisplayName}
                 userPhoto={userPhoto}
                 isSuspended={isSuspended}
+                sharedPayload={sharedKijiweniPayload}
+                onClearSharedPayload={onClearSharedKijiweniPayload}
                 onSignIn={onSignIn}
                 onSubmitPost={onCreateKijiweniPost}
                 onToast={onToast}
@@ -843,6 +871,7 @@ export const TopicList: React.FC<TopicListProps> = ({
                   onEditTopic={onEditTopic}
                   onDeleteTopic={onDeleteTopic}
                   onOpenReport={onOpenReport}
+                  onAuthorClick={onAuthorClick}
                   onSignIn={onSignIn}
                   onToast={onToast}
                   onRequestConfirm={onRequestConfirm}
@@ -884,6 +913,7 @@ export const TopicList: React.FC<TopicListProps> = ({
                   onEditTopic={onEditTopic}
                   onDeleteTopic={onDeleteTopic}
                   onOpenReport={onOpenReport}
+                  onAuthorClick={onAuthorClick}
                   onSignIn={onSignIn}
                   onToast={onToast}
                   onRequestConfirm={onRequestConfirm}
@@ -936,11 +966,23 @@ export const TopicList: React.FC<TopicListProps> = ({
                       {/* Mobile Top Author Row */}
                       <div className="mb-2 flex items-center justify-between gap-2 text-xs text-slate-500 md:hidden">
                         <div className="flex min-w-0 items-center gap-1.5">
-                          <Avatar name={topic.authorName} photoURL={topic.authorPhoto} size="sm" />
-                          <span className="truncate font-semibold text-slate-800">
-                            {topic.authorName}
-                          </span>
-                          <AuthorVerificationBadge uid={topic.authorId} size="xs" />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onAuthorClick?.({
+                                uid: topic.authorId,
+                                displayName: topic.authorName,
+                                photoURL: topic.authorPhoto,
+                              })
+                            }
+                            className="flex min-w-0 items-center gap-1.5 hover:underline"
+                          >
+                            <Avatar name={topic.authorName} photoURL={topic.authorPhoto} size="sm" />
+                            <span className="truncate font-semibold text-slate-800 hover:text-[#1D4E89]">
+                              {topic.authorName}
+                            </span>
+                            <AuthorVerificationBadge uid={topic.authorId} size="xs" />
+                          </button>
                           <span aria-hidden="true">·</span>
                           <span className="shrink-0">
                             {formatTime(topic.lastActivityAt || topic.createdAt)}
@@ -959,9 +1001,20 @@ export const TopicList: React.FC<TopicListProps> = ({
 
                       {/* Desktop Left Avatar + Thread Info */}
                       <div className="flex min-w-0 flex-1 items-start gap-3.5">
-                        <div className="hidden pt-0.5 md:block shrink-0">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onAuthorClick?.({
+                              uid: topic.authorId,
+                              displayName: topic.authorName,
+                              photoURL: topic.authorPhoto,
+                            })
+                          }
+                          aria-label={tr(`Tazama wasifu wa ${topic.authorName}`, `View ${topic.authorName}'s profile`)}
+                          className="hidden pt-0.5 md:block shrink-0 rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1D4E89]"
+                        >
                           <Avatar name={topic.authorName} photoURL={topic.authorPhoto} size="md" />
-                        </div>
+                        </button>
 
                         <div className="min-w-0 flex-1">
                           {(topic.isPinned || topic.status === 'locked' || topic.acceptedReplyId) && (
@@ -1003,10 +1056,20 @@ export const TopicList: React.FC<TopicListProps> = ({
 
                           {/* Desktop Unboxed Inline Metadata */}
                           <div className="mt-1 hidden flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-slate-500 md:flex">
-                            <span className="inline-flex items-center gap-1 font-medium text-slate-700">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onAuthorClick?.({
+                                  uid: topic.authorId,
+                                  displayName: topic.authorName,
+                                  photoURL: topic.authorPhoto,
+                                })
+                              }
+                              className="inline-flex items-center gap-1 font-medium text-slate-700 hover:text-[#1D4E89] hover:underline"
+                            >
                               <span>{topic.authorName}</span>
                               <AuthorVerificationBadge uid={topic.authorId} size="xs" />
-                            </span>
+                            </button>
                             <span aria-hidden="true">·</span>
                             <button
                               type="button"

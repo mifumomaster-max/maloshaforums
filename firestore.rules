@@ -55,20 +55,30 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'uid', 'displayName', 'photoURL', 'bio', 'role', 'verificationBadge',
           'accountStatus', 'suspendedReason',
-          'topicsCount', 'repliesCount', 'createdAt', 'updatedAt'
+          'topicsCount', 'repliesCount', 'followersCount', 'createdAt', 'updatedAt'
         ])
         && data.uid is string && data.uid == userId && data.uid.size() >= 1 && data.uid.size() <= 128
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
         && data.photoURL is string && data.photoURL.size() <= 500
         && data.bio is string && data.bio.size() <= 300
         && data.role in ['member', 'moderator']
-        && (!('verificationBadge' in data) || (data.verificationBadge is string && data.verificationBadge in ['none', 'individual', 'organization', 'government', 'owner']))
+        && (!('verificationBadge' in data) || (data.verificationBadge is string && data.verificationBadge in ['none', 'individual', 'organization', 'government', 'owner', 'journalist', 'educator', 'creator']))
         && (!('accountStatus' in data) || (data.accountStatus is string && data.accountStatus in ['active', 'suspended']))
         && (!('suspendedReason' in data) || (data.suspendedReason is string && data.suspendedReason.size() <= 300))
         && data.topicsCount is int && data.topicsCount >= 0
         && data.repliesCount is int && data.repliesCount >= 0
+        && (!('followersCount' in data) || (data.followersCount is int && data.followersCount >= 0))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
+    }
+
+    function isValidUserFollower(data, followerId) {
+      return data.keys().hasAll(['followerId', 'followerName', 'followerPhoto', 'createdAt'])
+        && data.keys().hasOnly(['followerId', 'followerName', 'followerPhoto', 'createdAt'])
+        && data.followerId is string && data.followerId == followerId && isValidId(data.followerId)
+        && data.followerName is string && data.followerName.size() >= 1 && data.followerName.size() <= 80
+        && data.followerPhoto is string && data.followerPhoto.size() <= 500
+        && data.createdAt is timestamp;
     }
 
     function isValidPrivateInfo(data, userId) {
@@ -299,7 +309,7 @@ service cloud.firestore {
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
         && data.photoURL is string && data.photoURL.size() <= 500
         && data.role in ['member', 'moderator']
-        && data.verificationBadge in ['none', 'individual', 'organization', 'government', 'owner']
+        && data.verificationBadge in ['none', 'individual', 'organization', 'government', 'owner', 'journalist', 'educator', 'creator']
         && data.accountStatus in ['active', 'suspended']
         && data.issuedAt is timestamp
         && data.expiresAt is timestamp
@@ -312,18 +322,160 @@ service cloud.firestore {
           'replyingToName', 'activeArea', 'lastSeenAt', 'typingUpdatedAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
-          'uid', 'displayName', 'isOnline', 'isTypingInMchart',
+          'uid', 'displayName', 'photoURL', 'isOnline', 'isTypingInMchart',
           'replyingToName', 'activeArea', 'lastSeenAt', 'typingUpdatedAt', 'updatedAt'
         ])
         && data.uid is string && data.uid == userId && data.uid.size() >= 1 && data.uid.size() <= 128
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500))
         && data.isOnline is bool
         && data.isTypingInMchart is bool
         && data.replyingToName is string && data.replyingToName.size() <= 80
-        && data.activeArea in ['kijiweni', 'fursa', 'makala', 'mchart', 'profile', 'forum']
+        && data.activeArea in ['kijiweni', 'video', 'fursa', 'makala', 'mchart', 'profile', 'forum']
         && data.lastSeenAt is timestamp
         && data.typingUpdatedAt is timestamp
         && data.updatedAt is timestamp;
+    }
+
+    function isValidDirectChat(data, chatId) {
+      return data.keys().hasAll([
+          'chatId', 'participantA', 'participantB', 'participants',
+          'participantAName', 'participantAPhoto', 'participantBName', 'participantBPhoto',
+          'lastMessageText', 'lastSenderId', 'lastMessageAt',
+          'unreadCountA', 'unreadCountB', 'lastReadAtA', 'lastReadAtB',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'chatId', 'participantA', 'participantB', 'participants',
+          'participantAName', 'participantAPhoto', 'participantBName', 'participantBPhoto',
+          'lastMessageText', 'lastSenderId', 'lastMessageAt',
+          'unreadCountA', 'unreadCountB', 'lastReadAtA', 'lastReadAtB',
+          'createdAt', 'updatedAt'
+        ])
+        && data.chatId is string && data.chatId == chatId && data.chatId.size() >= 3 && data.chatId.size() <= 128
+        && data.participantA is string && isValidId(data.participantA)
+        && data.participantB is string && isValidId(data.participantB)
+        && data.participantA < data.participantB
+        && data.chatId == data.participantA + '__' + data.participantB
+        && data.participants is list
+        && data.participants.size() == 2
+        && data.participants[0] == data.participantA
+        && data.participants[1] == data.participantB
+        && data.participantAName is string && data.participantAName.size() >= 1 && data.participantAName.size() <= 80
+        && data.participantAPhoto is string && data.participantAPhoto.size() <= 500
+        && data.participantBName is string && data.participantBName.size() >= 1 && data.participantBName.size() <= 80
+        && data.participantBPhoto is string && data.participantBPhoto.size() <= 500
+        && data.lastMessageText is string && data.lastMessageText.size() <= 200
+        && data.lastSenderId is string && data.lastSenderId.size() <= 128
+        && data.lastMessageAt is timestamp
+        && data.unreadCountA is int && data.unreadCountA >= 0 && data.unreadCountA <= 100000
+        && data.unreadCountB is int && data.unreadCountB >= 0 && data.unreadCountB <= 100000
+        && data.lastReadAtA is timestamp
+        && data.lastReadAtB is timestamp
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDirectMessage(data, chatId) {
+      return data.keys().hasAll([
+          'chatId', 'participants', 'senderId', 'senderName', 'senderPhoto', 'text',
+          'attachmentType', 'attachmentUrl', 'attachmentName',
+          'attachmentSize', 'attachmentMime',
+          'replyToId', 'replyToSenderName', 'replyToPreview',
+          'isDeleted', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'chatId', 'participants', 'senderId', 'senderName', 'senderPhoto', 'text',
+          'attachmentType', 'attachmentUrl', 'attachmentName',
+          'attachmentSize', 'attachmentMime',
+          'replyToId', 'replyToSenderName', 'replyToPreview',
+          'isDeleted', 'viewOnce', 'viewOnceConsumed', 'viewOnceOpenedAt',
+          'createdAt', 'updatedAt'
+        ])
+        && data.chatId is string && data.chatId == chatId && data.chatId.size() >= 3 && data.chatId.size() <= 128
+        && data.participants is list && data.participants.size() == 2
+        && data.senderId is string && isValidId(data.senderId)
+        && data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80
+        && data.senderPhoto is string && data.senderPhoto.size() <= 500
+        && data.text is string && data.text.size() <= 2000
+        && data.attachmentType in ['none', 'image', 'document']
+        && data.attachmentUrl is string && data.attachmentUrl.size() <= 500
+        && data.attachmentName is string && data.attachmentName.size() <= 140
+        && data.attachmentSize is int && data.attachmentSize >= 0 && data.attachmentSize <= 15728640
+        && data.attachmentMime is string && data.attachmentMime.size() <= 120
+        && data.replyToId is string && data.replyToId.size() <= 128
+        && data.replyToSenderName is string && data.replyToSenderName.size() <= 80
+        && data.replyToPreview is string && data.replyToPreview.size() <= 160
+        && data.isDeleted is bool
+        && (!('viewOnce' in data) || data.viewOnce is bool)
+        && (!('viewOnceConsumed' in data) || data.viewOnceConsumed is bool)
+        && (!('viewOnceOpenedAt' in data) || data.viewOnceOpenedAt == null || data.viewOnceOpenedAt is timestamp)
+        && (
+          data.isDeleted == true ||
+          data.text.size() >= 1 ||
+          (('viewOnce' in data) && data.viewOnce == true && ('viewOnceConsumed' in data) && data.viewOnceConsumed == true && data.attachmentType == 'image') ||
+          (data.attachmentType in ['image', 'document'] && data.attachmentUrl.size() >= 10)
+        )
+        && (
+          data.attachmentType == 'none' ||
+          (('viewOnce' in data) && data.viewOnce == true && ('viewOnceConsumed' in data) && data.viewOnceConsumed == true && data.attachmentType == 'image' && data.attachmentUrl == '') ||
+          (data.attachmentUrl.size() >= 10 && data.attachmentUrl.matches('^https://.*'))
+        )
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMchartStatus(data) {
+      return data.keys().hasAll([
+          'authorId', 'authorName', 'authorPhoto', 'imageUrl', 'caption',
+          'privacy', 'allowedViewerIds', 'audienceTokens', 'viewsCount',
+          'createdAt', 'expiresAt'
+        ])
+        && data.keys().hasOnly([
+          'authorId', 'authorName', 'authorPhoto', 'imageUrl', 'caption',
+          'privacy', 'allowedViewerIds', 'audienceTokens', 'viewsCount',
+          'createdAt', 'expiresAt'
+        ])
+        && data.authorId is string && isValidId(data.authorId)
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80
+        && data.authorPhoto is string && data.authorPhoto.size() <= 500
+        && data.imageUrl is string && data.imageUrl.size() >= 10 && data.imageUrl.size() <= 500 && data.imageUrl.matches('^https://.*')
+        && data.caption is string && data.caption.size() <= 280
+        && data.privacy in ['members', 'selected']
+        && data.allowedViewerIds is list && data.allowedViewerIds.size() <= 50
+        && (data.allowedViewerIds.size() == 0 || isValidId(data.allowedViewerIds[0]))
+        && data.audienceTokens is list && data.audienceTokens.size() >= 1 && data.audienceTokens.size() <= 52
+        && (
+          (
+            data.privacy == 'members' &&
+            data.allowedViewerIds.size() == 0 &&
+            data.audienceTokens.size() == 1 &&
+            data.audienceTokens[0] == '__MEMBERS__'
+          ) ||
+          (
+            data.privacy == 'selected' &&
+            data.authorId in data.audienceTokens &&
+            !('__MEMBERS__' in data.audienceTokens)
+          )
+        )
+        && data.viewsCount is int && data.viewsCount >= 0
+        && data.createdAt is timestamp
+        && data.expiresAt is timestamp;
+    }
+
+    function isValidMchartStatusView(data, statusId, viewerId) {
+      return data.keys().hasAll([
+          'statusId', 'statusAuthorId', 'viewerId', 'viewerName', 'viewerPhoto', 'viewedAt'
+        ])
+        && data.keys().hasOnly([
+          'statusId', 'statusAuthorId', 'viewerId', 'viewerName', 'viewerPhoto', 'viewedAt'
+        ])
+        && data.statusId is string && data.statusId == statusId && isValidId(data.statusId)
+        && data.statusAuthorId is string && isValidId(data.statusAuthorId)
+        && data.viewerId is string && data.viewerId == viewerId && isValidId(data.viewerId)
+        && data.viewerName is string && data.viewerName.size() >= 1 && data.viewerName.size() <= 80
+        && data.viewerPhoto is string && data.viewerPhoto.size() <= 500
+        && data.viewedAt is timestamp;
     }
 
     function isValidUserNotification(data, userId) {
@@ -349,6 +501,92 @@ service cloud.firestore {
         && data.parentReplyId is string && data.parentReplyId.size() <= 128
         && data.replyPreview is string && data.replyPreview.size() >= 1 && data.replyPreview.size() <= 200
         && data.isRead is bool
+        && data.createdAt is timestamp;
+    }
+
+    function isValidPhotoUrlsList(urls) {
+      return urls is list
+        && urls.size() <= 10
+        && (urls.size() == 0 || (urls[0] is string && urls[0].size() >= 10 && urls[0].size() <= 500 && urls[0].matches('^https://.*')));
+    }
+
+    function isValidVideo(data) {
+      return data.keys().hasAll([
+          'authorId', 'authorName', 'authorPhoto', 'videoUrl', 'cloudinaryPublicId', 'thumbnailUrl',
+          'caption', 'soundName', 'tags', 'durationSec',
+          'likesCount', 'commentsCount', 'sharesCount', 'isArchived',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'authorId', 'authorName', 'authorPhoto', 'mediaType', 'videoUrl', 'photoUrls', 'audioUrl',
+          'cloudinaryPublicId', 'thumbnailUrl', 'caption', 'soundName', 'tags', 'durationSec',
+          'likesCount', 'commentsCount', 'sharesCount', 'isArchived',
+          'allowComments', 'allowDownload', 'allowLikes', 'showLikeCount',
+          'autoReplyEnabled', 'autoReplyMessage', 'autoReplyTrigger', 'autoReplyKeyword',
+          'createdAt', 'updatedAt'
+        ])
+        && data.authorId is string && isValidId(data.authorId)
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80
+        && data.authorPhoto is string && data.authorPhoto.size() <= 500
+        && (!('mediaType' in data) || (data.mediaType is string && data.mediaType in ['video', 'photo']))
+        && data.videoUrl is string && data.videoUrl.size() <= 500
+        && (!('photoUrls' in data) || isValidPhotoUrlsList(data.photoUrls))
+        && (!('audioUrl' in data) || (data.audioUrl is string && data.audioUrl.size() <= 500 && (data.audioUrl == '' || data.audioUrl.matches('^https://.*'))))
+        && (
+          (
+            (!('mediaType' in data) || data.mediaType == 'video') &&
+            data.videoUrl.size() >= 10 &&
+            data.videoUrl.matches('^https://.*')
+          ) ||
+          (
+            'mediaType' in data &&
+            data.mediaType == 'photo' &&
+            data.videoUrl == '' &&
+            'photoUrls' in data &&
+            data.photoUrls is list &&
+            data.photoUrls.size() >= 1
+          )
+        )
+        && data.cloudinaryPublicId is string && data.cloudinaryPublicId.size() <= 240
+        && data.thumbnailUrl is string && data.thumbnailUrl.size() <= 500 && (data.thumbnailUrl == '' || data.thumbnailUrl.matches('^https://.*'))
+        && data.caption is string && data.caption.size() <= 600
+        && data.soundName is string && data.soundName.size() >= 1 && data.soundName.size() <= 120
+        && isValidTagsList(data.tags)
+        && data.durationSec is int && data.durationSec >= 0 && data.durationSec <= 1200
+        && data.likesCount is int && data.likesCount >= 0
+        && data.commentsCount is int && data.commentsCount >= 0
+        && data.sharesCount is int && data.sharesCount >= 0
+        && data.isArchived is bool
+        && (!('allowComments' in data) || data.allowComments is bool)
+        && (!('allowDownload' in data) || data.allowDownload is bool)
+        && (!('allowLikes' in data) || data.allowLikes is bool)
+        && (!('showLikeCount' in data) || data.showLikeCount is bool)
+        && (!('autoReplyEnabled' in data) || data.autoReplyEnabled is bool)
+        && (!('autoReplyMessage' in data) || (data.autoReplyMessage is string && data.autoReplyMessage.size() <= 300))
+        && (!('autoReplyTrigger' in data) || (data.autoReplyTrigger is string && data.autoReplyTrigger in ['all', 'keyword']))
+        && (!('autoReplyKeyword' in data) || (data.autoReplyKeyword is string && data.autoReplyKeyword.size() <= 60))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidVideoComment(data, videoId) {
+      return data.keys().hasAll([
+          'videoId', 'authorId', 'authorName', 'authorPhoto', 'body', 'isDeleted', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'videoId', 'authorId', 'authorName', 'authorPhoto', 'body',
+          'parentCommentId', 'replyToAuthorName', 'isAutoReply',
+          'isDeleted', 'createdAt'
+        ])
+        && data.videoId is string && data.videoId == videoId && isValidId(data.videoId)
+        && data.authorId is string && isValidId(data.authorId)
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80
+        && data.authorPhoto is string && data.authorPhoto.size() <= 500
+        && data.body is string && data.body.size() >= 1 && data.body.size() <= 1000
+        && (!('parentCommentId' in data) || (data.parentCommentId is string && data.parentCommentId.size() <= 128))
+        && (!('replyToAuthorName' in data) || (data.replyToAuthorName is string && data.replyToAuthorName.size() <= 80))
+        && (!('isAutoReply' in data) || data.isAutoReply is bool)
+        && data.isDeleted is bool
         && data.createdAt is timestamp;
     }
 
@@ -400,6 +638,7 @@ service cloud.firestore {
         && (!('suspendedReason' in incoming()) || incoming().suspendedReason == '' || isAdmin())
         && incoming().topicsCount == 0
         && incoming().repliesCount == 0
+        && (!('followersCount' in incoming()) || incoming().followersCount == 0)
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
 
@@ -429,6 +668,30 @@ service cloud.firestore {
               (
                 incoming().diff(existing()).affectedKeys().hasOnly(['repliesCount', 'updatedAt']) &&
                 (incoming().repliesCount == existing().repliesCount + 1 || incoming().repliesCount == existing().repliesCount - 1)
+              )
+            )
+          ) ||
+          (
+            isNotSuspended() &&
+            request.auth.uid != userId &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['followersCount', 'updatedAt']) &&
+            incoming().followersCount is int &&
+            incoming().followersCount >= 0 &&
+            (
+              (
+                (
+                  (!('followersCount' in existing()) && incoming().followersCount == 1) ||
+                  ('followersCount' in existing() && incoming().followersCount == existing().followersCount + 1)
+                ) &&
+                !exists(/databases/$(database)/documents/users/$(userId)/followers/$(request.auth.uid)) &&
+                existsAfter(/databases/$(database)/documents/users/$(userId)/followers/$(request.auth.uid))
+              ) ||
+              (
+                'followersCount' in existing() &&
+                existing().followersCount >= 1 &&
+                incoming().followersCount == existing().followersCount - 1 &&
+                exists(/databases/$(database)/documents/users/$(userId)/followers/$(request.auth.uid)) &&
+                !existsAfter(/databases/$(database)/documents/users/$(userId)/followers/$(request.auth.uid))
               )
             )
           )
@@ -496,6 +759,27 @@ service cloud.firestore {
           && isValidId(userId)
           && isValidId(notificationId)
           && (isOwner(userId) || isAdmin());
+      }
+
+      match /followers/{followerId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(followerId);
+        allow list: if isSignedIn() && (isOwner(userId) || isAdmin() || resource.data.followerId == request.auth.uid);
+
+        allow create: if isNotSuspended()
+          && isValidId(userId)
+          && isValidId(followerId)
+          && followerId == request.auth.uid
+          && userId != request.auth.uid
+          && isValidUserFollower(incoming(), followerId)
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId));
+
+        allow update: if false;
+
+        allow delete: if isNotSuspended()
+          && isValidId(userId)
+          && isValidId(followerId)
+          && (followerId == request.auth.uid || isAdmin());
       }
     }
 
@@ -733,12 +1017,14 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(reportId);
     }
 
-    // 8. Community Group Chat Messages
+    // 8. Community Group Chat Messages (Strictly Authenticated Members Only)
     match /forum_chat_messages/{messageId} {
-      allow get: if isValidId(messageId);
-      allow list: if (resource.data.createdAt >= timestamp.date(1970, 1, 1) && request.query.limit <= 200)
+      allow get: if isSignedIn() && isValidId(messageId);
+      allow list: if isSignedIn() && (
+        (resource.data.createdAt >= timestamp.date(1970, 1, 1) && request.query.limit <= 200)
         || isAdmin()
-        || (isSignedIn() && resource.data.senderId == request.auth.uid);
+        || resource.data.senderId == request.auth.uid
+      );
 
       allow create: if isNotSuspended()
         && isValidId(messageId)
@@ -773,11 +1059,13 @@ service cloud.firestore {
         && (isAdmin() || (isNotSuspended() && existing().senderId == request.auth.uid));
     }
 
-    // 9. Owner Mchart Notes & Archive Files
+    // 9. Owner Mchart Notes & Archive Files (Strictly Authenticated Members Only)
     match /mchart_notes/{noteId} {
-      allow get: if isValidId(noteId);
-      allow list: if (resource.data.createdAt >= timestamp.date(1970, 1, 1) && request.query.limit <= 100)
-        || isAdmin();
+      allow get: if isSignedIn() && isValidId(noteId);
+      allow list: if isSignedIn() && (
+        (resource.data.createdAt >= timestamp.date(1970, 1, 1) && request.query.limit <= 100)
+        || isAdmin()
+      );
 
       allow create: if isAdmin()
         && isValidId(noteId)
@@ -926,6 +1214,372 @@ service cloud.firestore {
         && (isNotSuspended() || (incoming().isOnline == false && incoming().isTypingInMchart == false));
 
       allow delete: if isValidId(userId) && (isOwner(userId) || isAdmin());
+    }
+
+    // 12. Private 1-on-1 Direct Chats (Strictly Participant-Only — Zero Admin Override)
+    match /direct_chats/{chatId} {
+      allow get: if isSignedIn()
+        && isValidId(chatId)
+        && request.auth.uid in existing().participants;
+
+      allow list: if isSignedIn()
+        && request.auth.uid in resource.data.participants;
+
+      allow create: if isNotSuspended()
+        && isValidId(chatId)
+        && isValidDirectChat(incoming(), chatId)
+        && (request.auth.uid == incoming().participantA || request.auth.uid == incoming().participantB)
+        && incoming().unreadCountA == 0
+        && incoming().unreadCountB == 0
+        && incoming().lastMessageAt == request.time
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isNotSuspended()
+        && isValidId(chatId)
+        && isValidDirectChat(incoming(), chatId)
+        && request.auth.uid in existing().participants
+        && incoming().chatId == existing().chatId
+        && incoming().participantA == existing().participantA
+        && incoming().participantB == existing().participantB
+        && incoming().participants == existing().participants
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (incoming().lastSenderId == existing().lastSenderId || incoming().lastSenderId == request.auth.uid);
+
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow get: if isSignedIn()
+          && isValidId(chatId)
+          && isValidId(messageId)
+          && request.auth.uid in existing().participants;
+
+        allow list: if isSignedIn()
+          && request.auth.uid in resource.data.participants;
+
+        allow create: if isNotSuspended()
+          && isValidId(chatId)
+          && isValidId(messageId)
+          && isValidDirectMessage(incoming(), chatId)
+          && incoming().senderId == request.auth.uid
+          && request.auth.uid in incoming().participants
+          && exists(/databases/$(database)/documents/direct_chats/$(chatId))
+          && incoming().participants == get(/databases/$(database)/documents/direct_chats/$(chatId)).data.participants
+          && incoming().isDeleted == false
+          && (!('viewOnceConsumed' in incoming()) || incoming().viewOnceConsumed == false)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+
+        allow update: if isNotSuspended()
+          && isValidId(chatId)
+          && isValidId(messageId)
+          && isValidDirectMessage(incoming(), chatId)
+          && incoming().senderId == existing().senderId
+          && incoming().chatId == existing().chatId
+          && incoming().participants == existing().participants
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && existing().isDeleted == false
+          && (
+            (
+              existing().senderId == request.auth.uid
+              && incoming().isDeleted == true
+              && incoming().attachmentType == 'none'
+              && incoming().attachmentUrl == ''
+              && incoming().attachmentName == ''
+              && incoming().attachmentSize == 0
+              && incoming().attachmentMime == ''
+            ) ||
+            (
+              request.auth.uid in existing().participants
+              && existing().senderId != request.auth.uid
+              && ('viewOnce' in existing()) && existing().viewOnce == true
+              && (!('viewOnceConsumed' in existing()) || existing().viewOnceConsumed == false)
+              && incoming().viewOnce == true
+              && incoming().viewOnceConsumed == true
+              && incoming().viewOnceOpenedAt == request.time
+              && incoming().attachmentType == existing().attachmentType
+              && incoming().attachmentUrl == ''
+              && incoming().diff(existing()).affectedKeys().hasOnly(['viewOnceConsumed', 'viewOnceOpenedAt', 'attachmentUrl', 'updatedAt'])
+            )
+          );
+
+        allow delete: if isNotSuspended()
+          && isValidId(chatId)
+          && isValidId(messageId)
+          && existing().senderId == request.auth.uid;
+      }
+    }
+
+    // 13. WhatsApp-Style 24h Photo Statuses (Authenticated Members Only + Audience Privacy)
+    match /mchart_statuses/{statusId} {
+      allow get: if isValidId(statusId)
+        && isSignedIn()
+        && (
+          existing().authorId == request.auth.uid ||
+          (
+            existing().expiresAt > request.time &&
+            (
+              (existing().privacy == 'members' && '__MEMBERS__' in existing().audienceTokens) ||
+              request.auth.uid in existing().audienceTokens
+            )
+          )
+        );
+
+      allow list: if isSignedIn()
+        && (
+          '__MEMBERS__' in resource.data.audienceTokens ||
+          request.auth.uid in resource.data.audienceTokens ||
+          resource.data.authorId == request.auth.uid
+        );
+
+      allow create: if isNotSuspended()
+        && isValidId(statusId)
+        && isValidMchartStatus(incoming())
+        && incoming().authorId == request.auth.uid
+        && incoming().viewsCount == 0
+        && incoming().createdAt == request.time
+        && incoming().expiresAt > request.time
+        && incoming().expiresAt <= request.time + duration.value(26, 'h');
+
+      allow update: if isSignedIn()
+        && isValidId(statusId)
+        && isValidMchartStatus(incoming())
+        && incoming().authorId == existing().authorId
+        && incoming().createdAt == existing().createdAt
+        && incoming().expiresAt == existing().expiresAt
+        && (
+          (
+            isNotSuspended()
+            && existing().authorId == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['caption', 'privacy', 'allowedViewerIds', 'audienceTokens'])
+          ) ||
+          (
+            isNotSuspended()
+            && existing().expiresAt > request.time
+            && (
+              '__MEMBERS__' in existing().audienceTokens ||
+              request.auth.uid in existing().audienceTokens
+            )
+            && incoming().diff(existing()).affectedKeys().hasOnly(['viewsCount'])
+            && incoming().viewsCount == existing().viewsCount + 1
+            && existsAfter(/databases/$(database)/documents/mchart_statuses/$(statusId)/views/$(request.auth.uid))
+          )
+        );
+
+      allow delete: if isSignedIn()
+        && isValidId(statusId)
+        && (existing().authorId == request.auth.uid || isAdmin());
+
+      match /views/{viewerId} {
+        allow get: if isSignedIn()
+          && isValidId(statusId)
+          && isValidId(viewerId)
+          && (viewerId == request.auth.uid || existing().statusAuthorId == request.auth.uid);
+
+        allow list: if isSignedIn()
+          && resource.data.statusAuthorId == request.auth.uid;
+
+        allow create: if isNotSuspended()
+          && isValidId(statusId)
+          && isValidId(viewerId)
+          && isOwner(viewerId)
+          && isValidMchartStatusView(incoming(), statusId, viewerId)
+          && incoming().viewedAt == request.time
+          && exists(/databases/$(database)/documents/mchart_statuses/$(statusId))
+          && incoming().statusAuthorId == get(/databases/$(database)/documents/mchart_statuses/$(statusId)).data.authorId
+          && get(/databases/$(database)/documents/mchart_statuses/$(statusId)).data.expiresAt > request.time
+          && (
+            (get(/databases/$(database)/documents/mchart_statuses/$(statusId)).data.privacy == 'members' &&
+             '__MEMBERS__' in get(/databases/$(database)/documents/mchart_statuses/$(statusId)).data.audienceTokens) ||
+            request.auth.uid in get(/databases/$(database)/documents/mchart_statuses/$(statusId)).data.audienceTokens
+          );
+
+        allow update: if false;
+
+        allow delete: if isSignedIn()
+          && isValidId(statusId)
+          && isValidId(viewerId)
+          && (existing().statusAuthorId == request.auth.uid || isAdmin());
+      }
+    }
+
+    // 14. TikTok-Style Cloudinary Videos & Subcollections
+    match /videos/{videoId} {
+      allow get: if isValidId(videoId)
+        && (existing().isArchived == false || isAdmin() || (isSignedIn() && existing().authorId == request.auth.uid));
+
+      allow list: if resource.data.isArchived == false
+        || isAdmin()
+        || (isSignedIn() && resource.data.authorId == request.auth.uid);
+
+      allow create: if isNotSuspended()
+        && isValidId(videoId)
+        && isValidVideo(incoming())
+        && incoming().authorId == request.auth.uid
+        && incoming().isArchived == false
+        && incoming().likesCount == 0
+        && incoming().commentsCount == 0
+        && incoming().sharesCount == 0
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isNotSuspended()
+        && isValidId(videoId)
+        && isValidVideo(incoming())
+        && incoming().authorId == existing().authorId
+        && incoming().videoUrl == existing().videoUrl
+        && incoming().cloudinaryPublicId == existing().cloudinaryPublicId
+        && incoming().createdAt == existing().createdAt
+        && (
+          // Action 1: Admin Moderation
+          (
+            isAdmin() &&
+            incoming().updatedAt == request.time
+          ) ||
+          // Action 2: Author Caption / Sound / Settings / Archive Update
+          (
+            existing().authorId == request.auth.uid &&
+            incoming().updatedAt == request.time &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'caption', 'soundName', 'tags', 'isArchived',
+              'allowComments', 'allowDownload', 'allowLikes', 'showLikeCount',
+              'autoReplyEnabled', 'autoReplyMessage', 'autoReplyTrigger', 'autoReplyKeyword',
+              'updatedAt'
+            ])
+          ) ||
+          // Action 3: Atomic Like Counter Sync
+          (
+            existing().isArchived == false &&
+            (!('allowLikes' in existing()) || existing().allowLikes != false) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['likesCount']) &&
+            (
+              (
+                incoming().likesCount == existing().likesCount + 1 &&
+                !exists(/databases/$(database)/documents/videos/$(videoId)/likes/$(request.auth.uid)) &&
+                existsAfter(/databases/$(database)/documents/videos/$(videoId)/likes/$(request.auth.uid))
+              ) ||
+              (
+                incoming().likesCount == existing().likesCount - 1 &&
+                exists(/databases/$(database)/documents/videos/$(videoId)/likes/$(request.auth.uid)) &&
+                !existsAfter(/databases/$(database)/documents/videos/$(videoId)/likes/$(request.auth.uid))
+              )
+            )
+          ) ||
+          // Action 4: Comment Counter Sync (supports +1 user comment or +2 with verified auto-reply)
+          (
+            existing().isArchived == false &&
+            incoming().updatedAt == request.time &&
+            (
+              incoming().commentsCount == existing().commentsCount + 1 ||
+              (
+                incoming().commentsCount == existing().commentsCount + 2 &&
+                'autoReplyEnabled' in existing() &&
+                existing().autoReplyEnabled == true
+              ) ||
+              incoming().commentsCount == existing().commentsCount - 1
+            ) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['commentsCount', 'updatedAt'])
+          ) ||
+          // Action 5: Share Counter Increment
+          (
+            existing().isArchived == false &&
+            incoming().sharesCount == existing().sharesCount + 1 &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['sharesCount'])
+          )
+        );
+
+      allow delete: if isSignedIn()
+        && isValidId(videoId)
+        && (isAdmin() || (isNotSuspended() && existing().authorId == request.auth.uid));
+
+      match /likes/{userId} {
+        allow get: if isSignedIn() && isValidId(videoId) && isValidId(userId) && userId == request.auth.uid;
+        allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+
+        allow create: if isNotSuspended()
+          && isValidId(videoId)
+          && isValidId(userId)
+          && userId == request.auth.uid
+          && isValidVote(incoming(), userId)
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/videos/$(videoId))
+          && (!('allowLikes' in get(/databases/$(database)/documents/videos/$(videoId)).data) || get(/databases/$(database)/documents/videos/$(videoId)).data.allowLikes != false);
+
+        allow update: if false;
+
+        allow delete: if isNotSuspended()
+          && isValidId(videoId)
+          && isValidId(userId)
+          && userId == request.auth.uid;
+      }
+
+      match /comments/{commentId} {
+        allow get: if isValidId(videoId)
+          && isValidId(commentId)
+          && (existing().isDeleted == false || isAdmin() || (isSignedIn() && existing().authorId == request.auth.uid));
+
+        allow list: if resource.data.isDeleted == false
+          || isAdmin()
+          || (isSignedIn() && resource.data.authorId == request.auth.uid);
+
+        allow create: if isNotSuspended()
+          && isValidId(videoId)
+          && isValidId(commentId)
+          && isValidVideoComment(incoming(), videoId)
+          && incoming().isDeleted == false
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/videos/$(videoId))
+          && get(/databases/$(database)/documents/videos/$(videoId)).data.isArchived == false
+          && (
+            !('allowComments' in get(/databases/$(database)/documents/videos/$(videoId)).data) ||
+            get(/databases/$(database)/documents/videos/$(videoId)).data.allowComments != false ||
+            get(/databases/$(database)/documents/videos/$(videoId)).data.authorId == request.auth.uid ||
+            isAdmin()
+          )
+          && (
+            (
+              incoming().authorId == request.auth.uid &&
+              (!('isAutoReply' in incoming()) || incoming().isAutoReply == false)
+            ) ||
+            (
+              'isAutoReply' in incoming() &&
+              incoming().isAutoReply == true &&
+              'autoReplyEnabled' in get(/databases/$(database)/documents/videos/$(videoId)).data &&
+              get(/databases/$(database)/documents/videos/$(videoId)).data.autoReplyEnabled == true &&
+              'autoReplyMessage' in get(/databases/$(database)/documents/videos/$(videoId)).data &&
+              get(/databases/$(database)/documents/videos/$(videoId)).data.autoReplyMessage.size() >= 1 &&
+              incoming().authorId == get(/databases/$(database)/documents/videos/$(videoId)).data.authorId &&
+              incoming().body == get(/databases/$(database)/documents/videos/$(videoId)).data.autoReplyMessage
+            )
+          )
+          && (
+            getAfter(/databases/$(database)/documents/videos/$(videoId)).data.commentsCount ==
+               get(/databases/$(database)/documents/videos/$(videoId)).data.commentsCount + 1 ||
+            (
+              getAfter(/databases/$(database)/documents/videos/$(videoId)).data.commentsCount ==
+                 get(/databases/$(database)/documents/videos/$(videoId)).data.commentsCount + 2 &&
+              'autoReplyEnabled' in get(/databases/$(database)/documents/videos/$(videoId)).data &&
+              get(/databases/$(database)/documents/videos/$(videoId)).data.autoReplyEnabled == true
+            )
+          );
+
+        allow update: if isSignedIn()
+          && isValidId(videoId)
+          && isValidId(commentId)
+          && isValidVideoComment(incoming(), videoId)
+          && incoming().videoId == existing().videoId
+          && incoming().authorId == existing().authorId
+          && incoming().createdAt == existing().createdAt
+          && (isAdmin() || (isNotSuspended() && existing().authorId == request.auth.uid))
+          && incoming().diff(existing()).affectedKeys().hasOnly(['isDeleted']);
+
+        allow delete: if isSignedIn()
+          && isValidId(videoId)
+          && isValidId(commentId)
+          && (isAdmin() || (isNotSuspended() && existing().authorId == request.auth.uid));
+      }
     }
   }
 }

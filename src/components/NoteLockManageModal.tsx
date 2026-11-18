@@ -40,7 +40,8 @@ export const NoteLockManageModal: React.FC<NoteLockManageModalProps> = ({
   const { tr } = useLanguage();
   const [isLocked, setIsLocked] = useState(true);
   const [targetMode, setTargetMode] = useState<NoteLockTargetMode>('all');
-  const [priceInput, setPriceInput] = useState('5000');
+  const [lockModeType, setLockModeType] = useState<'admin_only' | 'paid'>('admin_only');
+  const [priceInput, setPriceInput] = useState('0');
   const [currency, setCurrency] = useState('TZS');
   const [instructions, setInstructions] = useState('');
   const [savingConfig, setSavingConfig] = useState(false);
@@ -55,9 +56,9 @@ export const NoteLockManageModal: React.FC<NoteLockManageModalProps> = ({
     if (!note) return;
     setIsLocked(note.isLocked !== undefined ? Boolean(note.isLocked) : true);
     setTargetMode(note.lockedTargetMode === 'selected' ? 'selected' : 'all');
-    setPriceInput(
-      note.lockPrice && note.lockPrice > 0 ? String(note.lockPrice) : '5000'
-    );
+    const hasPrice = Boolean(note.lockPrice && note.lockPrice > 0);
+    setLockModeType(hasPrice ? 'paid' : 'admin_only');
+    setPriceInput(hasPrice ? String(note.lockPrice) : '0');
     setCurrency(note.lockCurrency || 'TZS');
     setInstructions(
       note.paymentInstructions ||
@@ -167,10 +168,13 @@ export const NoteLockManageModal: React.FC<NoteLockManageModalProps> = ({
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     if (savingConfig) return;
-    const numericPrice = Math.max(0, Math.floor(Number(priceInput.replace(/[^0-9]/g, '') || 0)));
-    if (isLocked && numericPrice <= 0) {
+    const numericPrice =
+      lockModeType === 'admin_only'
+        ? 0
+        : Math.max(0, Math.floor(Number(priceInput.replace(/[^0-9]/g, '') || 0)));
+    if (isLocked && lockModeType === 'paid' && numericPrice <= 0) {
       onToast(
-        tr('Weka kiasi cha kulipia (zaidi ya 0) ili kufunga note hii.', 'Enter a valid payment amount greater than 0.'),
+        tr('Weka kiasi cha kulipia (zaidi ya 0) au chagua "Funga Kabisa na Msimamizi".', 'Enter a payment amount greater than 0 or pick Admin Lock Only.'),
         'error'
       );
       return;
@@ -186,9 +190,11 @@ export const NoteLockManageModal: React.FC<NoteLockManageModalProps> = ({
         paymentInstructions: instructions,
       });
       onToast(
-        isLocked
-          ? tr('Note imefungwa kwa malipo kikamilifu.', 'Note locked with payment requirement.')
-          : tr('Note imefunguliwa — sasa ni bure kwa wote.', 'Note unlocked for all members.')
+        !isLocked
+          ? tr('Note imefunguliwa — sasa ni bure kwa wote.', 'Note unlocked for all members.')
+          : numericPrice === 0
+            ? tr('Note imefungwa kabisa — wasio na ruhusa hawawezi kusoma.', 'Note strictly locked by admin.')
+            : tr('Note imefungwa kwa malipo kikamilifu.', 'Note locked with payment requirement.')
       );
     } catch (err) {
       onToast(
@@ -340,42 +346,84 @@ export const NoteLockManageModal: React.FC<NoteLockManageModalProps> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-2.5">
-                  <div className="col-span-2">
-                    <label htmlFor="lock-price-input" className="block text-xs font-semibold text-slate-700">
-                      {tr('Kiasi cha Kulipia', 'Payment Amount')}
-                    </label>
-                    <input
-                      id="lock-price-input"
-                      type="number"
-                      min={1}
-                      max={100000000}
-                      value={priceInput}
-                      onChange={(e) => setPriceInput(e.target.value)}
-                      placeholder="5000"
-                      className="mt-1 min-h-[44px] w-full rounded-xl border border-slate-300 px-3 text-sm font-bold text-slate-900 tabular-nums focus:border-[#075E54] focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="lock-currency-select" className="block text-xs font-semibold text-slate-700">
-                      {tr('Sarafu', 'Currency')}
-                    </label>
-                    <select
-                      id="lock-currency-select"
-                      value={currency}
-                      onChange={(e) => setCurrency(e.target.value)}
-                      className="mt-1 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-2.5 text-sm font-bold text-slate-900 focus:border-[#075E54] focus:outline-none"
+                <div>
+                  <span className="block text-xs font-semibold text-slate-700">
+                    {tr('Aina ya Kufuli (Lock Mode)', 'Lock Access Mode')}
+                  </span>
+                  <div className="mt-1.5 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLockModeType('admin_only');
+                        setPriceInput('0');
+                      }}
+                      className={`flex min-h-[44px] items-center gap-2 rounded-xl border px-3 py-2 text-left text-xs font-bold ${
+                        lockModeType === 'admin_only'
+                          ? 'border-[#0E2640] bg-slate-50 text-[#0E2640]'
+                          : 'border-slate-200 bg-white text-slate-600'
+                      }`}
                     >
-                      <option value="TZS">TZS</option>
-                      <option value="KES">KES</option>
-                      <option value="USD">USD</option>
-                    </select>
+                      <Lock className="h-3.5 w-3.5 text-red-600" aria-hidden="true" />
+                      <span>{tr('Funga Kabisa (Ruhusa ya Msimamizi Tu)', 'Strict Admin Lock (No Reading)')}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLockModeType('paid');
+                        if (!priceInput || priceInput === '0') setPriceInput('5000');
+                      }}
+                      className={`flex min-h-[44px] items-center gap-2 rounded-xl border px-3 py-2 text-left text-xs font-bold ${
+                        lockModeType === 'paid'
+                          ? 'border-[#0E2640] bg-slate-50 text-[#0E2640]'
+                          : 'border-slate-200 bg-white text-slate-600'
+                      }`}
+                    >
+                      <ShieldCheck className="h-3.5 w-3.5 text-[#075E54]" aria-hidden="true" />
+                      <span>{tr('Funga Kwa Malipo (Paid Unlock)', 'Locked Behind Payment')}</span>
+                    </button>
                   </div>
                 </div>
 
+                {lockModeType === 'paid' && (
+                  <div className="grid grid-cols-3 gap-2.5">
+                    <div className="col-span-2">
+                      <label htmlFor="lock-price-input" className="block text-xs font-semibold text-slate-700">
+                        {tr('Kiasi cha Kulipia', 'Payment Amount')}
+                      </label>
+                      <input
+                        id="lock-price-input"
+                        type="number"
+                        min={1}
+                        max={100000000}
+                        value={priceInput}
+                        onChange={(e) => setPriceInput(e.target.value)}
+                        placeholder="5000"
+                        className="mt-1 min-h-[44px] w-full rounded-xl border border-slate-300 px-3 text-sm font-bold text-slate-900 tabular-nums focus:border-[#075E54] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="lock-currency-select" className="block text-xs font-semibold text-slate-700">
+                        {tr('Sarafu', 'Currency')}
+                      </label>
+                      <select
+                        id="lock-currency-select"
+                        value={currency}
+                        onChange={(e) => setCurrency(e.target.value)}
+                        className="mt-1 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-2.5 text-sm font-bold text-slate-900 focus:border-[#075E54] focus:outline-none"
+                      >
+                        <option value="TZS">TZS</option>
+                        <option value="KES">KES</option>
+                        <option value="USD">USD</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+
                 <div>
                   <label htmlFor="lock-pay-instructions" className="block text-xs font-semibold text-slate-700">
-                    {tr('Ujumbe wa Kulipia (Namba ya Malipo / Maelekezo)', 'Payment Message & Instructions')}
+                    {lockModeType === 'paid'
+                      ? tr('Ujumbe wa Kulipia (Namba ya Malipo / Maelekezo)', 'Payment Message & Instructions')
+                      : tr('Ujumbe wa Kufuli kwa Wasomaji (Hiari)', 'Lock Notice for Members (Optional)')}
                   </label>
                   <textarea
                     id="lock-pay-instructions"
@@ -383,10 +431,17 @@ export const NoteLockManageModal: React.FC<NoteLockManageModalProps> = ({
                     maxLength={500}
                     value={instructions}
                     onChange={(e) => setInstructions(e.target.value)}
-                    placeholder={tr(
-                      'Mfano: Lipia kwenda M-Pesa 07XX XXX XXX (Jina: ...) kisha tuma jina au kumbukumbu ya muamala.',
-                      'e.g. Pay via M-Pesa 07XX XXX XXX and enter your transaction code below.'
-                    )}
+                    placeholder={
+                      lockModeType === 'paid'
+                        ? tr(
+                            'Mfano: Lipia kwenda M-Pesa 07XX XXX XXX (Jina: ...) kisha tuma jina au kumbukumbu ya muamala.',
+                            'e.g. Pay via M-Pesa 07XX XXX XXX and enter your transaction code below.'
+                          )
+                        : tr(
+                            'Mfano: Note hii imefungwa na msimamizi kwa muda. Wasiliana na msimamizi kwa ruhusa.',
+                            'e.g. This note is strictly locked by the admin.'
+                          )
+                    }
                     className="mt-1 w-full rounded-xl border border-slate-300 p-3 text-sm text-slate-900 focus:border-[#075E54] focus:outline-none"
                   />
                 </div>

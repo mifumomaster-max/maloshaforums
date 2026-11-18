@@ -50,7 +50,7 @@ import {
   UserProfile,
 } from '../types';
 import { downloadNoteAsPdf, downloadUploadedPdfFile } from '../utils/notePdfGenerator';
-import { MobilePdfNoteReader } from './MobilePdfNoteReader';
+import { extractPlainTextFromPdfFile, MobilePdfNoteReader } from './MobilePdfNoteReader';
 import { NoteFormattedRenderer } from './NoteFormattedRenderer';
 import { NoteLockManageModal } from './NoteLockManageModal';
 
@@ -367,7 +367,10 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
     if (!file || !user || !isAdmin) return;
     setUploadingPdf(true);
     try {
-      const uploaded = await uploadNotePdfToCloudinary(file);
+      const [uploaded, extractedText] = await Promise.all([
+        uploadNotePdfToCloudinary(file),
+        extractPlainTextFromPdfFile(file),
+      ]);
       setPendingPdf(uploaded);
       if (!titleInput.trim()) {
         const cleanName = uploaded.fileName
@@ -376,10 +379,13 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
           .trim();
         if (cleanName) setTitleInput(cleanName);
       }
+      if (!rawText.trim() && extractedText.trim().length >= 10) {
+        setRawText(extractedText);
+      }
       onToast(
         tr(
-          `PDF "${uploaded.fileName}" imepakiwa tayari kuchapishwa.`,
-          `PDF "${uploaded.fileName}" uploaded and ready.`
+          `PDF "${uploaded.fileName}" imepakiwa tayari kusomwa ndani ya mfumo.`,
+          `PDF "${uploaded.fileName}" uploaded and ready for in-app reading.`
         )
       );
     } catch (err) {
@@ -412,16 +418,6 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
       0,
       Math.floor(Number(composerLockPrice.replace(/[^0-9]/g, '') || 0))
     );
-    if (composerLockEnabled && numericPrice <= 0) {
-      onToast(
-        tr(
-          'Weka kiasi cha kulipia (zaidi ya 0) kwa note iliyofungwa.',
-          'Enter a payment amount greater than 0 for the locked note.'
-        ),
-        'error'
-      );
-      return;
-    }
 
     if (
       composerLockEnabled &&
@@ -524,6 +520,16 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
   };
 
   const handleCopyNote = async (note: MchartNote) => {
+    if (isNoteLockedForViewer(note)) {
+      onToast(
+        tr(
+          'Note hii imefungwa na msimamizi — huwezi kunakili wala kusoma.',
+          'This note is locked — copying and reading are disabled.'
+        ),
+        'error'
+      );
+      return;
+    }
     try {
       const resolved = await resolveNoteWithContent(note);
       const header = resolved.subtitle
@@ -802,7 +808,7 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                 ` · ${tr(`Maneno ${liveSelectedNote.wordCount}`, `${liveSelectedNote.wordCount} words`)}`}
             </p>
 
-            {/* Locked Note Payment Wall */}
+            {/* Locked Note Gate (Strict Admin Lock OR Payment Wall) */}
             {lockedForViewer ? (
               <div className="mt-6 rounded-2xl border border-amber-200 bg-white p-5 shadow-sm sm:p-7">
                 <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -812,13 +818,20 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                     </div>
                     <div>
                       <h2 className="font-display text-lg font-bold text-[#0E2640]">
-                        {tr('Notes Hii Imefungwa', 'This Note Is Locked')}
+                        {(liveSelectedNote.lockPrice || 0) > 0
+                          ? tr('Notes Hii Imefungwa Kwa Malipo', 'This Note Is Locked Behind Payment')
+                          : tr('Notes Hii Imefungwa na Msimamizi', 'This Note Is Locked by Admin')}
                       </h2>
                       <p className="mt-0.5 text-xs text-slate-600">
-                        {tr(
-                          'Lipia kiasi kilichowekwa na mmiliki ili kufungua maandishi yote, code, na PDF.',
-                          'Pay the required fee set by the owner to unlock full notes, code snippets, and PDF.'
-                        )}
+                        {(liveSelectedNote.lockPrice || 0) > 0
+                          ? tr(
+                              'Lipia kiasi kilichowekwa na mmiliki ili kufungua maandishi yote, code, na PDF.',
+                              'Pay the required fee set by the owner to unlock full notes, code snippets, and PDF.'
+                            )
+                          : tr(
+                              'Msimamizi amefunga note hii isisomwe. Huwezi kusoma maudhui, code, wala PDF hadi msimamizi akufungulie.',
+                              'An admin has locked this note. You cannot read its contents, code, or PDF until unlocked by the admin.'
+                            )}
                       </p>
                     </div>
                   </div>
@@ -835,26 +848,30 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                   )}
                 </div>
 
-                {/* Owner's Payment Message */}
-                <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-xs font-bold text-[#0E2640] uppercase">
-                    {tr('Ujumbe & Maelekezo ya Malipo', 'Payment Instructions')}
-                  </p>
-                  <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
-                    {liveSelectedNote.paymentInstructions ||
-                      tr(
-                        `Tafadhali lipia ${priceLabel || 'ada ya note'} kisha tuma jina au kumbukumbu ya malipo yako hapa chini ili mmiliki akufungulie note hii.`,
-                        `Please pay ${priceLabel || 'the required fee'} and submit your transaction reference below so the owner can unlock this note for you.`
-                      )}
-                  </p>
-                </div>
+                {/* Owner's Message */}
+                {(liveSelectedNote.paymentInstructions || (liveSelectedNote.lockPrice || 0) > 0) && (
+                  <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-xs font-bold text-[#0E2640] uppercase">
+                      {(liveSelectedNote.lockPrice || 0) > 0
+                        ? tr('Ujumbe & Maelekezo ya Malipo', 'Payment Instructions')
+                        : tr('Ujumbe wa Msimamizi', 'Admin Notice')}
+                    </p>
+                    <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
+                      {liveSelectedNote.paymentInstructions ||
+                        tr(
+                          `Tafadhali lipia ${priceLabel || 'ada ya note'} kisha tuma jina au kumbukumbu ya malipo yako hapa chini ili mmiliki akufungulie note hii.`,
+                          `Please pay ${priceLabel || 'the required fee'} and submit your transaction reference below so the owner can unlock this note for you.`
+                        )}
+                    </p>
+                  </div>
+                )}
 
                 {!user ? (
                   <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50/70 p-4 text-center">
                     <p className="text-xs font-medium text-slate-700">
                       {tr(
-                        'Ingia au fungua akaunti yako kwanza ili uweze kulipia na kufunguliwa note hii.',
-                        'Sign in or create an account first so this note can be unlocked for your account.'
+                        'Ingia au fungua akaunti yako kwanza.',
+                        'Sign in or create an account first.'
                       )}
                     </p>
                     <button
@@ -862,8 +879,17 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                       onClick={() => onSignIn?.()}
                       className="mt-3 inline-flex min-h-[44px] items-center justify-center rounded-xl bg-[#075E54] px-5 py-2 text-xs font-bold text-white hover:bg-[#064E46]"
                     >
-                      {tr('Ingia / Jisajili Ili Kulipia', 'Sign In to Pay & Unlock')}
+                      {tr('Ingia / Jisajili', 'Sign In')}
                     </button>
+                  </div>
+                ) : (liveSelectedNote.lockPrice || 0) <= 0 ? (
+                  <div className="mt-5 rounded-xl border border-red-200 bg-red-50/70 p-4 text-center">
+                    <p className="text-xs font-semibold text-red-900">
+                      {tr(
+                        'Ufikiaji wa note hii umezuiwa kabisa na msimamizi kwa akaunti yako.',
+                        'Access to this note is strictly blocked by the platform administrator.'
+                      )}
+                    </p>
                   </div>
                 ) : myAccess?.status === 'pending' ? (
                   <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
@@ -968,6 +994,7 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                     <MobilePdfNoteReader
                       pdfUrl={effectivePdfUrl}
                       fileName={effectivePdfName}
+                      fallbackBody={effectiveBody}
                       onDownload={() => void handleDownloadPdf(liveSelectedNote)}
                     />
                   </div>
@@ -1364,12 +1391,12 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                           htmlFor="composer-lock-price"
                           className="block text-[11px] font-semibold text-slate-700"
                         >
-                          {tr('Kiasi cha Kulipia', 'Price Amount')}
+                          {tr('Kiasi cha Kulipia (0 = Funga kabisa bila malipo)', 'Price Amount (0 = Strict admin lock)')}
                         </label>
                         <input
                           id="composer-lock-price"
                           type="number"
-                          min={1}
+                          min={0}
                           value={composerLockPrice}
                           onChange={(e) => setComposerLockPrice(e.target.value)}
                           className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 bg-white px-3 text-sm font-bold text-slate-900 tabular-nums focus:border-[#075E54] focus:outline-none"

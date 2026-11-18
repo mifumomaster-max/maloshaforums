@@ -33,6 +33,22 @@ export default defineConfig(() => {
           scope: '/',
           lang: 'sw',
           categories: ['social', 'news', 'community'],
+          share_target: {
+            action: '/share-target',
+            method: 'POST',
+            enctype: 'multipart/form-data',
+            params: {
+              title: 'title',
+              text: 'text',
+              url: 'url',
+              files: [
+                {
+                  name: 'media',
+                  accept: ['image/*', 'image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+                },
+              ],
+            },
+          },
           icons: [
             {
               src: '/pwa-192x192.png',
@@ -56,9 +72,10 @@ export default defineConfig(() => {
         },
         workbox: {
           importScripts: ['/sw-notifications.js'],
-          globPatterns: ['**/*.{js,css,html,ico,svg,woff,woff2}', 'pwa-*.png', 'apple-touch-icon.png'],
+          globPatterns: ['**/*.{js,mjs,css,html,ico,svg,woff,woff2}', 'pwa-*.png', 'apple-touch-icon.png'],
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
           navigateFallback: '/index.html',
+          navigateFallbackDenylist: [/^\/share-target/],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/res\.cloudinary\.com\/.*/i,
@@ -70,7 +87,7 @@ export default defineConfig(() => {
                   maxAgeSeconds: 60 * 60 * 24 * 14,
                 },
                 cacheableResponse: {
-                  statuses: [0, 200],
+                  statuses: [200],
                 },
               },
             },

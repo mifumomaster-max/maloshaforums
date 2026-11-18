@@ -15,18 +15,22 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore';
-import { ADMIN_EMAIL, db, handleFirestoreError, OperationType } from '../firebase';
+import { ADMIN_EMAIL, auth, db, handleFirestoreError, OperationType } from '../firebase';
 import {
   AccountStatus,
   ChatAttachmentType,
+  DirectChatThread,
   MAKALA_COVERS,
   MchartNote,
   MchartNoteAccess,
   MchartNoteContent,
+  MchartStatus,
+  MemberDirectoryCandidate,
   MemberIdRecord,
   MemberIdVerificationResult,
   PresenceArea,
   ReportReason,
+  StatusPrivacyMode,
   TopicCategory,
   TopicStatus,
   UserNotificationType,
@@ -919,6 +923,7 @@ export interface SendChatMessageInput {
   replyToId?: string;
   replyToSenderName?: string;
   replyToPreview?: string;
+  viewOnce?: boolean;
 }
 
 export function generateChatMessageId(): string {
@@ -1477,7 +1482,11 @@ export async function createMchartNote(
   const path = `mchart_notes/${noteRef.id}`;
 
   const lockedPlaceholderBody =
-    'Maudhui ya note hii yamefungwa kwa malipo. Lipia kiasi kilichowekwa ili kufungua na kusoma.';
+    'Maudhui ya note hii yamefungwa na msimamizi. Haiwezi kusomwa mpaka uwe na ruhusa au malipo yathibitishwe.';
+  const lockedPlaceholderSummary =
+    lockPrice > 0
+      ? `Imefungwa kwa malipo (${lockCurrency} ${lockPrice.toLocaleString()}). Lipia au omba ruhusa ya msimamizi kusoma.`
+      : 'Imefungwa na msimamizi — haiwezi kusomwa mpaka upate ruhusa ya msimamizi.';
 
   try {
     await setDoc(noteRef, {
@@ -1487,12 +1496,7 @@ export async function createMchartNote(
       title: formatted.title,
       subtitle: formatted.subtitle,
       body: isLocked ? lockedPlaceholderBody : formatted.body,
-      summary: isLocked
-        ? sanitizeTextInput(
-            formatted.subtitle || 'Note maalum yenye malipo ya kufungua.',
-            240
-          )
-        : formatted.summary,
+      summary: isLocked ? lockedPlaceholderSummary : formatted.summary,
       fileName: hasPdf && !hasText ? cleanPdfName.slice(0, 120) : formatted.fileName,
       wordCount: formatted.wordCount,
       isArchived: Boolean(input.isArchived),
@@ -1649,7 +1653,14 @@ export async function configureMchartNoteLock(
         lockPrice: safePrice,
         lockCurrency: safeCurrency,
         paymentInstructions: safeInstructions,
-        body: 'Maudhui ya note hii yamefungwa kwa malipo. Lipia kiasi kilichowekwa ili kufungua na kusoma.',
+        body:
+          safePrice > 0
+            ? 'Maudhui ya note hii yamefungwa kwa malipo. Lipia kiasi kilichowekwa ili kufungua na kusoma.'
+            : 'Maudhui ya note hii yamefungwa kabisa na msimamizi. Haiwezi kusomwa bila ruhusa ya msimamizi.',
+        summary:
+          safePrice > 0
+            ? `Imefungwa kwa malipo (${safeCurrency} ${safePrice.toLocaleString()}).`
+            : 'Imefungwa kabisa na msimamizi — haiwezi kusomwa.',
         pdfUrl: '',
         updatedAt: serverTimestamp(),
       });
@@ -1671,12 +1682,23 @@ export async function configureMchartNoteLock(
         restoredPdfSize = Number(pd.pdfSize || 0);
       }
 
+      const restoredPlain = restoredBody
+        .replace(/```[\s\S]*?```/g, ' ')
+        .replace(/#{1,3}\s+/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const restoredSummary = sanitizeTextInput(
+        restoredPlain.slice(0, 220) || note.subtitle || 'Notes za Malosha Forums.',
+        240
+      );
+
       await updateDoc(noteRef, {
         isLocked: false,
         lockedTargetMode: 'all',
         lockPrice: 0,
         paymentInstructions: safeInstructions,
         body: restoredBody,
+        summary: restoredSummary,
         pdfUrl: restoredPdfUrl,
         pdfFileName: restoredPdfName,
         pdfSize: restoredPdfSize,
@@ -1785,11 +1807,61 @@ export async function setNoteMemberAccess(
   paymentReference = ''
 ): Promise<void> {
   const path = `mchart_notes/${noteId}/access/${targetUid}`;
+  const noteRef = doc(db, 'mchart_notes', noteId);
+  const contentRef = doc(db, 'mchart_notes', noteId, 'content', 'full');
   const accessRef = doc(db, 'mchart_notes', noteId, 'access', targetUid);
   const safeName = sanitizeTextInput(targetName || 'Mwanachama', 80) || 'Mwanachama';
   const safeRef = sanitizeTextInput(paymentReference || '', 240);
 
   try {
+    // If admin locks a specific user on a currently unlocked note, automatically move
+    // full body & PDF into /content/full and lock the parent doc in 'selected' mode
+    if (status === 'locked') {
+      const noteSnap = await getDoc(noteRef);
+      if (noteSnap.exists()) {
+        const nd = noteSnap.data();
+        if (nd.isLocked !== true) {
+          const existingContentSnap = await getDoc(contentRef);
+          const fullBody =
+            existingContentSnap.exists() && typeof existingContentSnap.data().body === 'string'
+              ? String(existingContentSnap.data().body)
+              : String(nd.body || 'Maudhui ya note.');
+          const fullPdfUrl =
+            existingContentSnap.exists() && typeof existingContentSnap.data().pdfUrl === 'string'
+              ? String(existingContentSnap.data().pdfUrl)
+              : String(nd.pdfUrl || '');
+          const fullPdfName =
+            existingContentSnap.exists() && typeof existingContentSnap.data().pdfFileName === 'string'
+              ? String(existingContentSnap.data().pdfFileName)
+              : String(nd.pdfFileName || '');
+          const fullPdfSize =
+            existingContentSnap.exists()
+              ? Number(existingContentSnap.data().pdfSize || 0)
+              : Number(nd.pdfSize || 0);
+
+          await setDoc(contentRef, {
+            noteId,
+            body: fullBody.length >= 5 ? fullBody : 'Maudhui ya note.',
+            pdfUrl: fullPdfUrl,
+            pdfFileName: fullPdfName,
+            pdfSize: fullPdfSize,
+            updatedAt: serverTimestamp(),
+          });
+
+          await updateDoc(noteRef, {
+            isLocked: true,
+            lockedTargetMode: 'selected',
+            lockPrice: Number(nd.lockPrice || 0),
+            lockCurrency: String(nd.lockCurrency || 'TZS'),
+            body: 'Maudhui ya note hii yamefungwa na msimamizi kwa baadhi ya watumiaji.',
+            summary: 'Imefungwa na msimamizi — baadhi ya watumiaji hawana ruhusa ya kusoma.',
+            pdfUrl: '',
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+    }
+
     const existingSnap = await getDoc(accessRef);
     if (existingSnap.exists()) {
       await updateDoc(accessRef, {
@@ -2114,6 +2186,7 @@ export async function writeUserPresence(
   uid: string,
   input: {
     displayName: string;
+    photoURL?: string;
     isOnline: boolean;
     isTypingInMchart?: boolean;
     replyingToName?: string;
@@ -2123,6 +2196,8 @@ export async function writeUserPresence(
   if (!uid || !/^[a-zA-Z0-9_-]{1,128}$/.test(uid)) return;
   const path = `user_presence/${uid}`;
   const cleanName = sanitizeTextInput(input.displayName || 'Mwanachama', 80) || 'Mwanachama';
+  const rawPhoto = input.photoURL ?? auth.currentUser?.photoURL ?? '';
+  const cleanPhoto = sanitizeTextInput(rawPhoto, 500);
   const cleanReply = input.isTypingInMchart
     ? sanitizeTextInput(input.replyingToName || '', 80)
     : '';
@@ -2139,6 +2214,7 @@ export async function writeUserPresence(
     await setDoc(doc(db, 'user_presence', uid), {
       uid,
       displayName: cleanName,
+      photoURL: cleanPhoto,
       isOnline: Boolean(input.isOnline),
       isTypingInMchart: Boolean(input.isOnline && input.isTypingInMchart),
       replyingToName: cleanReply,
@@ -2154,4 +2230,888 @@ export async function writeUserPresence(
     }
   }
 }
+
+export function getDeterministicDmId(uid1: string, uid2: string): string {
+  const [a, b] = [uid1, uid2].sort();
+  return `${a}__${b}`;
+}
+
+export function generateDirectMessageId(chatId: string): string {
+  return doc(collection(db, 'direct_chats', chatId, 'messages')).id;
+}
+
+export async function lookupMemberProfileByIdOrCard(
+  rawQuery: string
+): Promise<MemberDirectoryCandidate | null> {
+  const cleaned = rawQuery.trim();
+  if (!cleaned) return null;
+
+  const upper = cleaned.toUpperCase().replace(/[\s.]+/g, '');
+  let cardId = '';
+  if (upper.startsWith('MLF-')) {
+    cardId = upper;
+  } else if (/^MLF[A-Z0-9]{4,}$/.test(upper)) {
+    cardId = `MLF-${upper.slice(3)}`;
+  }
+
+  if (cardId && /^[A-Z0-9_-]{4,64}$/.test(cardId)) {
+    try {
+      const cardSnap = await getDoc(doc(db, 'member_ids', cardId));
+      if (cardSnap.exists()) {
+        const d = cardSnap.data();
+        if (d.accountStatus !== 'suspended') {
+          return {
+            uid: String(d.uid || ''),
+            displayName: String(d.displayName || 'Mwanachama'),
+            photoURL: String(d.photoURL || ''),
+          };
+        }
+      }
+    } catch {
+      // Fall through to direct UID check
+    }
+  }
+
+  if (/^[a-zA-Z0-9_-]{6,128}$/.test(cleaned)) {
+    try {
+      const userSnap = await getDoc(doc(db, 'users', cleaned));
+      if (userSnap.exists()) {
+        const d = userSnap.data();
+        if (d.accountStatus !== 'suspended') {
+          return {
+            uid: String(d.uid || userSnap.id),
+            displayName: String(d.displayName || 'Mwanachama'),
+            photoURL: String(d.photoURL || ''),
+          };
+        }
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+export async function ensureDirectChatThread(
+  user: User,
+  selfDisplayName: string,
+  selfPhoto: string,
+  target: { uid: string; displayName: string; photoURL?: string }
+): Promise<DirectChatThread> {
+  if (!target.uid || target.uid === user.uid) {
+    throw new Error('Huwezi kuanzisha mazungumzo binafsi na wewe mwenyewe.');
+  }
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(target.uid)) {
+    throw new Error('Kitambulisho cha mwanachama si sahihi.');
+  }
+
+  const [participantA, participantB] = [user.uid, target.uid].sort();
+  const chatId = `${participantA}__${participantB}`;
+  const path = `direct_chats/${chatId}`;
+  const threadRef = doc(db, 'direct_chats', chatId);
+
+  const selfIsA = user.uid === participantA;
+  const safeSelfName = sanitizeTextInput(selfDisplayName || user.displayName || 'Mwanachama', 80) || 'Mwanachama';
+  const safeSelfPhoto = sanitizeTextInput(selfPhoto || user.photoURL || '', 500);
+  const safeTargetName = sanitizeTextInput(target.displayName || 'Mwanachama', 80) || 'Mwanachama';
+  const safeTargetPhoto = sanitizeTextInput(target.photoURL || '', 500);
+
+  // Pull fresher profile if target name/photo looks sparse
+  let resolvedTargetName = safeTargetName;
+  let resolvedTargetPhoto = safeTargetPhoto;
+  if (!resolvedTargetPhoto || resolvedTargetName === 'Mwanachama') {
+    try {
+      const targetSnap = await getDoc(doc(db, 'users', target.uid));
+      if (targetSnap.exists()) {
+        const td = targetSnap.data();
+        if (typeof td.displayName === 'string' && td.displayName.trim()) {
+          resolvedTargetName = sanitizeTextInput(td.displayName, 80);
+        }
+        if (typeof td.photoURL === 'string' && td.photoURL.trim()) {
+          resolvedTargetPhoto = sanitizeTextInput(td.photoURL, 500);
+        }
+      }
+    } catch {
+      // Keep provided target fields
+    }
+  }
+
+  const participantAName = selfIsA ? safeSelfName : resolvedTargetName;
+  const participantAPhoto = selfIsA ? safeSelfPhoto : resolvedTargetPhoto;
+  const participantBName = selfIsA ? resolvedTargetName : safeSelfName;
+  const participantBPhoto = selfIsA ? resolvedTargetPhoto : safeSelfPhoto;
+
+  try {
+    await setDoc(threadRef, {
+      chatId,
+      participantA,
+      participantB,
+      participants: [participantA, participantB],
+      participantAName,
+      participantAPhoto,
+      participantBName,
+      participantBPhoto,
+      lastMessageText: '',
+      lastSenderId: '',
+      lastMessageAt: serverTimestamp(),
+      unreadCountA: 0,
+      unreadCountB: 0,
+      lastReadAtA: serverTimestamp(),
+      lastReadAtB: serverTimestamp(),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (createError) {
+    // If thread already exists, allow create denies because doc exists; read the existing thread cleanly
+    try {
+      const existingSnap = await getDoc(threadRef);
+      if (existingSnap.exists()) {
+        const d = existingSnap.data();
+        return {
+          chatId: existingSnap.id,
+          participantA: String(d.participantA || participantA),
+          participantB: String(d.participantB || participantB),
+          participants: [
+            String(d.participantA || participantA),
+            String(d.participantB || participantB),
+          ],
+          participantAName: String(d.participantAName || participantAName),
+          participantAPhoto: String(d.participantAPhoto || participantAPhoto),
+          participantBName: String(d.participantBName || participantBName),
+          participantBPhoto: String(d.participantBPhoto || participantBPhoto),
+          lastMessageText: String(d.lastMessageText || ''),
+          lastSenderId: String(d.lastSenderId || ''),
+          lastMessageAt: d.lastMessageAt || null,
+          unreadCountA: Number(d.unreadCountA || 0),
+          unreadCountB: Number(d.unreadCountB || 0),
+          lastReadAtA: d.lastReadAtA || null,
+          lastReadAtB: d.lastReadAtB || null,
+          createdAt: d.createdAt || null,
+          updatedAt: d.updatedAt || null,
+        };
+      }
+    } catch (getError) {
+      handleFirestoreError(getError, OperationType.GET, path);
+    }
+    handleFirestoreError(createError, OperationType.CREATE, path);
+  }
+
+  return {
+    chatId,
+    participantA,
+    participantB,
+    participants: [participantA, participantB],
+    participantAName,
+    participantAPhoto,
+    participantBName,
+    participantBPhoto,
+    lastMessageText: '',
+    lastSenderId: '',
+    lastMessageAt: Timestamp.now(),
+    unreadCountA: 0,
+    unreadCountB: 0,
+    lastReadAtA: Timestamp.now(),
+    lastReadAtB: Timestamp.now(),
+    createdAt: Timestamp.now(),
+    updatedAt: Timestamp.now(),
+  };
+}
+
+export async function sendDirectMessage(
+  user: User,
+  displayName: string,
+  selfPhoto: string,
+  thread: DirectChatThread,
+  input: SendChatMessageInput
+): Promise<string> {
+  const text = sanitizeTextInput(input.text || '', 2000);
+  const attachmentType: ChatAttachmentType =
+    input.attachmentType === 'image' || input.attachmentType === 'document'
+      ? input.attachmentType
+      : 'none';
+  const attachmentUrl =
+    attachmentType === 'none' ? '' : sanitizeTextInput(input.attachmentUrl || '', 500);
+  const attachmentName =
+    attachmentType === 'none' ? '' : sanitizeTextInput(input.attachmentName || '', 140);
+  const attachmentSize =
+    attachmentType === 'none'
+      ? 0
+      : Math.max(0, Math.min(Math.floor(Number(input.attachmentSize || 0)), 15_728_640));
+  const attachmentMime =
+    attachmentType === 'none' ? '' : sanitizeTextInput(input.attachmentMime || '', 120);
+
+  if (text.length === 0 && (attachmentType === 'none' || !attachmentUrl.startsWith('https://'))) {
+    throw new Error('Andika ujumbe au ambatanisha picha/nyaraka kabla ya kutuma.');
+  }
+
+  const chatId = thread.chatId;
+  const msgRef =
+    input.customId && /^[a-zA-Z0-9_\-]+$/.test(input.customId)
+      ? doc(db, 'direct_chats', chatId, 'messages', input.customId)
+      : doc(collection(db, 'direct_chats', chatId, 'messages'));
+  const threadRef = doc(db, 'direct_chats', chatId);
+  const path = `direct_chats/${chatId}/messages/${msgRef.id}`;
+
+  const safeName = sanitizeTextInput(displayName || user.displayName || 'Mwanachama', 80) || 'Mwanachama';
+  const safePhoto = sanitizeTextInput(selfPhoto || user.photoURL || '', 500);
+  const senderIsA = user.uid === thread.participantA;
+  const isViewOnce = Boolean(input.viewOnce && attachmentType === 'image');
+  const previewText = sanitizeTextInput(
+    text ||
+      (attachmentType === 'image'
+        ? isViewOnce
+          ? '👁️ Picha ya Mara Moja (1x)'
+          : '📷 Picha'
+        : `📄 ${attachmentName || 'Nyaraka'}`),
+    200
+  );
+
+  try {
+    const batch = writeBatch(db);
+    batch.set(msgRef, {
+      chatId,
+      participants: thread.participants,
+      senderId: user.uid,
+      senderName: safeName,
+      senderPhoto: safePhoto,
+      text,
+      attachmentType,
+      attachmentUrl,
+      attachmentName,
+      attachmentSize,
+      attachmentMime,
+      replyToId: sanitizeTextInput(input.replyToId || '', 128),
+      replyToSenderName: sanitizeTextInput(input.replyToSenderName || '', 80),
+      replyToPreview: sanitizeTextInput(input.replyToPreview || '', 160),
+      isDeleted: false,
+      ...(isViewOnce ? { viewOnce: true, viewOnceConsumed: false, viewOnceOpenedAt: null } : {}),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    batch.update(threadRef, {
+      lastMessageText: previewText,
+      lastSenderId: user.uid,
+      lastMessageAt: serverTimestamp(),
+      [senderIsA ? 'unreadCountA' : 'unreadCountB']: 0,
+      [senderIsA ? 'unreadCountB' : 'unreadCountA']: increment(1),
+      [senderIsA ? 'lastReadAtA' : 'lastReadAtB']: serverTimestamp(),
+      [senderIsA ? 'participantAName' : 'participantBName']: safeName,
+      [senderIsA ? 'participantAPhoto' : 'participantBPhoto']: safePhoto,
+      updatedAt: serverTimestamp(),
+    });
+    await batch.commit();
+    return msgRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function markDirectViewOnceConsumed(
+  chatId: string,
+  messageId: string
+): Promise<void> {
+  const path = `direct_chats/${chatId}/messages/${messageId}`;
+  try {
+    await updateDoc(doc(db, 'direct_chats', chatId, 'messages', messageId), {
+      viewOnceConsumed: true,
+      viewOnceOpenedAt: serverTimestamp(),
+      attachmentUrl: '',
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function softDeleteDirectMessage(
+  chatId: string,
+  messageId: string
+): Promise<void> {
+  const path = `direct_chats/${chatId}/messages/${messageId}`;
+  try {
+    await updateDoc(doc(db, 'direct_chats', chatId, 'messages', messageId), {
+      isDeleted: true,
+      text: '[Ujumbe huu umefutwa]',
+      attachmentType: 'none',
+      attachmentUrl: '',
+      attachmentName: '',
+      attachmentSize: 0,
+      attachmentMime: '',
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function markDirectChatRead(
+  chatId: string,
+  uid: string,
+  participantA: string
+): Promise<void> {
+  const path = `direct_chats/${chatId}`;
+  const selfIsA = uid === participantA;
+  try {
+    await updateDoc(doc(db, 'direct_chats', chatId), {
+      [selfIsA ? 'unreadCountA' : 'unreadCountB']: 0,
+      [selfIsA ? 'lastReadAtA' : 'lastReadAtB']: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.toLowerCase().includes('permission')) {
+      handleFirestoreError(error, OperationType.UPDATE, path);
+    }
+  }
+}
+
+export async function createMchartStatus(
+  user: User,
+  displayName: string,
+  selfPhoto: string,
+  input: {
+    imageUrl: string;
+    caption?: string;
+    privacy: StatusPrivacyMode;
+    allowedViewerIds?: string[];
+  }
+): Promise<string> {
+  const imageUrl = sanitizeTextInput(input.imageUrl || '', 500);
+  if (!imageUrl.startsWith('https://') || imageUrl.length < 10) {
+    throw new Error('Kiungo cha picha ya Status hakiko sahihi.');
+  }
+
+  const caption = sanitizeTextInput(input.caption || '', 280);
+  const privacy: StatusPrivacyMode = input.privacy === 'selected' ? 'selected' : 'members';
+  const cleanedAllowed =
+    privacy === 'selected'
+      ? Array.from(
+          new Set(
+            (input.allowedViewerIds || [])
+              .filter((id) => id && id !== user.uid && /^[a-zA-Z0-9_-]{1,128}$/.test(id))
+          )
+        ).slice(0, 50)
+      : [];
+
+  const audienceTokens =
+    privacy === 'members' ? ['__MEMBERS__'] : [user.uid, ...cleanedAllowed];
+
+  const statusRef = doc(collection(db, 'mchart_statuses'));
+  const path = `mchart_statuses/${statusRef.id}`;
+  const expiresAtTs = Timestamp.fromMillis(Date.now() + 24 * 60 * 60 * 1000);
+
+  try {
+    await setDoc(statusRef, {
+      authorId: user.uid,
+      authorName: sanitizeTextInput(displayName || user.displayName || 'Mwanachama', 80) || 'Mwanachama',
+      authorPhoto: sanitizeTextInput(selfPhoto || user.photoURL || '', 500),
+      imageUrl,
+      caption,
+      privacy,
+      allowedViewerIds: cleanedAllowed,
+      audienceTokens,
+      viewsCount: 0,
+      createdAt: serverTimestamp(),
+      expiresAt: expiresAtTs,
+    });
+    return statusRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function deleteMchartStatus(statusId: string): Promise<void> {
+  const path = `mchart_statuses/${statusId}`;
+  try {
+    await deleteDoc(doc(db, 'mchart_statuses', statusId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function markStatusViewed(
+  status: MchartStatus,
+  viewer: User,
+  viewerDisplayName: string,
+  viewerPhoto: string
+): Promise<void> {
+  if (!status.id || status.authorId === viewer.uid) return;
+  if (status.expiresAt && status.expiresAt.toMillis() <= Date.now()) return;
+
+  const viewRef = doc(db, 'mchart_statuses', status.id, 'views', viewer.uid);
+  const statusRef = doc(db, 'mchart_statuses', status.id);
+  const path = `mchart_statuses/${status.id}/views/${viewer.uid}`;
+
+  try {
+    const existing = await getDoc(viewRef);
+    if (existing.exists()) return;
+
+    const batch = writeBatch(db);
+    batch.set(viewRef, {
+      statusId: status.id,
+      statusAuthorId: status.authorId,
+      viewerId: viewer.uid,
+      viewerName: sanitizeTextInput(viewerDisplayName || viewer.displayName || 'Mwanachama', 80) || 'Mwanachama',
+      viewerPhoto: sanitizeTextInput(viewerPhoto || viewer.photoURL || '', 500),
+      viewedAt: serverTimestamp(),
+    });
+    batch.update(statusRef, {
+      viewsCount: increment(1),
+    });
+    await batch.commit();
+  } catch (error) {
+    // Non-fatal if status expired between check and commit
+    if (error instanceof Error && error.message.toLowerCase().includes('permission')) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    }
+  }
+}
+
+export async function fetchMemberPublicProfile(targetUid: string): Promise<UserProfile | null> {
+  if (!targetUid || !/^[a-zA-Z0-9_-]{1,128}$/.test(targetUid)) return null;
+  try {
+    const snap = await getDoc(doc(db, 'users', targetUid));
+    if (!snap.exists()) return null;
+    const d = snap.data();
+    return {
+      uid: String(d.uid || snap.id),
+      displayName: String(d.displayName || 'Mwanachama'),
+      photoURL: String(d.photoURL || ''),
+      bio: String(d.bio || ''),
+      role: d.role === 'moderator' ? 'moderator' : 'member',
+      verificationBadge: normalizeVerificationBadge(d.verificationBadge),
+      accountStatus: normalizeAccountStatus(d.accountStatus),
+      suspendedReason: typeof d.suspendedReason === 'string' ? d.suspendedReason : '',
+      topicsCount: Number(d.topicsCount || 0),
+      repliesCount: Number(d.repliesCount || 0),
+      followersCount: Number(d.followersCount || 0),
+      createdAt: d.createdAt || null,
+      updatedAt: d.updatedAt || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function checkIsFollowingUser(
+  targetUid: string,
+  viewerUid: string
+): Promise<boolean> {
+  if (!targetUid || !viewerUid || targetUid === viewerUid) return false;
+  try {
+    const snap = await getDoc(doc(db, 'users', targetUid, 'followers', viewerUid));
+    return snap.exists();
+  } catch {
+    return false;
+  }
+}
+
+export async function toggleFollowUser(
+  targetUid: string,
+  viewer: User,
+  viewerDisplayName: string,
+  viewerPhoto: string,
+  currentlyFollowing: boolean
+): Promise<boolean> {
+  if (!targetUid || targetUid === viewer.uid) {
+    throw new Error('Huwezi kujifuata wewe mwenyewe.');
+  }
+  const followerRef = doc(db, 'users', targetUid, 'followers', viewer.uid);
+  const targetUserRef = doc(db, 'users', targetUid);
+  const path = `users/${targetUid}/followers/${viewer.uid}`;
+
+  try {
+    const batch = writeBatch(db);
+    if (currentlyFollowing) {
+      batch.delete(followerRef);
+      batch.update(targetUserRef, {
+        followersCount: increment(-1),
+        updatedAt: serverTimestamp(),
+      });
+      await batch.commit();
+      return false;
+    } else {
+      batch.set(followerRef, {
+        followerId: viewer.uid,
+        followerName:
+          sanitizeTextInput(viewerDisplayName || viewer.displayName || 'Mwanachama', 80) ||
+          'Mwanachama',
+        followerPhoto: sanitizeTextInput(viewerPhoto || viewer.photoURL || '', 500),
+        createdAt: serverTimestamp(),
+      });
+      batch.update(targetUserRef, {
+        followersCount: increment(1),
+        updatedAt: serverTimestamp(),
+      });
+      await batch.commit();
+      return true;
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export interface CreateVideoPostInput {
+  mediaType?: 'video' | 'photo';
+  videoUrl?: string;
+  photoUrls?: string[];
+  audioUrl?: string;
+  cloudinaryPublicId?: string;
+  thumbnailUrl?: string;
+  caption: string;
+  soundName?: string;
+  tags: string[];
+  durationSec: number;
+  allowComments?: boolean;
+  allowDownload?: boolean;
+  allowLikes?: boolean;
+  showLikeCount?: boolean;
+  autoReplyEnabled?: boolean;
+  autoReplyMessage?: string;
+  autoReplyTrigger?: 'all' | 'keyword';
+  autoReplyKeyword?: string;
+}
+
+export async function createVideoPost(
+  user: User,
+  displayName: string,
+  authorPhoto: string,
+  input: CreateVideoPostInput
+): Promise<string> {
+  const mediaType: 'video' | 'photo' = input.mediaType === 'photo' ? 'photo' : 'video';
+  const rawVideoUrl = sanitizeTextInput(input.videoUrl || '', 500);
+  const cleanedPhotoUrls = (input.photoUrls || [])
+    .map((u) => sanitizeTextInput(u, 500))
+    .filter((u) => u.startsWith('https://'))
+    .slice(0, 10);
+
+  if (mediaType === 'video' && !rawVideoUrl.startsWith('https://')) {
+    throw new Error('Kiungo cha video si sahihi.');
+  }
+  if (mediaType === 'photo' && cleanedPhotoUrls.length === 0) {
+    throw new Error('Chagua angalau picha 1 kabla ya kuchapisha.');
+  }
+
+  const audioUrl = sanitizeTextInput(input.audioUrl || '', 500);
+  const safeAudioUrl = audioUrl.startsWith('https://') ? audioUrl : '';
+  const publicId = sanitizeTextInput(input.cloudinaryPublicId || '', 240);
+  const rawThumb = sanitizeTextInput(input.thumbnailUrl || '', 500);
+  const thumbnailUrl =
+    rawThumb.startsWith('https://')
+      ? rawThumb
+      : mediaType === 'photo'
+        ? cleanedPhotoUrls[0] || ''
+        : '';
+  const caption = sanitizeTextInput(input.caption || '', 600);
+  const safeAuthorName =
+    sanitizeTextInput(displayName || user.displayName || 'Mwanachama', 80) || 'Mwanachama';
+  const safePhoto = sanitizeTextInput(authorPhoto || user.photoURL || '', 500);
+  const soundName =
+    sanitizeTextInput(input.soundName || '', 120) ||
+    sanitizeTextInput(`Sauti Halisi - ${safeAuthorName}`, 120) ||
+    'Sauti Halisi';
+  const tags = (input.tags || [])
+    .map((t) => sanitizeTextInput(t.replace(/^#/, ''), 30))
+    .filter(Boolean)
+    .slice(0, 5);
+  const durationSec = Math.max(0, Math.min(1200, Math.round(Number(input.durationSec || 0))));
+
+  const autoReplyMessage = sanitizeTextInput(input.autoReplyMessage || '', 300);
+  const autoReplyEnabled = Boolean(input.autoReplyEnabled && autoReplyMessage.length >= 1);
+  const autoReplyTrigger: 'all' | 'keyword' =
+    input.autoReplyTrigger === 'keyword' ? 'keyword' : 'all';
+  const autoReplyKeyword = sanitizeTextInput(input.autoReplyKeyword || '', 60);
+
+  const videoRef = doc(collection(db, 'videos'));
+  const path = `videos/${videoRef.id}`;
+
+  try {
+    await setDoc(videoRef, {
+      authorId: user.uid,
+      authorName: safeAuthorName,
+      authorPhoto: safePhoto,
+      mediaType,
+      videoUrl: mediaType === 'video' ? rawVideoUrl : '',
+      photoUrls: mediaType === 'photo' ? cleanedPhotoUrls : [],
+      audioUrl: safeAudioUrl,
+      cloudinaryPublicId: publicId,
+      thumbnailUrl,
+      caption,
+      soundName,
+      tags,
+      durationSec,
+      likesCount: 0,
+      commentsCount: 0,
+      sharesCount: 0,
+      isArchived: false,
+      allowComments: input.allowComments !== false,
+      allowDownload: input.allowDownload !== false,
+      allowLikes: input.allowLikes !== false,
+      showLikeCount: input.showLikeCount !== false,
+      autoReplyEnabled,
+      autoReplyMessage,
+      autoReplyTrigger,
+      autoReplyKeyword,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return videoRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export interface UpdateVideoSettingsInput {
+  caption?: string;
+  soundName?: string;
+  tags?: string[];
+  isArchived?: boolean;
+  allowComments?: boolean;
+  allowDownload?: boolean;
+  allowLikes?: boolean;
+  showLikeCount?: boolean;
+  autoReplyEnabled?: boolean;
+  autoReplyMessage?: string;
+  autoReplyTrigger?: 'all' | 'keyword';
+  autoReplyKeyword?: string;
+}
+
+export async function updateVideoSettings(
+  videoId: string,
+  updates: UpdateVideoSettingsInput
+): Promise<void> {
+  const path = `videos/${videoId}`;
+  const payload: Record<string, unknown> = {
+    updatedAt: serverTimestamp(),
+  };
+
+  if (updates.caption !== undefined) {
+    payload.caption = sanitizeTextInput(updates.caption, 600);
+  }
+  if (updates.soundName !== undefined) {
+    const cleanSound = sanitizeTextInput(updates.soundName, 120);
+    if (cleanSound) payload.soundName = cleanSound;
+  }
+  if (updates.tags !== undefined) {
+    payload.tags = updates.tags
+      .map((t) => sanitizeTextInput(t.replace(/^#/, ''), 30))
+      .filter(Boolean)
+      .slice(0, 5);
+  }
+  if (updates.isArchived !== undefined) {
+    payload.isArchived = Boolean(updates.isArchived);
+  }
+  if (updates.allowComments !== undefined) {
+    payload.allowComments = Boolean(updates.allowComments);
+  }
+  if (updates.allowDownload !== undefined) {
+    payload.allowDownload = Boolean(updates.allowDownload);
+  }
+  if (updates.allowLikes !== undefined) {
+    payload.allowLikes = Boolean(updates.allowLikes);
+  }
+  if (updates.showLikeCount !== undefined) {
+    payload.showLikeCount = Boolean(updates.showLikeCount);
+  }
+  if (updates.autoReplyMessage !== undefined) {
+    payload.autoReplyMessage = sanitizeTextInput(updates.autoReplyMessage, 300);
+  }
+  if (updates.autoReplyEnabled !== undefined) {
+    payload.autoReplyEnabled = Boolean(updates.autoReplyEnabled);
+  }
+  if (updates.autoReplyTrigger !== undefined) {
+    payload.autoReplyTrigger = updates.autoReplyTrigger === 'keyword' ? 'keyword' : 'all';
+  }
+  if (updates.autoReplyKeyword !== undefined) {
+    payload.autoReplyKeyword = sanitizeTextInput(updates.autoReplyKeyword, 60);
+  }
+
+  try {
+    await updateDoc(doc(db, 'videos', videoId), payload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function deleteVideoPost(videoId: string): Promise<void> {
+  const path = `videos/${videoId}`;
+  try {
+    await deleteDoc(doc(db, 'videos', videoId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function toggleVideoLike(
+  videoId: string,
+  userId: string,
+  hasLiked: boolean
+): Promise<void> {
+  const likeRef = doc(db, 'videos', videoId, 'likes', userId);
+  const videoRef = doc(db, 'videos', videoId);
+  const path = `videos/${videoId}/likes/${userId}`;
+
+  try {
+    const batch = writeBatch(db);
+    if (hasLiked) {
+      batch.delete(likeRef);
+      batch.update(videoRef, {
+        likesCount: increment(-1),
+      });
+    } else {
+      batch.set(likeRef, {
+        userId,
+        createdAt: serverTimestamp(),
+      });
+      batch.update(videoRef, {
+        likesCount: increment(1),
+      });
+    }
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function checkUserVideoLikesBatch(
+  videoIds: string[],
+  userId: string
+): Promise<Record<string, boolean>> {
+  const entries = await Promise.all(
+    videoIds.map(async (vid) => {
+      try {
+        const snap = await getDoc(doc(db, 'videos', vid, 'likes', userId));
+        return [vid, snap.exists()] as const;
+      } catch {
+        return [vid, false] as const;
+      }
+    })
+  );
+  return Object.fromEntries(entries);
+}
+
+export async function incrementVideoShareCount(videoId: string): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'videos', videoId), {
+      sharesCount: increment(1),
+    });
+  } catch {
+    // Non-fatal
+  }
+}
+
+export async function addVideoComment(
+  videoId: string,
+  user: User,
+  displayName: string,
+  authorPhoto: string,
+  bodyRaw: string,
+  options?: {
+    parentCommentId?: string;
+    replyToAuthorName?: string;
+    postContext?: {
+      authorId: string;
+      authorName: string;
+      authorPhoto: string;
+      autoReplyEnabled?: boolean;
+      autoReplyMessage?: string;
+      autoReplyTrigger?: 'all' | 'keyword';
+      autoReplyKeyword?: string;
+    };
+  }
+): Promise<string> {
+  const body = sanitizeTextInput(bodyRaw, 1000);
+  if (body.length < 1) {
+    throw new Error('Andika maoni kabla ya kutuma.');
+  }
+
+  const commentRef = doc(collection(db, 'videos', videoId, 'comments'));
+  const videoRef = doc(db, 'videos', videoId);
+  const path = `videos/${videoId}/comments/${commentRef.id}`;
+  const safeAuthorName =
+    sanitizeTextInput(displayName || user.displayName || 'Mwanachama', 80) || 'Mwanachama';
+  const safePhoto = sanitizeTextInput(authorPhoto || user.photoURL || '', 500);
+  const parentCommentId = sanitizeTextInput(options?.parentCommentId || '', 128);
+  const replyToAuthorName = sanitizeTextInput(options?.replyToAuthorName || '', 80);
+
+  // Check if creator Auto-Reply should trigger automatically
+  const ctx = options?.postContext;
+  const autoMsg = sanitizeTextInput(ctx?.autoReplyMessage || '', 300);
+  const keywordClean = (ctx?.autoReplyKeyword || '').trim().toLowerCase();
+  const keywordMatch =
+    ctx?.autoReplyTrigger !== 'keyword' ||
+    !keywordClean ||
+    body.toLowerCase().includes(keywordClean);
+  const shouldAutoReply = Boolean(
+    ctx &&
+      ctx.authorId &&
+      ctx.authorId !== user.uid &&
+      ctx.autoReplyEnabled === true &&
+      autoMsg.length >= 1 &&
+      keywordMatch
+  );
+
+  try {
+    const batch = writeBatch(db);
+    batch.set(commentRef, {
+      videoId,
+      authorId: user.uid,
+      authorName: safeAuthorName,
+      authorPhoto: safePhoto,
+      body,
+      parentCommentId,
+      replyToAuthorName,
+      isAutoReply: false,
+      isDeleted: false,
+      createdAt: serverTimestamp(),
+    });
+
+    if (shouldAutoReply && ctx) {
+      const autoReplyRef = doc(collection(db, 'videos', videoId, 'comments'));
+      batch.set(autoReplyRef, {
+        videoId,
+        authorId: ctx.authorId,
+        authorName: sanitizeTextInput(ctx.authorName || 'Mwandishi', 80) || 'Mwandishi',
+        authorPhoto: sanitizeTextInput(ctx.authorPhoto || '', 500),
+        body: autoMsg,
+        parentCommentId: commentRef.id,
+        replyToAuthorName: safeAuthorName,
+        isAutoReply: true,
+        isDeleted: false,
+        createdAt: serverTimestamp(),
+      });
+    }
+
+    batch.update(videoRef, {
+      commentsCount: increment(shouldAutoReply ? 2 : 1),
+      updatedAt: serverTimestamp(),
+    });
+    await batch.commit();
+    return commentRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function deleteVideoComment(videoId: string, commentId: string): Promise<void> {
+  const commentRef = doc(db, 'videos', videoId, 'comments', commentId);
+  const videoRef = doc(db, 'videos', videoId);
+  const path = `videos/${videoId}/comments/${commentId}`;
+
+  try {
+    const batch = writeBatch(db);
+    batch.update(commentRef, {
+      isDeleted: true,
+    });
+    batch.update(videoRef, {
+      commentsCount: increment(-1),
+      updatedAt: serverTimestamp(),
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+
 

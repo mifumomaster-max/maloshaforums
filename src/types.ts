@@ -216,7 +216,10 @@ export type VerificationBadgeType =
   | 'individual'
   | 'organization'
   | 'government'
-  | 'owner';
+  | 'owner'
+  | 'journalist'
+  | 'educator'
+  | 'creator';
 
 export interface VerificationBadgeMeta {
   id: VerificationBadgeType;
@@ -242,7 +245,7 @@ export const VERIFICATION_BADGE_META: Record<VerificationBadgeType, Verification
   },
   individual: {
     id: 'individual',
-    label: 'Mtu Binafsi Aliyethibitishwa',
+    label: 'Mtu Binafsi (Bluu)',
     shortLabel: 'Mtu Binafsi',
     description: 'Mwanachama binafsi au mtu mashuhuri aliyethibitishwa',
     fillHex: '#1D9BF0',
@@ -252,7 +255,7 @@ export const VERIFICATION_BADGE_META: Record<VerificationBadgeType, Verification
   },
   organization: {
     id: 'organization',
-    label: 'Shirika / Kampuni Iliyothibitishwa',
+    label: 'Shirika / Kampuni (Zambarau)',
     shortLabel: 'Shirika',
     description: 'Kampuni, taasisi binafsi, NGO, au chombo cha habari',
     fillHex: '#7C3AED',
@@ -262,7 +265,7 @@ export const VERIFICATION_BADGE_META: Record<VerificationBadgeType, Verification
   },
   government: {
     id: 'government',
-    label: 'Taasisi ya Serikali',
+    label: 'Taasisi ya Serikali (Kijani)',
     shortLabel: 'Serikali',
     description: 'Wizara, halmashauri, wakala, au idara rasmi ya serikali',
     fillHex: '#16A34A',
@@ -270,9 +273,39 @@ export const VERIFICATION_BADGE_META: Record<VerificationBadgeType, Verification
     softBgClass: 'bg-emerald-50',
     borderClass: 'border-emerald-200',
   },
+  journalist: {
+    id: 'journalist',
+    label: 'Mwandishi / Mhariri wa Habari (Nyekundu)',
+    shortLabel: 'Mwandishi',
+    description: 'Mwandishi wa habari, mchambuzi wa vyombo vya habari, au mhariri aliyeidhinishwa',
+    fillHex: '#DC2626',
+    textClass: 'text-[#B91C1C]',
+    softBgClass: 'bg-red-50',
+    borderClass: 'border-red-200',
+  },
+  educator: {
+    id: 'educator',
+    label: 'Mwalimu / Mtafiti / Mshauri (Teal)',
+    shortLabel: 'Mwalimu',
+    description: 'Mtaalamu wa elimu, mtafiti, au mshauri wa taaluma na ajira',
+    fillHex: '#0D9488',
+    textClass: 'text-[#0F766E]',
+    softBgClass: 'bg-teal-50',
+    borderClass: 'border-teal-200',
+  },
+  creator: {
+    id: 'creator',
+    label: 'Mbunifu / Mchambuzi Bora (Pink)',
+    shortLabel: 'Mbunifu',
+    description: 'Mbunifu mashuhuri wa maudhui na mchangiaji mkuu wa jamii',
+    fillHex: '#DB2777',
+    textClass: 'text-[#BE185D]',
+    softBgClass: 'bg-pink-50',
+    borderClass: 'border-pink-200',
+  },
   owner: {
     id: 'owner',
-    label: 'Mmiliki wa Jukwaa',
+    label: 'Mmiliki wa Jukwaa (Dhahabu)',
     shortLabel: 'Mmiliki',
     description: 'Mwanzilishi na mmiliki rasmi wa jukwaa la Malosha Forums',
     fillHex: '#D97706',
@@ -287,6 +320,9 @@ export const VERIFICATION_BADGE_TIERS: VerificationBadgeType[] = [
   'individual',
   'organization',
   'government',
+  'journalist',
+  'educator',
+  'creator',
   'owner',
 ];
 
@@ -295,7 +331,10 @@ export function normalizeVerificationBadge(val: unknown): VerificationBadgeType 
     val === 'individual' ||
     val === 'organization' ||
     val === 'government' ||
-    val === 'owner'
+    val === 'owner' ||
+    val === 'journalist' ||
+    val === 'educator' ||
+    val === 'creator'
   ) {
     return val;
   }
@@ -321,8 +360,65 @@ export interface UserProfile {
   suspendedReason?: string;
   topicsCount: number;
   repliesCount: number;
+  followersCount?: number;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
+}
+
+export const MONETIZATION_REQUIREMENTS = {
+  minFollowers: 50,
+  minPosts: 10,
+  minLikes: 100,
+  minComments: 20,
+} as const;
+
+export interface AuthorMetricsSummary {
+  postsCount: number;
+  totalLikesReceived: number;
+  totalCommentsReceived: number;
+  followersCount: number;
+  metCriteriaCount: number;
+  totalCriteriaCount: number;
+  progressPercent: number;
+  isEligibleForMonetization: boolean;
+}
+
+export function computeAuthorMetrics(
+  topics: Pick<Topic, 'authorId' | 'upvotesCount' | 'repliesCount' | 'status'>[],
+  authorUid: string,
+  followersCount = 0
+): AuthorMetricsSummary {
+  let postsCount = 0;
+  let totalLikesReceived = 0;
+  let totalCommentsReceived = 0;
+
+  for (const t of topics) {
+    if (t.authorId === authorUid && t.status !== 'archived') {
+      postsCount += 1;
+      totalLikesReceived += Math.max(0, Number(t.upvotesCount || 0));
+      totalCommentsReceived += Math.max(0, Number(t.repliesCount || 0));
+    }
+  }
+
+  const cleanFollowers = Math.max(0, Number(followersCount || 0));
+  const fRatio = Math.min(1, cleanFollowers / MONETIZATION_REQUIREMENTS.minFollowers);
+  const pRatio = Math.min(1, postsCount / MONETIZATION_REQUIREMENTS.minPosts);
+  const lRatio = Math.min(1, totalLikesReceived / MONETIZATION_REQUIREMENTS.minLikes);
+  const cRatio = Math.min(1, totalCommentsReceived / MONETIZATION_REQUIREMENTS.minComments);
+
+  const met = [fRatio >= 1, pRatio >= 1, lRatio >= 1, cRatio >= 1].filter(Boolean).length;
+  const progressPercent = Math.round(((fRatio + pRatio + lRatio + cRatio) / 4) * 100);
+
+  return {
+    postsCount,
+    totalLikesReceived,
+    totalCommentsReceived,
+    followersCount: cleanFollowers,
+    metCriteriaCount: met,
+    totalCriteriaCount: 4,
+    progressPercent,
+    isEligibleForMonetization: met === 4,
+  };
 }
 
 export interface MemberIdRecord {
@@ -346,11 +442,12 @@ export interface MemberIdVerificationResult {
   source: 'registry' | 'users_fallback' | 'none';
 }
 
-export type PresenceArea = 'kijiweni' | 'fursa' | 'makala' | 'mchart' | 'profile' | 'forum';
+export type PresenceArea = 'kijiweni' | 'video' | 'fursa' | 'makala' | 'mchart' | 'profile' | 'forum';
 
 export interface UserPresence {
   uid: string;
   displayName: string;
+  photoURL?: string;
   isOnline: boolean;
   isTypingInMchart: boolean;
   replyingToName: string;
@@ -518,6 +615,7 @@ export interface MchartNoteAccess {
 export type NavTab =
   | 'all'
   | 'kijiweni'
+  | 'video'
   | 'fursa'
   | 'makala'
   | 'chat'
@@ -547,7 +645,142 @@ export interface UserNotification {
 
 export interface NavUnreadCounts {
   kijiweni: number;
+  video?: number;
   fursa: number;
   makala: number;
   chat: number;
 }
+
+export interface DirectChatThread {
+  chatId: string;
+  participantA: string;
+  participantB: string;
+  participants: [string, string];
+  participantAName: string;
+  participantAPhoto: string;
+  participantBName: string;
+  participantBPhoto: string;
+  lastMessageText: string;
+  lastSenderId: string;
+  lastMessageAt: Timestamp | null;
+  unreadCountA: number;
+  unreadCountB: number;
+  lastReadAtA: Timestamp | null;
+  lastReadAtB: Timestamp | null;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export interface DirectChatMessage {
+  id: string;
+  chatId: string;
+  participants: [string, string];
+  senderId: string;
+  senderName: string;
+  senderPhoto: string;
+  text: string;
+  attachmentType: ChatAttachmentType;
+  attachmentUrl: string;
+  attachmentName: string;
+  attachmentSize: number;
+  attachmentMime: string;
+  replyToId: string;
+  replyToSenderName: string;
+  replyToPreview: string;
+  isDeleted: boolean;
+  viewOnce?: boolean;
+  viewOnceConsumed?: boolean;
+  viewOnceOpenedAt?: Timestamp | null;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export type StatusPrivacyMode = 'members' | 'selected';
+
+export interface MchartStatus {
+  id: string;
+  authorId: string;
+  authorName: string;
+  authorPhoto: string;
+  imageUrl: string;
+  caption: string;
+  privacy: StatusPrivacyMode;
+  allowedViewerIds: string[];
+  audienceTokens: string[];
+  viewsCount: number;
+  createdAt: Timestamp | null;
+  expiresAt: Timestamp | null;
+}
+
+export interface MchartStatusView {
+  statusId: string;
+  statusAuthorId: string;
+  viewerId: string;
+  viewerName: string;
+  viewerPhoto: string;
+  viewedAt: Timestamp | null;
+}
+
+export interface MemberDirectoryCandidate {
+  uid: string;
+  displayName: string;
+  photoURL: string;
+  isOnline?: boolean;
+}
+
+export interface SharedMediaPayload {
+  id: number;
+  file: File | null;
+  title: string;
+  text: string;
+}
+
+export type VideoMediaType = 'video' | 'photo';
+export type VideoAutoReplyTrigger = 'all' | 'keyword';
+
+export interface VideoPost {
+  id: string;
+  authorId: string;
+  authorName: string;
+  authorPhoto: string;
+  mediaType?: VideoMediaType;
+  videoUrl: string;
+  photoUrls?: string[];
+  audioUrl?: string;
+  cloudinaryPublicId: string;
+  thumbnailUrl: string;
+  caption: string;
+  soundName: string;
+  tags: string[];
+  durationSec: number;
+  likesCount: number;
+  commentsCount: number;
+  sharesCount: number;
+  isArchived: boolean;
+  allowComments?: boolean;
+  allowDownload?: boolean;
+  allowLikes?: boolean;
+  showLikeCount?: boolean;
+  autoReplyEnabled?: boolean;
+  autoReplyMessage?: string;
+  autoReplyTrigger?: VideoAutoReplyTrigger;
+  autoReplyKeyword?: string;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export interface VideoComment {
+  id: string;
+  videoId: string;
+  authorId: string;
+  authorName: string;
+  authorPhoto: string;
+  body: string;
+  parentCommentId?: string;
+  replyToAuthorName?: string;
+  isAutoReply?: boolean;
+  isDeleted: boolean;
+  createdAt: Timestamp | null;
+}
+
+

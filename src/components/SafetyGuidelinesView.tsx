@@ -10,19 +10,27 @@ import {
 } from 'firebase/auth';
 import {
   AlertTriangle,
+  Award,
   BellRing,
   Camera,
   Check,
+  CheckCircle2,
+  Circle,
   Copy,
   Eye,
   EyeOff,
   Globe,
+  Heart,
   KeyRound,
+  LayoutTemplate,
   Loader2,
   Lock,
+  MessageCircle,
   ShieldCheck,
+  Sparkles,
   Trash2,
   UserCheck,
+  Users,
 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 import { ADMIN_EMAIL, auth, googleProvider } from '../firebase';
@@ -37,12 +45,15 @@ import {
   setPhoneAlertsEnabled,
 } from '../services/notificationService';
 import {
+  MONETIZATION_REQUIREMENTS,
   PrimaryBoard,
   Report,
+  Topic,
   TopicCategory,
   VERIFICATION_BADGE_META,
   VerificationBadgeType,
   UserProfile,
+  computeAuthorMetrics,
   computeMemberControlSerial,
   formatMemberCode,
 } from '../types';
@@ -66,6 +77,7 @@ interface SafetyGuidelinesViewProps {
   isAdmin: boolean;
   isSuspended?: boolean;
   myReports: Report[];
+  topics?: Topic[];
   onSaveProfile: (displayName: string, bio: string, phoneNumber?: string) => Promise<void>;
   onUpdateProfilePhoto?: (photoURL: string) => Promise<void>;
   onPublishPosterTopic?: (data: {
@@ -86,6 +98,9 @@ const BADGE_LEGEND_ORDER: VerificationBadgeType[] = [
   'owner',
   'government',
   'organization',
+  'journalist',
+  'educator',
+  'creator',
   'individual',
 ];
 
@@ -101,6 +116,7 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
   isAdmin,
   isSuspended = false,
   myReports,
+  topics = [],
   onSaveProfile,
   onUpdateProfilePhoto,
   onPublishPosterTopic,
@@ -140,10 +156,17 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
   const [passwordSuccess, setPasswordSuccess] = useState('');
   const [copiedUid, setCopiedUid] = useState(false);
   const [passwordLinkedNow, setPasswordLinkedNow] = useState(false);
+  const [profileTab, setProfileTab] = useState<'profile' | 'poster'>('profile');
 
   useEffect(() => {
     setPasswordLinkedNow(false);
   }, [userUid]);
+
+  useEffect(() => {
+    if (!isAdmin || !onPublishPosterTopic) {
+      setProfileTab('profile');
+    }
+  }, [isAdmin, onPublishPosterTopic]);
 
   const hasPasswordProvider = useMemo(
     () => userProviders.includes('password') || passwordLinkedNow,
@@ -629,8 +652,58 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
             </div>
           )}
         </div>
+
+        {/* Dedicated 2-Tab Bar Separating Profile/Management From Owner Poster Template Studio */}
+        {userUid && isAdmin && onPublishPosterTopic && (
+          <div
+            role="tablist"
+            aria-label={tr('Sehemu za Wasifu wa Mmiliki', 'Owner Profile Sections')}
+            className="mt-5 grid grid-cols-2 gap-2 rounded-xl border border-slate-200 bg-slate-100/90 p-1.5"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={profileTab === 'profile'}
+              onClick={() => setProfileTab('profile')}
+              className={`flex min-h-[42px] items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-bold transition-all sm:text-sm ${
+                profileTab === 'profile'
+                  ? 'bg-[#0E2640] text-white shadow-sm'
+                  : 'text-slate-700 hover:bg-white/75 hover:text-slate-900'
+              }`}
+            >
+              <UserCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span className="truncate">{tr('Wasifu & Akaunti', 'Profile & Account')}</span>
+            </button>
+
+            <button
+              type="button"
+              role="tab"
+              aria-selected={profileTab === 'poster'}
+              onClick={() => setProfileTab('poster')}
+              className={`flex min-h-[42px] items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-bold transition-all sm:text-sm ${
+                profileTab === 'poster'
+                  ? 'bg-gradient-to-r from-[#B91C1C] to-[#991B1B] text-white shadow-sm'
+                  : 'text-slate-700 hover:bg-white/75 hover:text-slate-900'
+              }`}
+            >
+              <LayoutTemplate className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span className="truncate">{tr('Studio ya Poster', 'Poster Studio')}</span>
+            </button>
+          </div>
+        )}
       </div>
 
+      {userUid && isAdmin && onPublishPosterTopic && profileTab === 'poster' ? (
+        <BreakingNewsPosterStudio
+          onPublishToPlatform={onPublishPosterTopic}
+          onOpenPublishedTopic={onOpenTopic}
+          onNavigateBoard={(board) => {
+            if (onSelectBoard) onSelectBoard(board);
+          }}
+          onToast={onToast}
+        />
+      ) : (
+        <>
       {/* Profile Editor, Language Setting & User's Reports */}
       <section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -836,6 +909,147 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
                 </button>
               </div>
             </div>
+
+            {/* Own Creator Metrics & Monetization Progress */}
+            {userProfile && (() => {
+              const ownMetrics = computeAuthorMetrics(
+                topics,
+                userUid,
+                userProfile.followersCount || 0
+              );
+              const criteria = [
+                {
+                  label: tr('Wanaokufuatilia (Followers)', 'Followers'),
+                  current: ownMetrics.followersCount,
+                  target: MONETIZATION_REQUIREMENTS.minFollowers,
+                  met: ownMetrics.followersCount >= MONETIZATION_REQUIREMENTS.minFollowers,
+                },
+                {
+                  label: tr('Machapisho yako hai', 'Active Posts'),
+                  current: ownMetrics.postsCount,
+                  target: MONETIZATION_REQUIREMENTS.minPosts,
+                  met: ownMetrics.postsCount >= MONETIZATION_REQUIREMENTS.minPosts,
+                },
+                {
+                  label: tr('Likes ulizopata', 'Likes Received'),
+                  current: ownMetrics.totalLikesReceived,
+                  target: MONETIZATION_REQUIREMENTS.minLikes,
+                  met: ownMetrics.totalLikesReceived >= MONETIZATION_REQUIREMENTS.minLikes,
+                },
+                {
+                  label: tr('Maoni uliyopokea', 'Comments Received'),
+                  current: ownMetrics.totalCommentsReceived,
+                  target: MONETIZATION_REQUIREMENTS.minComments,
+                  met: ownMetrics.totalCommentsReceived >= MONETIZATION_REQUIREMENTS.minComments,
+                },
+              ];
+
+              return (
+                <div className="mt-5 rounded-xl border border-amber-200 bg-gradient-to-br from-amber-50/70 via-white to-sky-50/40 p-4 sm:p-5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Award className="h-4 w-4 text-amber-700 shrink-0" aria-hidden="true" />
+                      <h3 className="text-xs font-bold tracking-wide text-slate-900 uppercase">
+                        {tr('Takwimu Zako & Masharti ya Kulipwa', 'Your Stats & Monetization Rules')}
+                      </h3>
+                    </div>
+                    <span
+                      className={`rounded-md px-2.5 py-0.5 text-[11px] font-bold tabular-nums ${
+                        ownMetrics.isEligibleForMonetization
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-amber-100 text-amber-900'
+                      }`}
+                    >
+                      {ownMetrics.isEligibleForMonetization
+                        ? tr('Umekidhi Masharti Yote ya Malipo!', 'Eligible for Creator Payouts!')
+                        : `${ownMetrics.progressPercent}% ${tr('imefikiwa', 'complete')}`}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                    <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                      <Users className="mx-auto h-4 w-4 text-[#1D4E89]" aria-hidden="true" />
+                      <p className="mt-1 font-display text-xl font-bold text-slate-900 tabular-nums">
+                        {ownMetrics.followersCount}
+                      </p>
+                      <p className="text-[11px] font-medium text-slate-600">
+                        {tr('Wanaokufuatilia', 'Followers')}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                      <Sparkles className="mx-auto h-4 w-4 text-amber-600" aria-hidden="true" />
+                      <p className="mt-1 font-display text-xl font-bold text-slate-900 tabular-nums">
+                        {ownMetrics.postsCount}
+                      </p>
+                      <p className="text-[11px] font-medium text-slate-600">
+                        {tr('Machapisho', 'Posts')}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                      <Heart className="mx-auto h-4 w-4 text-rose-600" aria-hidden="true" />
+                      <p className="mt-1 font-display text-xl font-bold text-slate-900 tabular-nums">
+                        {ownMetrics.totalLikesReceived}
+                      </p>
+                      <p className="text-[11px] font-medium text-slate-600">
+                        {tr('Likes Ulizopata', 'Likes Received')}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                      <MessageCircle className="mx-auto h-4 w-4 text-emerald-700" aria-hidden="true" />
+                      <p className="mt-1 font-display text-xl font-bold text-slate-900 tabular-nums">
+                        {ownMetrics.totalCommentsReceived}
+                      </p>
+                      <p className="text-[11px] font-medium text-slate-600">
+                        {tr('Maoni', 'Comments')}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-amber-100">
+                    <div
+                      className={`h-full rounded-full transition-all duration-300 ${
+                        ownMetrics.isEligibleForMonetization ? 'bg-emerald-600' : 'bg-amber-500'
+                      }`}
+                      style={{ width: `${ownMetrics.progressPercent}%` }}
+                    />
+                  </div>
+
+                  <p className="mt-2.5 text-[11px] leading-relaxed text-slate-600">
+                    {tr(
+                      'Masharti ya kuanza kulipwa kwa akaunti zinazofanya vizuri: Wafuasi (Followers) 50+, Machapisho 10+, Likes 100+, na Maoni 20+ bila ukiukaji wa kanuni.',
+                      'Eligibility criteria for top creator payouts: 50+ Followers, 10+ Active Posts, 100+ Likes, and 20+ Comments in good standing.'
+                    )}
+                  </p>
+
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {criteria.map((c) => (
+                      <div
+                        key={c.label}
+                        className="flex items-center justify-between rounded-lg border border-slate-200/80 bg-white px-3 py-1.5 text-xs"
+                      >
+                        <span className="flex items-center gap-1.5 text-slate-700">
+                          {c.met ? (
+                            <CheckCircle2
+                              className="h-3.5 w-3.5 shrink-0 text-emerald-600"
+                              aria-hidden="true"
+                            />
+                          ) : (
+                            <Circle
+                              className="h-3.5 w-3.5 shrink-0 text-slate-300"
+                              aria-hidden="true"
+                            />
+                          )}
+                          <span>{c.label}</span>
+                        </span>
+                        <span className="font-mono text-[11px] font-bold text-slate-900 tabular-nums">
+                          {c.current}/{c.target}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Profile & Member ID Photo Uploader */}
             {userProfile && (
@@ -1385,19 +1599,9 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
         )}
       </section>
 
-      {/* Owner Breaking News Poster Studio, Anti-Fake ID Checker & Controls Embedded Inside Profile */}
+      {/* Owner Anti-Fake ID Checker & Moderation Controls */}
       {userUid && isAdmin && (
         <>
-          {onPublishPosterTopic && (
-            <BreakingNewsPosterStudio
-              onPublishToPlatform={onPublishPosterTopic}
-              onOpenPublishedTopic={onOpenTopic}
-              onNavigateBoard={(board) => {
-                if (onSelectBoard) onSelectBoard(board);
-              }}
-              onToast={onToast}
-            />
-          )}
           <MemberIdVerifier />
           <ModerationView
             embedded
@@ -1417,8 +1621,8 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
         </h2>
         <p className="mt-1.5 text-xs leading-relaxed text-slate-600">
           {tr(
-            'Ili kuongeza uaminifu kwenye mijadala, matangazo ya ajira, na taarifa rasmi, Malosha Forums linatumia rangi nne tofauti za alama za uthibitisho:',
-            'To build trust across discussions, job listings, and official announcements, Malosha Forums uses four distinct verification badge colors:'
+            'Ili kuongeza uaminifu kwenye mijadala, matangazo ya ajira, na taarifa rasmi, Malosha Forums linatumia rangi saba tofauti za alama za uthibitisho:',
+            'To build trust across discussions, job listings, and official announcements, Malosha Forums uses seven distinct verification badge colors:'
           )}
         </p>
 
@@ -1527,6 +1731,8 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
           </li>
         </ul>
       </section>
+        </>
+      )}
     </div>
   );
 };

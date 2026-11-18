@@ -28,27 +28,35 @@ import {
 import {
   AuthPromptReason,
   ChatMessage,
+  DirectChatThread,
   MchartNote,
+  MchartStatus,
+  MemberDirectoryCandidate,
   NavTab,
   NavUnreadCounts,
   PresenceArea,
   PrimaryBoard,
   Report,
   ReportReason,
+  SharedMediaPayload,
   SortMode,
+  StatusPrivacyMode,
   Topic,
   TopicCategory,
   UserNotification,
   UserNotificationType,
   UserProfile,
+  VideoPost,
   normalizeAccountStatus,
   normalizeBoardCategory,
   normalizeVerificationBadge,
 } from './types';
 import {
+  checkUserVideoLikesBatch,
   createTopic,
   deleteTopic,
   editTopic,
+  ensureDirectChatThread,
   getPrivateUserInfo,
   markAllUserNotificationsRead,
   markUserNotificationRead,
@@ -82,7 +90,9 @@ import { PWAInstallBanner } from './components/PWAInstallBanner';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { FloatingScrollButton } from './components/FloatingScrollButton';
 import { AuthView } from './components/AuthView';
-import { ForumChatView } from './components/ForumChatView';
+import { ForumChatView, MchartSubTab } from './components/ForumChatView';
+import { MemberProfileModal } from './components/MemberProfileModal';
+import { VideosFeedView } from './components/VideosFeedView';
 import { usePWAInstall } from './hooks/usePWAInstall';
 import {
   dismissPhoneNotifications,
@@ -116,6 +126,9 @@ function ForumShell() {
   const [topics, setTopics] = useState<Topic[]>([]);
   const [loadingTopics, setLoadingTopics] = useState(true);
   const [votedTopicIds, setVotedTopicIds] = useState<Set<string>>(new Set());
+  const [videos, setVideos] = useState<VideoPost[]>([]);
+  const [loadingVideos, setLoadingVideos] = useState(true);
+  const [likedVideoIds, setLikedVideoIds] = useState<Set<string>>(new Set());
   const [reports, setReports] = useState<Report[]>([]);
   const [userNotifications, setUserNotifications] = useState<UserNotification[]>([]);
 
@@ -179,6 +192,13 @@ function ForumShell() {
 
   const [mchartNotes, setMchartNotes] = useState<MchartNote[]>([]);
   const [loadingNotes, setLoadingNotes] = useState(true);
+  const [directChats, setDirectChats] = useState<DirectChatThread[]>([]);
+  const [activeDirectChatId, setActiveDirectChatId] = useState<string | null>(null);
+  const [mchartStatuses, setMchartStatuses] = useState<MchartStatus[]>([]);
+  const [loadingStatuses, setLoadingStatuses] = useState(true);
+  const [sharedKijiweniPayload, setSharedKijiweniPayload] =
+    useState<SharedMediaPayload | null>(null);
+
   const [lastSeenNotesMs, setLastSeenNotesMs] = useState<number>(() => {
     if (typeof window === 'undefined') return 0;
     try {
@@ -206,15 +226,23 @@ function ForumShell() {
     if (typeof window === 'undefined') return 'kijiweni';
     const tabParam = new URLSearchParams(window.location.search).get('tab');
     if (tabParam === 'mchart' || tabParam === 'chat') return 'chat';
+    if (tabParam === 'video' || tabParam === 'videos') return 'video';
     if (tabParam === 'fursa') return 'fursa';
     if (tabParam === 'makala') return 'makala';
     if (tabParam === 'trending') return 'trending';
     return 'kijiweni';
   });
-  const [mchartSubTab, setMchartSubTab] = useState<'messages' | 'notes'>(() => {
-    if (typeof window === 'undefined') return 'messages';
+  const [initialVideoId, setInitialVideoId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const raw = new URLSearchParams(window.location.search).get('v');
+    return raw && raw.trim() ? raw.trim() : null;
+  });
+  const [mchartSubTab, setMchartSubTab] = useState<MchartSubTab>(() => {
+    if (typeof window === 'undefined') return 'direct';
     const viewParam = new URLSearchParams(window.location.search).get('view');
-    return viewParam === 'notes' ? 'notes' : 'messages';
+    if (viewParam === 'notes') return 'notes';
+    if (viewParam === 'messages' || viewParam === 'group') return 'messages';
+    return 'direct';
   });
   const [authPromptReason, setAuthPromptReason] = useState<AuthPromptReason | null>(null);
   const returnDestinationRef = useRef<{ tab: NavTab; topicId: string | null }>({
@@ -231,7 +259,15 @@ function ForumShell() {
     const tabParam = new URLSearchParams(window.location.search).get('tab');
     if (tabParam === 'fursa') return 'Fursa';
     if (tabParam === 'makala') return 'Makala';
-    if (tabParam === 'mchart' || tabParam === 'chat' || tabParam === 'trending') return 'all';
+    if (
+      tabParam === 'mchart' ||
+      tabParam === 'chat' ||
+      tabParam === 'video' ||
+      tabParam === 'videos' ||
+      tabParam === 'trending'
+    ) {
+      return 'all';
+    }
     return 'Kijiweni';
   });
   const [sortMode, setSortMode] = useState<SortMode>('newest');
@@ -259,6 +295,11 @@ function ForumShell() {
   } | null>(null);
 
   const [toast, setToast] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
+  const [profileModalTarget, setProfileModalTarget] = useState<{
+    uid: string;
+    displayName: string;
+    photoURL?: string;
+  } | null>(null);
   const [seeding, setSeeding] = useState(false);
   const [installGuideOpen, setInstallGuideOpen] = useState(false);
   const [visibleTopicIds, setVisibleTopicIds] = useState<string[]>([]);
@@ -268,10 +309,13 @@ function ForumShell() {
   const knownChatIdsRef = useRef<Set<string>>(new Set());
   const initialNotesLoadedRef = useRef(false);
   const knownNoteIdsRef = useRef<Set<string>>(new Set());
+  const initialDmLoadedRef = useRef(false);
+  const lastDmUpdateByThreadRef = useRef<Record<string, number>>({});
   const initialUserNotifsLoadedRef = useRef(false);
   const knownUserNotifIdsRef = useRef<Set<string>>(new Set());
   const activeTabRef = useRef<NavTab>(activeTab);
-  const mchartSubTabRef = useRef<'messages' | 'notes'>(mchartSubTab);
+  const mchartSubTabRef = useRef<MchartSubTab>(mchartSubTab);
+  const activeDirectChatIdRef = useRef<string | null>(activeDirectChatId);
   const selectedTopicIdRef = useRef<string | null>(selectedTopicId);
   const checkedVoteKeysRef = useRef<Set<string>>(new Set());
   const feedScrollYRef = useRef<number>(0);
@@ -283,6 +327,10 @@ function ForumShell() {
   useEffect(() => {
     mchartSubTabRef.current = mchartSubTab;
   }, [mchartSubTab]);
+
+  useEffect(() => {
+    activeDirectChatIdRef.current = activeDirectChatId;
+  }, [activeDirectChatId]);
 
   useEffect(() => {
     selectedTopicIdRef.current = selectedTopicId;
@@ -373,6 +421,7 @@ function ForumShell() {
           suspendedReason: typeof d.suspendedReason === 'string' ? d.suspendedReason : '',
           topicsCount: Number(d.topicsCount || 0),
           repliesCount: Number(d.repliesCount || 0),
+          followersCount: Number(d.followersCount || 0),
           createdAt: d.createdAt || null,
           updatedAt: d.updatedAt || null,
         });
@@ -432,6 +481,129 @@ function ForumShell() {
 
     return () => unsub();
   }, [authReady]);
+
+  // Real-time TikTok short videos & photo-music feed listener (plus signed-in author's private posts)
+  useEffect(() => {
+    if (!authReady) return;
+    setLoadingVideos(true);
+    const path = 'videos';
+    const mapVideoDoc = (d: { id: string; data: () => Record<string, unknown> }): VideoPost => {
+      const data = d.data();
+      const mediaType: VideoPost['mediaType'] = data.mediaType === 'photo' ? 'photo' : 'video';
+      return {
+        id: d.id,
+        authorId: String(data.authorId || ''),
+        authorName: String(data.authorName || 'Mwanachama'),
+        authorPhoto: String(data.authorPhoto || ''),
+        mediaType,
+        videoUrl: String(data.videoUrl || ''),
+        photoUrls: Array.isArray(data.photoUrls) ? data.photoUrls.map(String).filter(Boolean) : [],
+        audioUrl: typeof data.audioUrl === 'string' ? data.audioUrl : '',
+        cloudinaryPublicId: String(data.cloudinaryPublicId || ''),
+        thumbnailUrl: String(data.thumbnailUrl || ''),
+        caption: String(data.caption || ''),
+        soundName: String(data.soundName || 'Sauti Halisi'),
+        tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
+        durationSec: Number(data.durationSec || 0),
+        likesCount: Number(data.likesCount || 0),
+        commentsCount: Number(data.commentsCount || 0),
+        sharesCount: Number(data.sharesCount || 0),
+        isArchived: Boolean(data.isArchived),
+        allowComments: data.allowComments !== false,
+        allowDownload: data.allowDownload !== false,
+        allowLikes: data.allowLikes !== false,
+        showLikeCount: data.showLikeCount !== false,
+        autoReplyEnabled: Boolean(data.autoReplyEnabled),
+        autoReplyMessage: typeof data.autoReplyMessage === 'string' ? data.autoReplyMessage : '',
+        autoReplyTrigger: data.autoReplyTrigger === 'keyword' ? 'keyword' : 'all',
+        autoReplyKeyword: typeof data.autoReplyKeyword === 'string' ? data.autoReplyKeyword : '',
+        createdAt: (data.createdAt as Timestamp | null) || null,
+        updatedAt: (data.updatedAt as Timestamp | null) || null,
+      };
+    };
+
+    let publicList: VideoPost[] = [];
+    let ownPrivateList: VideoPost[] = [];
+
+    const mergeLists = () => {
+      const byId = new Map<string, VideoPost>();
+      for (const item of publicList) byId.set(item.id, item);
+      for (const item of ownPrivateList) byId.set(item.id, item);
+      const merged = Array.from(byId.values()).sort((a, b) => {
+        const msA = a.createdAt ? a.createdAt.toMillis() : Date.now();
+        const msB = b.createdAt ? b.createdAt.toMillis() : Date.now();
+        return msB - msA;
+      });
+      setVideos(merged);
+      setLoadingVideos(false);
+    };
+
+    const qPublic = query(
+      collection(db, path),
+      where('isArchived', '==', false),
+      orderBy('createdAt', 'desc'),
+      limit(60)
+    );
+
+    const unsubPublic = onSnapshot(
+      qPublic,
+      (snapshot) => {
+        publicList = snapshot.docs.map((d) => mapVideoDoc(d));
+        mergeLists();
+      },
+      (error) => {
+        setLoadingVideos(false);
+        handleFirestoreError(error, OperationType.LIST, path);
+      }
+    );
+
+    let unsubOwn: (() => void) | null = null;
+    if (user?.uid) {
+      const qOwn = query(
+        collection(db, path),
+        where('authorId', '==', user.uid),
+        limit(40)
+      );
+      unsubOwn = onSnapshot(
+        qOwn,
+        (snapshot) => {
+          ownPrivateList = snapshot.docs.map((d) => mapVideoDoc(d));
+          mergeLists();
+        },
+        () => {
+          // Non-fatal fallback
+        }
+      );
+    }
+
+    return () => {
+      unsubPublic();
+      if (unsubOwn) unsubOwn();
+    };
+  }, [authReady, user?.uid]);
+
+  // Sync user's liked videos
+  useEffect(() => {
+    if (!authReady || !user || videos.length === 0) {
+      setLikedVideoIds(new Set());
+      return;
+    }
+    let cancelled = false;
+    void checkUserVideoLikesBatch(
+      videos.map((v) => v.id),
+      user.uid
+    ).then((res) => {
+      if (cancelled) return;
+      const next = new Set<string>();
+      Object.entries(res).forEach(([vid, ok]) => {
+        if (ok) next.add(vid);
+      });
+      setLikedVideoIds(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [authReady, user, videos]);
 
   // Reset cached vote checks when user changes
   useEffect(() => {
@@ -521,9 +693,13 @@ function ForumShell() {
     return () => window.clearInterval(timer);
   }, []);
 
-  // Real-time community group chat listener (strictly TODAY's messages only)
+  // Real-time community group chat listener (signed-in members only, strictly TODAY's messages)
   useEffect(() => {
-    if (!authReady) return;
+    if (!authReady || !user) {
+      setChatMessages([]);
+      setLoadingChat(false);
+      return;
+    }
     const path = 'forum_chat_messages';
     const [yr, mo, dy] = todayKey.split('-').map(Number);
     const startOfToday = new Date(yr, mo - 1, dy, 0, 0, 0, 0);
@@ -621,9 +797,13 @@ function ForumShell() {
     return () => unsub();
   }, [authReady, todayKey, user?.uid, showToast, tr]);
 
-  // Real-time Mchart Notes listener (owner structured notes, PDFs & archive files)
+  // Real-time Mchart Notes listener (signed-in members only)
   useEffect(() => {
-    if (!authReady) return;
+    if (!authReady || !user) {
+      setMchartNotes([]);
+      setLoadingNotes(false);
+      return;
+    }
     const path = 'mchart_notes';
     const q = query(
       collection(db, path),
@@ -847,6 +1027,353 @@ function ForumShell() {
     });
   }, []);
 
+  // Real-time Private 1-on-1 Direct Chat threads listener (strictly participant-only)
+  useEffect(() => {
+    initialDmLoadedRef.current = false;
+    lastDmUpdateByThreadRef.current = {};
+
+    if (!authReady || !user) {
+      setDirectChats([]);
+      setActiveDirectChatId(null);
+      return;
+    }
+
+    const path = 'direct_chats';
+    const q = query(
+      collection(db, path),
+      where('participants', 'array-contains', user.uid),
+      limit(80)
+    );
+
+    const unsub = onSnapshot(
+      q,
+      (snapshot) => {
+        const list: DirectChatThread[] = snapshot.docs.map((d) => {
+          const data = d.data();
+          const pA = String(data.participantA || '');
+          const pB = String(data.participantB || '');
+          return {
+            chatId: d.id,
+            participantA: pA,
+            participantB: pB,
+            participants: [pA, pB],
+            participantAName: String(data.participantAName || 'Mwanachama'),
+            participantAPhoto: String(data.participantAPhoto || ''),
+            participantBName: String(data.participantBName || 'Mwanachama'),
+            participantBPhoto: String(data.participantBPhoto || ''),
+            lastMessageText: String(data.lastMessageText || ''),
+            lastSenderId: String(data.lastSenderId || ''),
+            lastMessageAt: data.lastMessageAt || null,
+            unreadCountA: Number(data.unreadCountA || 0),
+            unreadCountB: Number(data.unreadCountB || 0),
+            lastReadAtA: data.lastReadAtA || null,
+            lastReadAtB: data.lastReadAtB || null,
+            createdAt: data.createdAt || null,
+            updatedAt: data.updatedAt || null,
+          };
+        });
+
+        setDirectChats(list);
+
+        if (!initialDmLoadedRef.current) {
+          const map: Record<string, number> = {};
+          list.forEach((t) => {
+            map[t.chatId] = t.lastMessageAt ? t.lastMessageAt.toMillis() : 0;
+          });
+          lastDmUpdateByThreadRef.current = map;
+          initialDmLoadedRef.current = true;
+          return;
+        }
+
+        // Notify user if another participant sent a newer DM while not viewing that exact DM room
+        for (const t of list) {
+          const msgMs = t.lastMessageAt ? t.lastMessageAt.toMillis() : 0;
+          const prevMs = lastDmUpdateByThreadRef.current[t.chatId] || 0;
+          if (msgMs > prevMs) {
+            lastDmUpdateByThreadRef.current[t.chatId] = msgMs;
+            if (t.lastSenderId && t.lastSenderId !== user.uid && t.lastMessageText) {
+              const isViewingThisDm =
+                activeTabRef.current === 'chat' &&
+                mchartSubTabRef.current === 'direct' &&
+                activeDirectChatIdRef.current === t.chatId &&
+                !selectedTopicIdRef.current &&
+                typeof document !== 'undefined' &&
+                !document.hidden;
+
+              if (!isViewingThisDm) {
+                const senderName =
+                  t.lastSenderId === t.participantA ? t.participantAName : t.participantBName;
+                const alertTitle = `${senderName} · ${tr('Ujumbe Binafsi', 'Private Message')}`;
+                if (typeof document !== 'undefined' && !document.hidden) {
+                  showToast(`${alertTitle}: ${t.lastMessageText.slice(0, 75)}`);
+                }
+                void sendPhoneNotification({
+                  title: alertTitle,
+                  body: t.lastMessageText.slice(0, 140),
+                  url: '/?tab=mchart&view=direct',
+                  tag: `malosha-dm-${t.chatId}`,
+                });
+              }
+            }
+          }
+        }
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, path);
+      }
+    );
+
+    return () => unsub();
+  }, [authReady, user, showToast, tr]);
+
+  // Real-time 24h Mchart Photo Statuses (Members + Personal audience + Author's own statuses)
+  useEffect(() => {
+    if (!authReady || !user) {
+      setMchartStatuses([]);
+      setLoadingStatuses(false);
+      return;
+    }
+
+    setLoadingStatuses(true);
+    const path = 'mchart_statuses';
+    let membersList: MchartStatus[] = [];
+    let targetedList: MchartStatus[] = [];
+    let ownList: MchartStatus[] = [];
+
+    const mapDoc = (d: { id: string; data: () => Record<string, unknown> }): MchartStatus => {
+      const data = d.data();
+      const privacy: StatusPrivacyMode = data.privacy === 'selected' ? 'selected' : 'members';
+      return {
+        id: d.id,
+        authorId: String(data.authorId || ''),
+        authorName: String(data.authorName || 'Mwanachama'),
+        authorPhoto: String(data.authorPhoto || ''),
+        imageUrl: String(data.imageUrl || ''),
+        caption: String(data.caption || ''),
+        privacy,
+        allowedViewerIds: Array.isArray(data.allowedViewerIds)
+          ? data.allowedViewerIds.map(String)
+          : [],
+        audienceTokens: Array.isArray(data.audienceTokens)
+          ? data.audienceTokens.map(String)
+          : [],
+        viewsCount: Number(data.viewsCount || 0),
+        createdAt: (data.createdAt as Timestamp) || null,
+        expiresAt: (data.expiresAt as Timestamp) || null,
+      };
+    };
+
+    const mergeAndSet = () => {
+      const byId = new Map<string, MchartStatus>();
+      const now = Date.now();
+      [...membersList, ...targetedList, ...ownList].forEach((s) => {
+        if (!s.expiresAt || s.expiresAt.toMillis() > now) {
+          byId.set(s.id, s);
+        }
+      });
+      setMchartStatuses(Array.from(byId.values()));
+      setLoadingStatuses(false);
+    };
+
+    const qMembers = query(
+      collection(db, path),
+      where('audienceTokens', 'array-contains', '__MEMBERS__'),
+      limit(100)
+    );
+    const qTargeted = query(
+      collection(db, path),
+      where('audienceTokens', 'array-contains', user.uid),
+      limit(100)
+    );
+    const qOwn = query(
+      collection(db, path),
+      where('authorId', '==', user.uid),
+      limit(50)
+    );
+
+    const unsubMembers = onSnapshot(
+      qMembers,
+      (snap) => {
+        membersList = snap.docs.map((docSnap) => mapDoc(docSnap));
+        mergeAndSet();
+      },
+      (error) => {
+        setLoadingStatuses(false);
+        handleFirestoreError(error, OperationType.LIST, path);
+      }
+    );
+
+    const unsubTargeted = onSnapshot(
+      qTargeted,
+      (snap) => {
+        targetedList = snap.docs.map((docSnap) => mapDoc(docSnap));
+        mergeAndSet();
+      },
+      (error) => {
+        setLoadingStatuses(false);
+        handleFirestoreError(error, OperationType.LIST, path);
+      }
+    );
+
+    const unsubOwn = onSnapshot(
+      qOwn,
+      (snap) => {
+        ownList = snap.docs.map((docSnap) => mapDoc(docSnap));
+        mergeAndSet();
+      },
+      (error) => {
+        setLoadingStatuses(false);
+        handleFirestoreError(error, OperationType.LIST, path);
+      }
+    );
+
+    return () => {
+      unsubMembers();
+      unsubTargeted();
+      unsubOwn();
+    };
+  }, [authReady, user]);
+
+  // Read shared photo from OS Share Sheet (Service Worker Cache) on launch or focus
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('caches' in window)) return;
+
+    const consumeShareTargetCache = async () => {
+      try {
+        const url = new URL(window.location.href);
+        const hasFlag = url.searchParams.get('share_target') === '1';
+        const cache = await window.caches.open('malosha-share-target-v1');
+        const imgRes = await cache.match('/_malosha_shared_image');
+        const metaRes = await cache.match('/_malosha_shared_meta');
+
+        if (!imgRes && !metaRes) {
+          if (hasFlag) {
+            url.searchParams.delete('share_target');
+            window.history.replaceState({}, '', url.toString());
+          }
+          return;
+        }
+
+        let sharedFile: File | null = null;
+        if (imgRes) {
+          const blob = await imgRes.blob();
+          if (blob.size > 0) {
+            const rawName = imgRes.headers.get('X-Malosha-Filename');
+            const fileName = rawName ? decodeURIComponent(rawName) : 'picha-ya-simu.jpg';
+            const mimeType = imgRes.headers.get('Content-Type') || blob.type || 'image/jpeg';
+            sharedFile = new File([blob], fileName, { type: mimeType });
+          }
+          await cache.delete('/_malosha_shared_image');
+        }
+
+        let sharedTitle = '';
+        let sharedText = '';
+        if (metaRes) {
+          try {
+            const meta = (await metaRes.json()) as {
+              title?: string;
+              text?: string;
+              url?: string;
+            };
+            sharedTitle = typeof meta.title === 'string' ? meta.title : '';
+            const textParts = [meta.text, meta.url].filter(
+              (x): x is string => typeof x === 'string' && x.trim().length > 0
+            );
+            sharedText = textParts.join('\n').trim();
+          } catch {
+            // Ignore malformed meta
+          }
+          await cache.delete('/_malosha_shared_meta');
+        }
+
+        if (hasFlag) {
+          url.searchParams.delete('share_target');
+          window.history.replaceState({}, '', url.toString());
+        }
+
+        if (sharedFile || sharedTitle || sharedText) {
+          setSelectedTopicId(null);
+          setActiveTab('kijiweni');
+          setSelectedCategory('Kijiweni');
+          setSharedKijiweniPayload({
+            id: Date.now(),
+            file: sharedFile,
+            title: sharedTitle,
+            text: sharedText,
+          });
+        }
+      } catch {
+        // Ignore cache read failures
+      }
+    };
+
+    void consumeShareTargetCache();
+
+    const handleVisibleOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        void consumeShareTargetCache();
+      }
+    };
+    window.addEventListener('focus', handleVisibleOrFocus);
+    document.addEventListener('visibilitychange', handleVisibleOrFocus);
+    return () => {
+      window.removeEventListener('focus', handleVisibleOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibleOrFocus);
+    };
+  }, []);
+
+  const memberDirectoryCandidates = useMemo<MemberDirectoryCandidate[]>(() => {
+    const map = new Map<string, MemberDirectoryCandidate>();
+    const addCandidate = (uid: string, name: string, photo: string) => {
+      if (!uid || (user && uid === user.uid)) return;
+      const existing = map.get(uid);
+      if (!existing) {
+        map.set(uid, {
+          uid,
+          displayName: name || 'Mwanachama',
+          photoURL: photo || '',
+        });
+      } else {
+        if ((!existing.photoURL || existing.photoURL === '') && photo) {
+          existing.photoURL = photo;
+        }
+        if (existing.displayName === 'Mwanachama' && name && name !== 'Mwanachama') {
+          existing.displayName = name;
+        }
+      }
+    };
+
+    directChats.forEach((t) => {
+      if (!user) return;
+      const selfIsA = user.uid === t.participantA;
+      addCandidate(
+        selfIsA ? t.participantB : t.participantA,
+        selfIsA ? t.participantBName : t.participantAName,
+        selfIsA ? t.participantBPhoto : t.participantAPhoto
+      );
+    });
+    chatMessages.forEach((m) => addCandidate(m.senderId, m.senderName, m.senderPhoto));
+    topics.forEach((t) => addCandidate(t.authorId, t.authorName, t.authorPhoto));
+
+    return Array.from(map.values());
+  }, [directChats, chatMessages, topics, user]);
+
+  const unreadDirectCount = useMemo(() => {
+    if (!user) return 0;
+    return directChats.reduce((sum, t) => {
+      if (
+        activeTab === 'chat' &&
+        mchartSubTab === 'direct' &&
+        activeDirectChatId === t.chatId &&
+        !selectedTopicId
+      ) {
+        return sum;
+      }
+      const count = user.uid === t.participantA ? t.unreadCountA : t.unreadCountB;
+      return sum + (count > 0 ? count : 0);
+    }, 0);
+  }, [user, directChats, activeTab, mchartSubTab, activeDirectChatId, selectedTopicId]);
+
   const unreadCounts: NavUnreadCounts = useMemo(() => {
     const countBoard = (board: PrimaryBoard): number => {
       if (currentlyViewedBoard === board) return 0;
@@ -864,7 +1391,7 @@ function ForumShell() {
       kijiweni: countBoard('Kijiweni'),
       fursa: countBoard('Fursa'),
       makala: countBoard('Makala'),
-      chat: unreadChatCount + unreadNotesCount,
+      chat: unreadChatCount + unreadNotesCount + unreadDirectCount,
     };
   }, [
     currentlyViewedBoard,
@@ -874,6 +1401,7 @@ function ForumShell() {
     readTopicIds,
     unreadChatCount,
     unreadNotesCount,
+    unreadDirectCount,
   ]);
 
   // Real-time Facebook-style reply & comment notifications for the signed-in user
@@ -992,12 +1520,25 @@ function ForumShell() {
         url.searchParams.set('tab', 'mchart');
         changed = true;
       }
-      if (mchartSubTab === 'notes') {
-        if (url.searchParams.get('view') !== 'notes') {
-          url.searchParams.set('view', 'notes');
+      if (mchartSubTab === 'notes' || mchartSubTab === 'messages') {
+        if (url.searchParams.get('view') !== mchartSubTab) {
+          url.searchParams.set('view', mchartSubTab);
           changed = true;
         }
       } else if (url.searchParams.has('view')) {
+        url.searchParams.delete('view');
+        changed = true;
+      }
+      if (url.searchParams.has('v')) {
+        url.searchParams.delete('v');
+        changed = true;
+      }
+    } else if (activeTab === 'video' && !selectedTopicId) {
+      if (url.searchParams.get('tab') !== 'video') {
+        url.searchParams.set('tab', 'video');
+        changed = true;
+      }
+      if (url.searchParams.has('view')) {
         url.searchParams.delete('view');
         changed = true;
       }
@@ -1008,6 +1549,10 @@ function ForumShell() {
       }
       if (url.searchParams.has('view')) {
         url.searchParams.delete('view');
+        changed = true;
+      }
+      if (url.searchParams.has('v')) {
+        url.searchParams.delete('v');
         changed = true;
       }
     }
@@ -1199,6 +1744,7 @@ function ForumShell() {
   const activePresenceArea: PresenceArea = useMemo(() => {
     if (activeTab === 'chat') return 'mchart';
     if (activeTab === 'kijiweni') return 'kijiweni';
+    if (activeTab === 'video') return 'video';
     if (activeTab === 'fursa') return 'fursa';
     if (activeTab === 'makala') return 'makala';
     if (activeTab === 'safety') return 'profile';
@@ -1223,6 +1769,13 @@ function ForumShell() {
 
   const handleSelectTab = (tab: NavTab) => {
     setAuthPromptReason(null);
+    if (tab === 'chat' && activeTab !== 'chat') {
+      setMchartSubTab('direct');
+      setActiveDirectChatId(null);
+    }
+    if (tab !== 'video') {
+      setInitialVideoId(null);
+    }
     setActiveTab(tab);
     setSelectedTopicId(null);
     if (tab === 'kijiweni') {
@@ -1416,12 +1969,15 @@ function ForumShell() {
     }
   };
 
-  const handleCreateKijiweniPost = async (data: {
-    title: string;
-    body: string;
-    tags: string[];
-    coverImage?: string;
-  }) => {
+  const handleCreateKijiweniPost = async (
+    data: {
+      title: string;
+      body: string;
+      tags: string[];
+      coverImage?: string;
+    },
+    options?: { silent?: boolean }
+  ) => {
     if (!user) {
       showToast(
         tr(
@@ -1445,7 +2001,9 @@ function ForumShell() {
         ...(data.coverImage ? { coverImage: data.coverImage } : {}),
       }
     );
-    showToast(tr('Chapisho lako limewekwa Kijiweni!', 'Your post is now live in Kijiweni!'));
+    if (!options?.silent) {
+      showToast(tr('Chapisho lako limewekwa Kijiweni!', 'Your post is now live in Kijiweni!'));
+    }
   };
 
   const handleCreateFursaPost = async (data: {
@@ -1691,10 +2249,12 @@ function ForumShell() {
 
   const appReady = authReady;
   const isMchartView = activeTab === 'chat' && !selectedTopic && !selectedTopicId;
+  const isVideoView = activeTab === 'video' && !selectedTopic && !selectedTopicId;
+  const isFullStageView = isMchartView || isVideoView;
   const [mobileKeyboardOpen, setMobileKeyboardOpen] = useState(false);
 
   useEffect(() => {
-    if (!isMchartView || typeof window === 'undefined') {
+    if (!isFullStageView || typeof window === 'undefined') {
       setMobileKeyboardOpen(false);
       return;
     }
@@ -1730,7 +2290,7 @@ function ForumShell() {
       vv?.removeEventListener('resize', checkKeyboard);
       setMobileKeyboardOpen(false);
     };
-  }, [isMchartView]);
+  }, [isFullStageView]);
 
   return (
     <UserPresenceProvider
@@ -1744,29 +2304,37 @@ function ForumShell() {
       <AppLaunchLoader ready={appReady} />
       <OfflineIndicator />
 
-      <Header
-        activeTab={activeTab}
-        onSelectTab={handleSelectTab}
-        onOpenTopic={openTopicFromFeed}
-        topics={topics}
-        userUid={user?.uid || null}
-        userProfile={userProfile}
-        userDisplayName={user?.displayName || 'Mwanachama'}
-        userPhoto={user?.photoURL || ''}
-        isAdmin={isAdmin}
-        isSuspended={isSuspended}
-        onSignIn={handleSignIn}
-        onSignOut={handleSignOut}
-        authBusy={authBusy}
-        onToast={showToast}
-        unreadCounts={unreadCounts}
-        userNotifications={userNotifications}
-        onMarkNotificationRead={handleMarkNotificationRead}
-        onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
-      />
+      <div className={isVideoView ? 'hidden md:block' : ''}>
+        <Header
+          activeTab={activeTab}
+          onSelectTab={handleSelectTab}
+          onOpenTopic={openTopicFromFeed}
+          topics={topics}
+          userUid={user?.uid || null}
+          userProfile={userProfile}
+          userDisplayName={user?.displayName || 'Mwanachama'}
+          userPhoto={user?.photoURL || ''}
+          isAdmin={isAdmin}
+          isSuspended={isSuspended}
+          onSignIn={handleSignIn}
+          onSignOut={handleSignOut}
+          authBusy={authBusy}
+          onToast={showToast}
+          unreadCounts={unreadCounts}
+          userNotifications={userNotifications}
+          onMarkNotificationRead={handleMarkNotificationRead}
+          onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
+        />
+      </div>
 
-      <main className={`flex-1 pt-[var(--malosha-header-h,118px)] ${isMchartView ? '' : 'pb-16 md:pb-0'}`}>
-        {isSuspended && !isMchartView && (
+      <main
+        className={`flex-1 ${
+          isVideoView
+            ? 'pt-0 md:pt-[var(--malosha-header-h,118px)]'
+            : `pt-[var(--malosha-header-h,118px)] ${isFullStageView ? '' : 'pb-16 md:pb-0'}`
+        }`}
+      >
+        {isSuspended && !isFullStageView && (
           <div className="border-b border-red-200 bg-red-50 px-4 py-3 text-red-900">
             <div className="mx-auto flex max-w-6xl flex-col items-start justify-between gap-2 sm:flex-row sm:items-center">
               <div className="flex items-start gap-2.5 text-xs sm:text-sm">
@@ -1833,6 +2401,7 @@ function ForumShell() {
                 topicId: selectedTopic.id,
               });
             }}
+            onAuthorClick={(author) => setProfileModalTarget(author)}
             onSignIn={handleSignIn}
             onToast={showToast}
             onRequestConfirm={(opts) => setConfirmState(opts)}
@@ -1915,6 +2484,7 @@ function ForumShell() {
             isAdmin={isAdmin}
             isSuspended={isSuspended}
             myReports={reports}
+            topics={topics}
             onSaveProfile={handleSaveProfile}
             onUpdateProfilePhoto={handleUpdateProfilePhoto}
             onPublishPosterTopic={async (data) => {
@@ -1940,6 +2510,11 @@ function ForumShell() {
           <ForumChatView
             messages={chatMessages}
             loading={loadingChat}
+            directChats={directChats}
+            unreadDirectCount={unreadDirectCount}
+            statuses={mchartStatuses}
+            loadingStatuses={loadingStatuses}
+            memberCandidates={memberDirectoryCandidates}
             notes={mchartNotes}
             loadingNotes={loadingNotes}
             unreadNotesCount={unreadNotesCount}
@@ -1948,6 +2523,8 @@ function ForumShell() {
             onClearedAllChats={() => setChatMessages([])}
             subTab={mchartSubTab}
             onChangeSubTab={setMchartSubTab}
+            activeDirectChatId={activeDirectChatId}
+            onChangeActiveDirectChatId={setActiveDirectChatId}
             user={user}
             userDisplayName={userProfile?.displayName || user?.displayName || 'Mwanachama'}
             userPhoto={userProfile?.photoURL || user?.photoURL || ''}
@@ -1955,6 +2532,23 @@ function ForumShell() {
             isSuspended={isSuspended}
             keyboardOpen={isMchartView && mobileKeyboardOpen}
             onSignIn={handleSignIn}
+            onToast={showToast}
+            onRequestConfirm={(opts) => setConfirmState(opts)}
+          />
+        ) : activeTab === 'video' ? (
+          <VideosFeedView
+            videos={videos}
+            loading={loadingVideos}
+            likedVideoIds={likedVideoIds}
+            user={user}
+            userDisplayName={userProfile?.displayName || user?.displayName || 'Mwanachama'}
+            userPhoto={userProfile?.photoURL || user?.photoURL || ''}
+            isAdmin={isAdmin}
+            isSuspended={isSuspended}
+            initialVideoId={initialVideoId}
+            onBack={() => handleSelectTab('kijiweni')}
+            onAuthorClick={(author) => setProfileModalTarget(author)}
+            onSignIn={() => handleSignIn()}
             onToast={showToast}
             onRequestConfirm={(opts) => setConfirmState(opts)}
           />
@@ -1988,6 +2582,10 @@ function ForumShell() {
             onCreateFursaPost={handleCreateFursaPost}
             onCreateMakalaPost={handleCreateMakalaPost}
             inlineExpandRequest={inlineExpandRequest}
+            sharedKijiweniPayload={sharedKijiweniPayload}
+            onClearSharedKijiweniPayload={(id) =>
+              setSharedKijiweniPayload((curr) => (curr && curr.id === id ? null : curr))
+            }
             onEditTopic={(t) => {
               if (blockIfSuspended()) return;
               setEditingTopic(t);
@@ -2002,6 +2600,7 @@ function ForumShell() {
                 topicId,
               });
             }}
+            onAuthorClick={(author) => setProfileModalTarget(author)}
             onSignIn={handleSignIn}
             onToast={showToast}
             onRequestConfirm={(opts) => setConfirmState(opts)}
@@ -2013,11 +2612,11 @@ function ForumShell() {
         )}
       </main>
 
-      {activeTab !== 'chat' && (
+      {!isFullStageView && (
         <footer className="border-t border-slate-200 bg-white py-6 pb-20 md:pb-6">
           <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 text-xs text-slate-500 sm:flex-row sm:px-6">
             <p>
-              © {new Date().getFullYear()} Malosha Forums. Kijiweni ·{' '}
+              © {new Date().getFullYear()} Malosha Forums. Kijiweni · Video ·{' '}
               {tr('Fursa', 'Opportunities')} · {tr('Makala', 'Articles')} · Mchart ·{' '}
               {tr('Zilizovuma', 'Trending')}.
             </p>
@@ -2028,6 +2627,13 @@ function ForumShell() {
                 className="hover:text-slate-900 hover:underline"
               >
                 Kijiweni
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectTab('video')}
+                className="hover:text-slate-900 hover:underline"
+              >
+                Video
               </button>
               <button
                 type="button"
@@ -2067,14 +2673,15 @@ function ForumShell() {
         onSelectTab={handleSelectTab}
         unreadCounts={unreadCounts}
         hidden={isMchartView && mobileKeyboardOpen}
+        darkTheme={isVideoView}
       />
 
-      {activeTab !== 'chat' && (
+      {!isFullStageView && (
         <FloatingScrollButton resetKey={`${activeTab}:${selectedTopicId || ''}`} />
       )}
 
       {/* Floating Add Topic / Post Action Icon */}
-      {activeTab !== 'chat' && activeTab !== 'auth' && (
+      {!isFullStageView && activeTab !== 'auth' && (
         <button
           type="button"
           onClick={handleOpenNewTopic}
@@ -2132,6 +2739,38 @@ function ForumShell() {
             await fn();
           }
         }}
+      />
+
+      <MemberProfileModal
+        memberUid={profileModalTarget?.uid || null}
+        fallbackName={profileModalTarget?.displayName}
+        fallbackPhoto={profileModalTarget?.photoURL}
+        currentUser={user}
+        currentUserDisplayName={userProfile?.displayName || user?.displayName || 'Mwanachama'}
+        currentUserPhoto={userProfile?.photoURL || user?.photoURL || ''}
+        topics={topics}
+        isSuspended={isSuspended}
+        onClose={() => setProfileModalTarget(null)}
+        onSignIn={handleSignIn}
+        onStartPrivateChat={async (target) => {
+          if (!user) {
+            handleSignIn('chat');
+            return;
+          }
+          if (blockIfSuspended()) return;
+          const thread = await ensureDirectChatThread(
+            user,
+            userProfile?.displayName || user.displayName || 'Mwanachama',
+            userProfile?.photoURL || user.photoURL || '',
+            target
+          );
+          setActiveTab('chat');
+          setMchartSubTab('direct');
+          setActiveDirectChatId(thread.chatId);
+          setSelectedTopicId(null);
+        }}
+        onOpenTopic={openTopicFromFeed}
+        onToast={showToast}
       />
 
       <PWAInstallBanner

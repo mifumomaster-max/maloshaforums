@@ -9,6 +9,7 @@ interface MobileBottomNavProps {
   unreadCounts?: NavUnreadCounts;
   unreadChatCount?: number;
   hidden?: boolean;
+  darkTheme?: boolean;
 }
 
 export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
@@ -17,6 +18,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   unreadCounts,
   unreadChatCount = 0,
   hidden = false,
+  darkTheme = false,
 }) => {
   const { tr } = useLanguage();
 
@@ -24,6 +26,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
 
   const counts: NavUnreadCounts = unreadCounts || {
     kijiweni: 0,
+    video: 0,
     fursa: 0,
     makala: 0,
     chat: unreadChatCount,
@@ -41,6 +44,13 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
       iconSection: 'kijiweni',
       label: 'Kijiweni',
       unread: counts.kijiweni,
+      badgeTone: 'crimson',
+    },
+    {
+      id: 'video',
+      iconSection: 'video',
+      label: 'Video',
+      unread: counts.video || 0,
       badgeTone: 'crimson',
     },
     {
@@ -76,9 +86,13 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   return (
     <nav
       aria-label={tr('Urambazaji wa simu', 'Mobile navigation')}
-      className="fixed right-0 bottom-0 left-0 z-40 transform-gpu border-t border-slate-200/90 bg-white/95 backdrop-blur-md pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_16px_rgba(15,23,42,0.08)] will-change-transform md:hidden"
+      className={`fixed right-0 bottom-0 left-0 z-40 transform-gpu border-t backdrop-blur-md pb-[env(safe-area-inset-bottom)] will-change-transform md:hidden ${
+        darkTheme
+          ? 'border-white/15 bg-black/95 shadow-[0_-4px_20px_rgba(0,0,0,0.65)]'
+          : 'border-slate-200/90 bg-white/95 shadow-[0_-4px_16px_rgba(15,23,42,0.08)]'
+      }`}
     >
-      <div className="grid h-[58px] grid-cols-5 items-center">
+      <div className="grid h-[58px] grid-cols-6 items-center">
         {items.map((item) => {
           const active = activeTab === item.id;
           const showBadge = item.unread > 0 && !active;
@@ -89,14 +103,22 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
               onClick={() => onSelectTab(item.id)}
               aria-current={active ? 'page' : undefined}
               className={`relative flex min-h-[48px] flex-col items-center justify-center px-0.5 py-1 transition-all focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[#1D4E89] ${
-                active
-                  ? 'bg-amber-50/55 font-bold text-[#0E2640]'
-                  : 'text-slate-600 hover:bg-slate-50/80 hover:text-slate-900'
+                darkTheme
+                  ? active
+                    ? 'bg-white/10 font-bold text-white'
+                    : 'text-white/65 hover:bg-white/5 hover:text-white'
+                  : active
+                    ? 'bg-amber-50/55 font-bold text-[#0E2640]'
+                    : 'text-slate-600 hover:bg-slate-50/80 hover:text-slate-900'
               }`}
             >
               {active && (
                 <span
-                  className="absolute top-0 h-[3px] w-8 rounded-b-full bg-gradient-to-r from-[#D97706] to-[#F59E0B]"
+                  className={`absolute top-0 h-[3px] w-7 rounded-b-full bg-gradient-to-r ${
+                    darkTheme
+                      ? 'from-[#22D3EE] to-[#FE2C55]'
+                      : 'from-[#D97706] to-[#F59E0B]'
+                  }`}
                   aria-hidden="true"
                 />
               )}
@@ -105,10 +127,12 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
                   active ? 'scale-110 drop-shadow-[0_2px_4px_rgba(14,38,64,0.18)]' : ''
                 }`}
               >
-                <NavSectionIcon section={item.iconSection} className="h-[23px] w-[23px]" />
+                <NavSectionIcon section={item.iconSection} className="h-[21px] w-[21px]" />
                 {showBadge && (
                   <span
-                    className={`absolute -top-1.5 -right-2.5 flex h-[17px] min-w-[17px] items-center justify-center rounded-full px-1 text-[9px] font-extrabold leading-none ring-2 ring-white shadow-sm tabular-nums ${
+                    className={`absolute -top-1.5 -right-2.5 flex h-[17px] min-w-[17px] items-center justify-center rounded-full px-1 text-[9px] font-extrabold leading-none ring-2 shadow-sm tabular-nums ${
+                      darkTheme ? 'ring-black' : 'ring-white'
+                    } ${
                       item.badgeTone === 'green'
                         ? 'bg-[#25D366] text-[#052e27]'
                         : 'bg-[#E11D48] text-white'
@@ -120,7 +144,13 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
               </span>
               <span
                 className={`mt-1 text-[10px] leading-none tracking-tight ${
-                  active ? 'font-bold text-[#0E2640]' : 'font-medium text-slate-600'
+                  darkTheme
+                    ? active
+                      ? 'font-bold text-white'
+                      : 'font-medium text-white/65'
+                    : active
+                      ? 'font-bold text-[#0E2640]'
+                      : 'font-medium text-slate-600'
                 }`}
               >
                 {item.label}
@@ -132,3 +162,4 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
     </nav>
   );
 };
+

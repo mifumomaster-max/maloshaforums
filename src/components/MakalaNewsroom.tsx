@@ -55,6 +55,7 @@ interface MakalaNewsroomProps {
   onInlineExpandedChange: (next: boolean) => void;
   expandTrigger?: number;
   onVisibleTopicIdsChange?: (ids: string[]) => void;
+  onAuthorClick?: (author: { uid: string; displayName: string; photoURL?: string }) => void;
 }
 
 const BbcCoverImage: React.FC<{
@@ -138,6 +139,7 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
   onInlineExpandedChange,
   expandTrigger = 0,
   onVisibleTopicIdsChange,
+  onAuthorClick,
 }) => {
   const { lang, tr, formatTime, getMakalaSectionLabel } = useLanguage();
   const [selectedSection, setSelectedSection] = useState<string>('all');
@@ -683,7 +685,17 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
 
                     <div className="mt-4 space-y-3 border-t border-slate-100 pt-3">
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
-                        <span className="inline-flex items-center gap-1.5 font-semibold text-slate-800">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onAuthorClick?.({
+                              uid: leadArticle.authorId,
+                              displayName: leadArticle.authorName,
+                              photoURL: leadArticle.authorPhoto,
+                            })
+                          }
+                          className="inline-flex items-center gap-1.5 font-semibold text-slate-800 hover:text-[#1D4E89] hover:underline"
+                        >
                           <Avatar
                             name={leadArticle.authorName}
                             photoURL={leadArticle.authorPhoto}
@@ -691,7 +703,7 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                           />
                           <span>{leadArticle.authorName}</span>
                           <AuthorVerificationBadge uid={leadArticle.authorId} size="xs" />
-                        </span>
+                        </button>
                         <span aria-hidden="true">·</span>
                         <span>{formatTime(leadArticle.createdAt)}</span>
                         <span aria-hidden="true">·</span>

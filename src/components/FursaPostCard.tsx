@@ -36,6 +36,7 @@ interface FursaPostCardProps {
   onEditTopic: (topic: Topic) => void;
   onDeleteTopic: (topic: Topic) => void;
   onOpenReport: (targetType: 'topic' | 'reply', targetId: string, topicId: string) => void;
+  onAuthorClick?: (author: { uid: string; displayName: string; photoURL?: string }) => void;
   onSignIn: (reason?: AuthPromptReason) => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
   onRequestConfirm: (opts: {
@@ -61,6 +62,7 @@ export const FursaPostCard: React.FC<FursaPostCardProps> = ({
   onEditTopic,
   onDeleteTopic,
   onOpenReport,
+  onAuthorClick,
   onSignIn,
   onToast,
   onRequestConfirm,
@@ -99,12 +101,35 @@ export const FursaPostCard: React.FC<FursaPostCardProps> = ({
         {/* Header Row */}
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <Avatar name={post.authorName} photoURL={post.authorPhoto} size="md" />
+            <button
+              type="button"
+              onClick={() =>
+                onAuthorClick?.({
+                  uid: post.authorId,
+                  displayName: post.authorName,
+                  photoURL: post.authorPhoto,
+                })
+              }
+              aria-label={tr(`Tazama wasifu wa ${post.authorName}`, `View ${post.authorName}'s profile`)}
+              className="shrink-0 rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1D4E89]"
+            >
+              <Avatar name={post.authorName} photoURL={post.authorPhoto} size="md" />
+            </button>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-                <span className="truncate text-[15px] font-bold text-slate-900">
+                <button
+                  type="button"
+                  onClick={() =>
+                    onAuthorClick?.({
+                      uid: post.authorId,
+                      displayName: post.authorName,
+                      photoURL: post.authorPhoto,
+                    })
+                  }
+                  className="truncate text-left text-[15px] font-bold text-slate-900 hover:text-[#1D4E89] hover:underline"
+                >
                   {post.authorName}
-                </span>
+                </button>
                 <AuthorVerificationBadge uid={post.authorId} size="sm" />
                 {post.isPinned && (
                   <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#B45309]">

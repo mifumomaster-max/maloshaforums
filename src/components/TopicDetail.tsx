@@ -57,6 +57,7 @@ interface TopicDetailProps {
   onToggleArchive?: (topic: Topic) => void;
   onDeleteTopic: (topic: Topic) => void;
   onOpenReport: (targetType: 'topic' | 'reply', targetId: string) => void;
+  onAuthorClick?: (author: { uid: string; displayName: string; photoURL?: string }) => void;
   onSignIn: (reason?: AuthPromptReason) => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
   onRequestConfirm: (opts: {
@@ -88,6 +89,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
   onToggleArchive,
   onDeleteTopic,
   onOpenReport,
+  onAuthorClick,
   onSignIn,
   onToast,
   onRequestConfirm,
@@ -230,7 +232,17 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
 
                   <div className="mt-3.5 flex flex-wrap items-center justify-between gap-2.5 border-y border-slate-200 py-2.5 text-xs text-slate-600 sm:mt-4 sm:gap-3 sm:py-3">
                     <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                      <span className="inline-flex min-w-0 items-center gap-1.5 font-bold text-slate-900">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onAuthorClick?.({
+                            uid: topic.authorId,
+                            displayName: topic.authorName,
+                            photoURL: topic.authorPhoto,
+                          })
+                        }
+                        className="inline-flex min-w-0 items-center gap-1.5 font-bold text-slate-900 hover:text-[#1D4E89] hover:underline"
+                      >
                         <Avatar
                           name={topic.authorName}
                           photoURL={topic.authorPhoto}
@@ -243,7 +255,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                         </span>
                         <AuthorVerificationBadge uid={topic.authorId} size="xs" />
                         <OnlineStatusPill uid={topic.authorId} />
-                      </span>
+                      </button>
                       <span aria-hidden="true">·</span>
                       <span>{formatTime(topic.createdAt)}</span>
                       <span aria-hidden="true">·</span>
@@ -451,18 +463,41 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
           <div className="p-4 sm:p-6">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="flex items-center gap-3">
-                <Avatar
-                  name={topic.authorName}
-                  photoURL={topic.authorPhoto}
-                  uid={topic.authorId}
-                  showOnlineIndicator
-                  size="md"
-                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    onAuthorClick?.({
+                      uid: topic.authorId,
+                      displayName: topic.authorName,
+                      photoURL: topic.authorPhoto,
+                    })
+                  }
+                  aria-label={tr(`Tazama wasifu wa ${topic.authorName}`, `View ${topic.authorName}'s profile`)}
+                  className="shrink-0 rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1D4E89]"
+                >
+                  <Avatar
+                    name={topic.authorName}
+                    photoURL={topic.authorPhoto}
+                    uid={topic.authorId}
+                    showOnlineIndicator
+                    size="md"
+                  />
+                </button>
                 <div>
                   <div className="flex flex-wrap items-center gap-x-1.5">
-                    <span className="text-[15px] font-bold text-slate-900">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onAuthorClick?.({
+                          uid: topic.authorId,
+                          displayName: topic.authorName,
+                          photoURL: topic.authorPhoto,
+                        })
+                      }
+                      className="text-left text-[15px] font-bold text-slate-900 hover:text-[#1D4E89] hover:underline"
+                    >
                       {topic.authorName}
-                    </span>
+                    </button>
                     <AuthorVerificationBadge uid={topic.authorId} size="sm" />
                     <OnlineStatusPill uid={topic.authorId} />
                     {topic.isPinned && (
@@ -696,7 +731,17 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
 
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
               <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-                <span className="inline-flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() =>
+                    onAuthorClick?.({
+                      uid: topic.authorId,
+                      displayName: topic.authorName,
+                      photoURL: topic.authorPhoto,
+                    })
+                  }
+                  className="inline-flex items-center gap-1.5 hover:underline"
+                >
                   <Avatar
                     name={topic.authorName}
                     photoURL={topic.authorPhoto}
@@ -706,11 +751,13 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                   />
                   <span>
                     {tr('Mchapishaji:', 'Posted by:')}{' '}
-                    <strong className="text-slate-800">{topic.authorName}</strong>
+                    <strong className="text-slate-800 hover:text-[#1D4E89]">
+                      {topic.authorName}
+                    </strong>
                   </span>
                   <AuthorVerificationBadge uid={topic.authorId} size="xs" />
                   <OnlineStatusPill uid={topic.authorId} />
-                </span>
+                </button>
                 <span aria-hidden="true">·</span>
                 <button
                   type="button"

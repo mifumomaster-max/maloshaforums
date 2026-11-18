@@ -313,6 +313,7 @@ export const Header: React.FC<HeaderProps> = ({
 
   const counts: NavUnreadCounts = unreadCounts || {
     kijiweni: 0,
+    video: 0,
     fursa: 0,
     makala: 0,
     chat: unreadChatCount,
@@ -330,6 +331,13 @@ export const Header: React.FC<HeaderProps> = ({
       iconSection: 'kijiweni',
       label: 'Kijiweni',
       unread: counts.kijiweni,
+      badgeTone: 'crimson',
+    },
+    {
+      id: 'video',
+      iconSection: 'video',
+      label: 'Video',
+      unread: counts.video || 0,
       badgeTone: 'crimson',
     },
     {
@@ -469,7 +477,7 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Zone 2: Desktop Single-Line Navigation Links with Modern Colored Icons & Unread Counts */}
         <nav
           aria-label={tr('Urambazaji mkuu', 'Main navigation')}
-          className="hidden md:flex items-center gap-3.5 lg:gap-5 text-sm font-medium"
+          className="hidden md:flex items-center gap-2 lg:gap-4 text-sm font-medium"
         >
           {navItems.map((item) => {
             const active = activeTab === item.id;
@@ -479,7 +487,7 @@ export const Header: React.FC<HeaderProps> = ({
                 key={item.id}
                 type="button"
                 onClick={() => onSelectTab(item.id)}
-                className={`relative inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 whitespace-nowrap shrink-0 transition-all focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-sky-300 ${
+                className={`relative inline-flex items-center gap-1.5 rounded-lg px-1.5 py-1.5 whitespace-nowrap shrink-0 transition-all focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-sky-300 lg:px-2 ${
                   active
                     ? 'bg-white/12 font-semibold text-white'
                     : 'text-slate-200 hover:bg-white/8 hover:text-white'

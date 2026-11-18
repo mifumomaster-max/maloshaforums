@@ -118,21 +118,32 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
               typeof data.suspendedReason === 'string' ? data.suspendedReason : '',
             topicsCount: Number(data.topicsCount || 0),
             repliesCount: Number(data.repliesCount || 0),
+            followersCount: Number(data.followersCount || 0),
             createdAt: data.createdAt || null,
             updatedAt: data.updatedAt || null,
           };
         });
         list.sort((a, b) => {
-          const rank = (badge: VerificationBadgeType) =>
-            badge === 'owner'
-              ? 0
-              : badge === 'government'
-                ? 1
-                : badge === 'organization'
-                  ? 2
-                  : badge === 'individual'
-                    ? 3
-                    : 4;
+          const rank = (badge: VerificationBadgeType) => {
+            switch (badge) {
+              case 'owner':
+                return 0;
+              case 'government':
+                return 1;
+              case 'organization':
+                return 2;
+              case 'journalist':
+                return 3;
+              case 'educator':
+                return 4;
+              case 'creator':
+                return 5;
+              case 'individual':
+                return 6;
+              default:
+                return 7;
+            }
+          };
           const diff = rank(a.verificationBadge) - rank(b.verificationBadge);
           if (diff !== 0) return diff;
           return a.displayName.localeCompare(b.displayName);
@@ -558,9 +569,19 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
         </div>
       ) : section === 'members' ? (
         <div className="mt-6 space-y-5">
-          {/* Verification Color Legend */}
+          {/* Verification Color Legend (7 Tiers) */}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {(['owner', 'government', 'organization', 'individual'] as VerificationBadgeType[]).map(
+            {(
+              [
+                'owner',
+                'government',
+                'organization',
+                'journalist',
+                'educator',
+                'creator',
+                'individual',
+              ] as VerificationBadgeType[]
+            ).map(
               (tier) => {
                 const meta = VERIFICATION_BADGE_META[tier];
                 const count = members.filter((m) => m.verificationBadge === tier).length;

@@ -1,6 +1,6 @@
 import React, { useId } from 'react';
 
-export type NavIconSection = 'all' | 'kijiweni' | 'fursa' | 'makala' | 'chat' | 'trending';
+export type NavIconSection = 'all' | 'kijiweni' | 'video' | 'fursa' | 'makala' | 'chat' | 'trending';
 
 interface NavSectionIconProps {
   section: NavIconSection;
@@ -74,6 +74,50 @@ export const NavSectionIcon: React.FC<NavSectionIconProps> = ({
         <circle cx="20.1" cy="5.5" r="0.75" fill="#FFFFFF" />
         <circle cx="22.1" cy="5.5" r="0.75" fill="#FFFFFF" />
         <circle cx="24" cy="5.5" r="0.75" fill="#FFFFFF" />
+      </svg>
+    );
+  }
+
+  if (section === 'video') {
+    return (
+      <svg viewBox="0 0 28 28" fill="none" className={className} aria-hidden="true">
+        <defs>
+          <linearGradient id={`vidFrame-${uid}`} x1="3" y1="4" x2="25" y2="24" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#0F172A" />
+            <stop offset="100%" stopColor="#1E293B" />
+          </linearGradient>
+          <linearGradient id={`vidAccentA-${uid}`} x1="3" y1="5" x2="14" y2="23" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#22D3EE" />
+            <stop offset="100%" stopColor="#06B6D4" />
+          </linearGradient>
+          <linearGradient id={`vidAccentB-${uid}`} x1="14" y1="5" x2="25" y2="23" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#FB7185" />
+            <stop offset="100%" stopColor="#E11D48" />
+          </linearGradient>
+        </defs>
+        {/* TikTok-inspired dual cyan / crimson glow layers */}
+        <rect x="2.6" y="4.8" width="19.5" height="19.5" rx="5.2" fill={`url(#vidAccentA-${uid})`} opacity="0.9" />
+        <rect x="5.9" y="3.7" width="19.5" height="19.5" rx="5.2" fill={`url(#vidAccentB-${uid})`} opacity="0.9" />
+        {/* Crisp dark cinema frame */}
+        <rect
+          x="4.2"
+          y="4.2"
+          width="19.6"
+          height="19.6"
+          rx="5.2"
+          fill={`url(#vidFrame-${uid})`}
+          stroke="#FFFFFF"
+          strokeWidth="1.1"
+        />
+        {/* Film sprockets top */}
+        <rect x="7.5" y="6.2" width="2.8" height="1.6" rx="0.7" fill="#38BDF8" />
+        <rect x="12.6" y="6.2" width="2.8" height="1.6" rx="0.7" fill="#FBBF24" />
+        <rect x="17.7" y="6.2" width="2.8" height="1.6" rx="0.7" fill="#FB7185" />
+        {/* Vibrant Play Triangle */}
+        <path
+          d="M11.6 10.6C11.6 10 12.2 9.6 12.8 9.9L18.4 13.3C18.9 13.6 18.9 14.4 18.4 14.7L12.8 18.1C12.2 18.4 11.6 18 11.6 17.4V10.6Z"
+          fill="#FFFFFF"
+        />
       </svg>
     );
   }

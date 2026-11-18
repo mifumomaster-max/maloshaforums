@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDown,
   Ban,
@@ -12,7 +12,6 @@ import {
   Image as ImageIcon,
   Loader2,
   Lock,
-  MessageCircle,
   Paperclip,
   Reply as ReplyIcon,
   Search,
@@ -31,33 +30,52 @@ import {
 } from '../services/cloudinaryService';
 import {
   clearAllChatMessages,
+  ensureDirectChatThread,
   generateChatMessageId,
   sendChatMessage,
+  sendDirectMessage,
   softDeleteChatMessage,
 } from '../services/forumService';
-import { AuthPromptReason, ChatMessage, MchartNote } from '../types';
+import {
+  AuthPromptReason,
+  ChatMessage,
+  DirectChatThread,
+  MchartNote,
+  MchartStatus,
+  MemberDirectoryCandidate,
+} from '../types';
 import { useLanguage } from '../context/LanguageContext';
 import { useUserPresence } from '../context/UserPresenceContext';
 import { Avatar, OnlineStatusPill } from './Avatar';
 import { ImageResizeModal } from './ImageResizeModal';
+import { MchartDirectInbox, MchartDirectRoom } from './MchartDirectChatView';
 import { MchartNotesView } from './MchartNotesView';
 import { LinkedText } from './RichText';
 import { AuthorVerificationBadge } from './VerificationBadge';
 import { User } from 'firebase/auth';
+
+export type MchartSubTab = 'messages' | 'direct' | 'status' | 'notes';
 
 type OptimisticChatMessage = ChatMessage & { __localMs: number };
 
 interface ForumChatViewProps {
   messages: ChatMessage[];
   loading: boolean;
+  directChats: DirectChatThread[];
+  unreadDirectCount?: number;
+  statuses: MchartStatus[];
+  loadingStatuses: boolean;
+  memberCandidates: MemberDirectoryCandidate[];
   notes: MchartNote[];
   loadingNotes: boolean;
   unreadNotesCount?: number;
   readNoteIds?: Set<string>;
   onMarkNoteRead?: (noteId: string) => void;
   onClearedAllChats?: () => void;
-  subTab: 'messages' | 'notes';
-  onChangeSubTab: (tab: 'messages' | 'notes') => void;
+  subTab: MchartSubTab;
+  onChangeSubTab: (tab: MchartSubTab) => void;
+  activeDirectChatId: string | null;
+  onChangeActiveDirectChatId: (chatId: string | null) => void;
   user: User | null;
   userDisplayName: string;
   userPhoto?: string;
@@ -155,6 +173,11 @@ function getDocBadgeInfo(fileName: string, mime: string): {
 export const ForumChatView: React.FC<ForumChatViewProps> = ({
   messages,
   loading,
+  directChats,
+  unreadDirectCount = 0,
+  statuses,
+  loadingStatuses,
+  memberCandidates,
   notes,
   loadingNotes,
   unreadNotesCount = 0,
@@ -163,9 +186,11 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
   onClearedAllChats,
   subTab,
   onChangeSubTab,
+  activeDirectChatId,
+  onChangeActiveDirectChatId,
   user,
   userDisplayName,
-  userPhoto,
+  userPhoto = '',
   isAdmin,
   isSuspended = false,
   keyboardOpen: keyboardOpenProp,
@@ -174,7 +199,93 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
   onRequestConfirm,
 }) => {
   const { lang, tr } = useLanguage();
-  const { onlineCount, typingUsersInMchart, setMchartTyping } = useUserPresence();
+  const { onlineUsers, onlineCount, typingUsersInMchart, setMchartTyping } = useUserPresence();
+  const [optimisticThreads, setOptimisticThreads] = useState<Record<string, DirectChatThread>>({});
+  const effectiveSubTab: 'direct' | 'messages' | 'notes' =
+    subTab === 'messages' || subTab === 'notes' ? subTab : 'direct';
+
+  const mergedMemberCandidates = useMemo(() => {
+    const map = new Map<string, MemberDirectoryCandidate>();
+    memberCandidates.forEach((m) => {
+      if (m.uid) map.set(m.uid, m);
+    });
+    onlineUsers.forEach((ou) => {
+      if (!ou.uid || ou.uid === user?.uid) return;
+      const existing = map.get(ou.uid);
+      if (existing) {
+        map.set(ou.uid, {
+          ...existing,
+          displayName: existing.displayName || ou.displayName,
+          photoURL: existing.photoURL || ou.photoURL || '',
+          isOnline: true,
+        });
+      } else {
+        map.set(ou.uid, {
+          uid: ou.uid,
+          displayName: ou.displayName || 'Mwanachama',
+          photoURL: ou.photoURL || '',
+          isOnline: true,
+        });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => {
+      if (Boolean(a.isOnline) !== Boolean(b.isOnline)) {
+        return a.isOnline ? -1 : 1;
+      }
+      return a.displayName.localeCompare(b.displayName);
+    });
+  }, [memberCandidates, onlineUsers, user?.uid]);
+
+  const activeDirectThread = useMemo(() => {
+    if (!activeDirectChatId) return null;
+    return (
+      directChats.find((t) => t.chatId === activeDirectChatId) ||
+      optimisticThreads[activeDirectChatId] ||
+      null
+    );
+  }, [activeDirectChatId, directChats, optimisticThreads]);
+
+  const handleStartPrivateChatWith = useCallback(
+    async (
+      target: { uid: string; displayName: string; photoURL?: string },
+      initialMessage?: string
+    ) => {
+      if (!user) {
+        onSignIn('chat');
+        return;
+      }
+      if (isSuspended) {
+        onToast(
+          tr('Akaunti yako imesimamishwa kuanzisha mazungumzo.', 'Your account is suspended.'),
+          'error'
+        );
+        return;
+      }
+      if (target.uid === user.uid) {
+        onToast(tr('Hiki ni kitambulisho chako mwenyewe.', 'That is your own account.'), 'error');
+        return;
+      }
+      try {
+        const thread = await ensureDirectChatThread(user, userDisplayName, userPhoto, target);
+        setOptimisticThreads((prev) => ({ ...prev, [thread.chatId]: thread }));
+        if (initialMessage && initialMessage.trim()) {
+          await sendDirectMessage(user, userDisplayName, userPhoto, thread, {
+            text: initialMessage.trim(),
+          });
+        }
+        onChangeSubTab('direct');
+        onChangeActiveDirectChatId(thread.chatId);
+      } catch (err) {
+        onToast(
+          err instanceof Error
+            ? err.message
+            : tr('Imeshindwa kufungua mazungumzo binafsi.', 'Failed to open private chat.'),
+          'error'
+        );
+      }
+    },
+    [user, isSuspended, userDisplayName, userPhoto, onSignIn, onToast, tr, onChangeSubTab, onChangeActiveDirectChatId]
+  );
   const [draft, setDraft] = useState('');
   const [uploading, setUploading] = useState(false);
   const [optimisticMessages, setOptimisticMessages] = useState<OptimisticChatMessage[]>([]);
@@ -223,16 +334,16 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
   const focusTimersRef = useRef<number[]>([]);
   const typingIdleTimerRef = useRef<number | null>(null);
 
-  // Clean up typing signal on unmount or when switching to Notes tab
+  // Clean up typing signal on unmount or when not viewing Group chat
   useEffect(() => {
-    if (subTab !== 'messages' || !user) {
+    if (effectiveSubTab !== 'messages' || !user) {
       if (typingIdleTimerRef.current !== null) {
         window.clearTimeout(typingIdleTimerRef.current);
         typingIdleTimerRef.current = null;
       }
       setMchartTyping(false);
     }
-  }, [subTab, user, setMchartTyping]);
+  }, [effectiveSubTab, user, setMchartTyping]);
 
   useEffect(() => {
     return () => {
@@ -403,7 +514,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
 
   // Keep latest message pinned right above composer whenever timeline resizes (keyboard / multiline draft)
   useEffect(() => {
-    if (subTab !== 'messages') return;
+    if (effectiveSubTab !== 'messages') return;
     const el = scrollBoxRef.current;
     if (!el) return;
 
@@ -420,11 +531,11 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [subTab]);
+  }, [effectiveSubTab]);
 
   // Keep latest sent message visible while composing draft or opening reply/attachment bars
   useEffect(() => {
-    if (subTab !== 'messages') return;
+    if (effectiveSubTab !== 'messages') return;
     const el = scrollBoxRef.current;
     if (!el) return;
     if (document.activeElement === inputRef.current || wasNearBottomRef.current) {
@@ -432,7 +543,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
         el.scrollTop = el.scrollHeight;
       });
     }
-  }, [draft, replyTo, pendingAttachment, subTab]);
+  }, [draft, replyTo, pendingAttachment, effectiveSubTab]);
 
   const handleComposerFocus = () => {
     wasNearBottomRef.current = true;
@@ -673,15 +784,15 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
 
   const handleShareMchartLink = async () => {
     const shareUrl =
-      subTab === 'notes'
+      effectiveSubTab === 'notes'
         ? `${window.location.origin}/?tab=mchart&view=notes`
         : `${window.location.origin}/?tab=mchart`;
     const shareTitle =
-      subTab === 'notes'
+      effectiveSubTab === 'notes'
         ? tr('Malosha Forums · Mchart Notes', 'Malosha Forums · Mchart Notes')
         : tr('Malosha Forums · Mchart', 'Malosha Forums · Mchart');
     const shareText =
-      subTab === 'notes'
+      effectiveSubTab === 'notes'
         ? tr(
             'Soma notes na mafaili muhimu ya Malosha Forums moja kwa moja kwenye simu yako!',
             'Read official study notes and archive files on Malosha Forums!'
@@ -752,11 +863,25 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                   Malosha Forums · Mchart
                 </h1>
                 <p className="truncate text-[11px] sm:text-xs">
-                  {subTab === 'notes' ? (
+                  {!user ? (
+                    <span className="text-emerald-100/90">
+                      {tr(
+                        'Huduma ya Wanachama Waliosajiliwa Pekee',
+                        'Registered Members Only'
+                      )}
+                    </span>
+                  ) : effectiveSubTab === 'notes' ? (
                     <span className="text-emerald-100/90">
                       {tr(
                         `Notes ${notes.length} · Mafaili ya kusoma kwenye simu`,
                         `${notes.length} notes · Mobile reader & archive files`
+                      )}
+                    </span>
+                  ) : effectiveSubTab === 'direct' ? (
+                    <span className="text-emerald-100/90">
+                      {tr(
+                        'Mazungumzo Binafsi · Picha za 1x & Status',
+                        'Private Chat · View-Once Photos & Status'
                       )}
                     </span>
                   ) : typingStatusLabel ? (
@@ -802,97 +927,123 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
               </div>
             </div>
 
-            <div className="flex shrink-0 items-center gap-1.5">
-              {isAdmin && subTab === 'messages' && (
+            {user && (
+              <div className="flex shrink-0 items-center gap-1.5">
+                {isAdmin && effectiveSubTab === 'messages' && (
+                  <button
+                    type="button"
+                    onClick={handleConfirmClearAllChats}
+                    title={tr('Safisha Uwanja (Futa zote)', 'Clear All Chats')}
+                    aria-label={tr('Safisha uwanja kwa kufuta mazungumzo yote', 'Clear all chats')}
+                    className="inline-flex h-10 items-center gap-1.5 rounded-full bg-red-500/25 px-3 text-xs font-bold text-red-100 ring-1 ring-red-300/35 transition-colors hover:bg-red-500/40 hover:text-white"
+                  >
+                    <Trash2 className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span className="hidden sm:inline">{tr('Safisha Uwanja', 'Clear All')}</span>
+                  </button>
+                )}
+
                 <button
                   type="button"
-                  onClick={handleConfirmClearAllChats}
-                  title={tr('Safisha Uwanja (Futa zote)', 'Clear All Chats')}
-                  aria-label={tr('Safisha uwanja kwa kufuta mazungumzo yote', 'Clear all chats')}
-                  className="inline-flex h-10 items-center gap-1.5 rounded-full bg-red-500/25 px-3 text-xs font-bold text-red-100 ring-1 ring-red-300/35 transition-colors hover:bg-red-500/40 hover:text-white"
+                  onClick={() => void handleShareMchartLink()}
+                  title={tr('Shiriki kiungo cha Mchart', 'Share direct Mchart link')}
+                  aria-label={tr('Shiriki kiungo cha Mchart', 'Share direct Mchart link')}
+                  className="inline-flex h-10 items-center gap-1.5 rounded-full bg-white/15 px-3 text-xs font-bold text-white transition-colors hover:bg-white/25"
                 >
-                  <Trash2 className="h-4 w-4 shrink-0" aria-hidden="true" />
-                  <span className="hidden sm:inline">{tr('Safisha Uwanja', 'Clear All')}</span>
+                  <Share2 className="h-4 w-4 text-[#25D366]" aria-hidden="true" />
+                  <span className="hidden sm:inline">{tr('Shiriki Link', 'Share Link')}</span>
                 </button>
-              )}
+
+                {effectiveSubTab === 'messages' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchOpen((prev) => !prev);
+                      if (searchOpen) setSearchQuery('');
+                    }}
+                    aria-label={tr('Tafuta kwenye Mchart', 'Search Mchart')}
+                    aria-expanded={searchOpen}
+                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors ${
+                      searchOpen ? 'bg-white/20 text-white' : 'text-emerald-100 hover:bg-white/10'
+                    }`}
+                  >
+                    {searchOpen ? <X className="h-5 w-5" /> : <Search className="h-5 w-5" />}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* 3-Tab Sub-Navigation (Binafsi | Kundi | Notes) — Status lives inside Binafsi */}
+          {user && (
+            <nav
+              aria-label={tr('Vipengele vya Mchart', 'Mchart sections')}
+              className="grid grid-cols-3 border-t border-white/10 bg-[#064E46]/70"
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  onChangeSubTab('direct');
+                  setSearchOpen(false);
+                }}
+                aria-current={effectiveSubTab === 'direct' ? 'page' : undefined}
+                className={`relative flex min-h-[44px] items-center justify-center gap-1.5 border-b-[3px] px-2 py-2 text-xs font-bold transition-colors sm:px-3 sm:text-sm ${
+                  effectiveSubTab === 'direct'
+                    ? 'border-[#25D366] text-white'
+                    : 'border-transparent text-emerald-100/75 hover:bg-white/5 hover:text-white'
+                }`}
+              >
+                <Lock className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" aria-hidden="true" />
+                <span className="truncate">{tr('Binafsi', 'Private')}</span>
+                {unreadDirectCount > 0 && (
+                  <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-[#25D366] px-1 text-[10px] font-extrabold text-[#064E46] tabular-nums">
+                    {unreadDirectCount > 99 ? '99+' : unreadDirectCount}
+                  </span>
+                )}
+              </button>
 
               <button
                 type="button"
-                onClick={() => void handleShareMchartLink()}
-                title={tr('Shiriki kiungo cha Mchart', 'Share direct Mchart link')}
-                aria-label={tr('Shiriki kiungo cha Mchart', 'Share direct Mchart link')}
-                className="inline-flex h-10 items-center gap-1.5 rounded-full bg-white/15 px-3 text-xs font-bold text-white transition-colors hover:bg-white/25"
+                onClick={() => onChangeSubTab('messages')}
+                aria-current={effectiveSubTab === 'messages' ? 'page' : undefined}
+                className={`relative flex min-h-[44px] items-center justify-center gap-1.5 border-b-[3px] px-2 py-2 text-xs font-bold transition-colors sm:px-3 sm:text-sm ${
+                  effectiveSubTab === 'messages'
+                    ? 'border-[#25D366] text-white'
+                    : 'border-transparent text-emerald-100/75 hover:bg-white/5 hover:text-white'
+                }`}
               >
-                <Share2 className="h-4 w-4 text-[#25D366]" aria-hidden="true" />
-                <span className="hidden sm:inline">{tr('Shiriki Link', 'Share Link')}</span>
+                <Users className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" aria-hidden="true" />
+                <span className="truncate">{tr('Kundi', 'Group')}</span>
               </button>
 
-              {subTab === 'messages' && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSearchOpen((prev) => !prev);
-                    if (searchOpen) setSearchQuery('');
-                  }}
-                  aria-label={tr('Tafuta kwenye Mchart', 'Search Mchart')}
-                  aria-expanded={searchOpen}
-                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors ${
-                    searchOpen ? 'bg-white/20 text-white' : 'text-emerald-100 hover:bg-white/10'
-                  }`}
-                >
-                  {searchOpen ? <X className="h-5 w-5" /> : <Search className="h-5 w-5" />}
-                </button>
-              )}
-            </div>
-          </div>
+              <button
+                type="button"
+                onClick={() => {
+                  onChangeSubTab('notes');
+                  setSearchOpen(false);
+                }}
+                aria-current={effectiveSubTab === 'notes' ? 'page' : undefined}
+                className={`relative flex min-h-[44px] items-center justify-center gap-1.5 border-b-[3px] px-2 py-2 text-xs font-bold transition-colors sm:px-3 sm:text-sm ${
+                  effectiveSubTab === 'notes'
+                    ? 'border-[#25D366] text-white'
+                    : 'border-transparent text-emerald-100/75 hover:bg-white/5 hover:text-white'
+                }`}
+              >
+                <BookOpen className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" aria-hidden="true" />
+                <span className="truncate">{tr('Notes', 'Notes')}</span>
+                {unreadNotesCount > 0 ? (
+                  <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-[#25D366] px-1 text-[10px] font-extrabold text-[#064E46] tabular-nums">
+                    {unreadNotesCount > 99 ? '99+' : unreadNotesCount}
+                  </span>
+                ) : notes.length > 0 ? (
+                  <span className="rounded-full bg-white/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-100 tabular-nums">
+                    {notes.length}
+                  </span>
+                ) : null}
+              </button>
+            </nav>
+          )}
 
-          {/* WhatsApp-Style 2-Tab Sub-Navigation (Mazungumzo vs Notes & Mafaili) */}
-          <nav
-            aria-label={tr('Vipengele vya Mchart', 'Mchart sections')}
-            className="grid grid-cols-2 border-t border-white/10 bg-[#064E46]/70"
-          >
-            <button
-              type="button"
-              onClick={() => onChangeSubTab('messages')}
-              aria-current={subTab === 'messages' ? 'page' : undefined}
-              className={`relative flex min-h-[44px] items-center justify-center gap-2 border-b-[3px] px-3 py-2 text-xs font-bold transition-colors sm:text-sm ${
-                subTab === 'messages'
-                  ? 'border-[#25D366] text-white'
-                  : 'border-transparent text-emerald-100/75 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <MessageCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <span>{tr('Mazungumzo', 'Chat')}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                onChangeSubTab('notes');
-                setSearchOpen(false);
-              }}
-              aria-current={subTab === 'notes' ? 'page' : undefined}
-              className={`relative flex min-h-[44px] items-center justify-center gap-2 border-b-[3px] px-3 py-2 text-xs font-bold transition-colors sm:text-sm ${
-                subTab === 'notes'
-                  ? 'border-[#25D366] text-white'
-                  : 'border-transparent text-emerald-100/75 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <BookOpen className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <span>{tr('Notes & Mafaili', 'Notes & Files')}</span>
-              {unreadNotesCount > 0 ? (
-                <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-[#25D366] px-1.5 text-[10px] font-extrabold text-[#064E46] tabular-nums">
-                  {unreadNotesCount > 99 ? '99+' : unreadNotesCount}
-                </span>
-              ) : notes.length > 0 ? (
-                <span className="rounded-full bg-white/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-100 tabular-nums">
-                  {notes.length}
-                </span>
-              ) : null}
-            </button>
-          </nav>
-
-          {subTab === 'messages' && searchOpen && (
+          {user && effectiveSubTab === 'messages' && searchOpen && (
             <div className="border-t border-white/10 bg-[#064E46] px-3.5 py-2 sm:px-5">
               <div className="relative">
                 <Search
@@ -914,7 +1065,30 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
           )}
         </header>
 
-        {subTab === 'notes' ? (
+        {!user ? (
+          <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto bg-[#EFEAE2] px-6 py-10 text-center">
+            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[#075E54]/12 text-[#075E54] ring-1 ring-[#075E54]/20">
+              <Lock className="h-8 w-8" aria-hidden="true" />
+            </div>
+            <h2 className="mt-4 font-display text-lg font-bold text-slate-900 sm:text-xl">
+              {tr('Mchart ni kwa Wanachama Wenye Akaunti Pekee', 'Mchart Is for Signed-In Members Only')}
+            </h2>
+            <p className="mt-2 max-w-md text-xs leading-relaxed text-slate-600 sm:text-sm">
+              {tr(
+                'Kwa usalama na faragha ya wanachama, huwezi kuona mazungumzo binafsi, kundi, status, wala notes bila kuingia au kufungua akaunti ya Malosha Forums.',
+                'To protect community privacy, Private chats, Group chat, Status updates, and Notes cannot be viewed or accessed without a Malosha Forums account.'
+              )}
+            </p>
+            <button
+              type="button"
+              onClick={() => onSignIn('chat')}
+              className="mt-6 inline-flex min-h-[46px] items-center gap-2 rounded-xl bg-[#075E54] px-6 py-2.5 text-sm font-bold text-white shadow-md transition-colors hover:bg-[#064E46]"
+            >
+              <Lock className="h-4 w-4" aria-hidden="true" />
+              <span>{tr('Ingia / Fungua Akaunti', 'Sign In / Create Account')}</span>
+            </button>
+          </div>
+        ) : effectiveSubTab === 'notes' ? (
           <div className="min-h-0 flex-1 overflow-hidden">
             <MchartNotesView
               notes={notes}
@@ -928,6 +1102,38 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
               onToast={onToast}
               onRequestConfirm={onRequestConfirm}
             />
+          </div>
+        ) : effectiveSubTab === 'direct' ? (
+          <div className="min-h-0 flex-1 overflow-hidden">
+            {activeDirectThread ? (
+              <MchartDirectRoom
+                thread={activeDirectThread}
+                user={user}
+                userDisplayName={userDisplayName}
+                userPhoto={userPhoto}
+                isSuspended={isSuspended}
+                onBackToInbox={() => onChangeActiveDirectChatId(null)}
+                onToast={onToast}
+                onRequestConfirm={onRequestConfirm}
+              />
+            ) : (
+              <MchartDirectInbox
+                user={user}
+                userDisplayName={userDisplayName}
+                userPhoto={userPhoto}
+                isSuspended={isSuspended}
+                threads={directChats}
+                memberCandidates={mergedMemberCandidates}
+                statuses={statuses}
+                loadingStatuses={loadingStatuses}
+                onSelectThread={(thread) => onChangeActiveDirectChatId(thread.chatId)}
+                onStartPrivateChatWith={(target) => handleStartPrivateChatWith(target)}
+                onSwitchToGroup={() => onChangeSubTab('messages')}
+                onSignIn={onSignIn}
+                onToast={onToast}
+                onRequestConfirm={onRequestConfirm}
+              />
+            )}
           </div>
         ) : (
           <>
@@ -1039,16 +1245,28 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                             highlightedId === msg.id ? 'ring-2 ring-[#25D366] ring-offset-1' : ''
                           }`}
                         >
-                          {/* Sender Name + Verification Badge + Online */}
+                          {/* Sender Name + Verification Badge + Online + Quick 1-on-1 DM */}
                           {!isOwn && !isSameSenderAsPrev && (
                             <div className="mb-1 flex flex-wrap items-center gap-1.5">
-                              <span
-                                className={`truncate text-xs font-bold ${getSenderColorClass(
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void handleStartPrivateChatWith({
+                                    uid: msg.senderId,
+                                    displayName: msg.senderName,
+                                    photoURL: msg.senderPhoto,
+                                  })
+                                }
+                                title={tr(
+                                  `Chati binafsi na ${msg.senderName}`,
+                                  `Message ${msg.senderName} privately`
+                                )}
+                                className={`truncate text-xs font-bold hover:underline ${getSenderColorClass(
                                   msg.senderId
                                 )}`}
                               >
                                 {msg.senderName}
-                              </span>
+                              </button>
                               <AuthorVerificationBadge uid={msg.senderId} size="xs" />
                               <OnlineStatusPill uid={msg.senderId} />
                             </div>

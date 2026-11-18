@@ -86,6 +86,7 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
           return {
             uid: String(data.uid || d.id),
             displayName: String(data.displayName || 'Mwanachama'),
+            photoURL: typeof data.photoURL === 'string' ? data.photoURL : '',
             isOnline: Boolean(data.isOnline),
             isTypingInMchart: Boolean(data.isTypingInMchart),
             replyingToName: typeof data.replyingToName === 'string' ? data.replyingToName : '',

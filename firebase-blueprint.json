@@ -12,8 +12,8 @@
         "role": { "type": "string", "enum": ["member", "moderator"] },
         "verificationBadge": {
           "type": "string",
-          "enum": ["none", "individual", "organization", "government", "owner"],
-          "description": "Account verification tier assigned by platform administrators."
+          "enum": ["none", "individual", "organization", "government", "owner", "journalist", "educator", "creator"],
+          "description": "Account verification tier assigned by platform administrators (7 verified colors + none)."
         },
         "accountStatus": {
           "type": "string",
@@ -27,10 +27,23 @@
         },
         "topicsCount": { "type": "integer" },
         "repliesCount": { "type": "integer" },
+        "followersCount": { "type": "integer" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "displayName", "photoURL", "bio", "role", "topicsCount", "repliesCount", "createdAt", "updatedAt"]
+    },
+    "UserFollower": {
+      "title": "UserFollower",
+      "description": "Record of a forum member following another member.",
+      "type": "object",
+      "properties": {
+        "followerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "followerName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "followerPhoto": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["followerId", "followerName", "followerPhoto", "createdAt"]
     },
     "UserPrivateInfo": {
       "title": "UserPrivateInfo",
@@ -237,7 +250,7 @@
         "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "photoURL": { "type": "string", "maxLength": 500 },
         "role": { "type": "string", "enum": ["member", "moderator"] },
-        "verificationBadge": { "type": "string", "enum": ["none", "individual", "organization", "government", "owner"] },
+        "verificationBadge": { "type": "string", "enum": ["none", "individual", "organization", "government", "owner", "journalist", "educator", "creator"] },
         "accountStatus": { "type": "string", "enum": ["active", "suspended"] },
         "issuedAt": { "type": "string", "format": "date-time" },
         "expiresAt": { "type": "string", "format": "date-time" },
@@ -256,10 +269,11 @@
       "properties": {
         "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "photoURL": { "type": "string", "maxLength": 500 },
         "isOnline": { "type": "boolean" },
         "isTypingInMchart": { "type": "boolean" },
         "replyingToName": { "type": "string", "maxLength": 80 },
-        "activeArea": { "type": "string", "enum": ["kijiweni", "fursa", "makala", "mchart", "profile", "forum"] },
+        "activeArea": { "type": "string", "enum": ["kijiweni", "video", "fursa", "makala", "mchart", "profile", "forum"] },
         "lastSeenAt": { "type": "string", "format": "date-time" },
         "typingUpdatedAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -293,6 +307,165 @@
         "type", "topicId", "topicTitle", "topicCategory",
         "replyId", "parentReplyId", "replyPreview", "isRead", "createdAt"
       ]
+    },
+    "DirectChat": {
+      "title": "DirectChat",
+      "description": "Private WhatsApp-style 1-on-1 direct conversation strictly restricted to its two participants.",
+      "type": "object",
+      "properties": {
+        "chatId": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "participantA": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "participantB": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "participants": { "type": "array", "description": "Exactly 2 sorted participant UIDs [participantA, participantB]." },
+        "participantAName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "participantAPhoto": { "type": "string", "maxLength": 500 },
+        "participantBName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "participantBPhoto": { "type": "string", "maxLength": 500 },
+        "lastMessageText": { "type": "string", "maxLength": 200 },
+        "lastSenderId": { "type": "string", "maxLength": 128 },
+        "lastMessageAt": { "type": "string", "format": "date-time" },
+        "unreadCountA": { "type": "integer" },
+        "unreadCountB": { "type": "integer" },
+        "lastReadAtA": { "type": "string", "format": "date-time" },
+        "lastReadAtB": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "chatId", "participantA", "participantB", "participants",
+        "participantAName", "participantAPhoto", "participantBName", "participantBPhoto",
+        "lastMessageText", "lastSenderId", "lastMessageAt",
+        "unreadCountA", "unreadCountB", "lastReadAtA", "lastReadAtB",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "DirectChatMessage": {
+      "title": "DirectChatMessage",
+      "description": "End-user private 1-on-1 message readable only by the two participants of the direct chat.",
+      "type": "object",
+      "properties": {
+        "chatId": { "type": "string", "minLength": 3, "maxLength": 128 },
+        "participants": { "type": "array", "description": "Exactly 2 participant UIDs matching parent thread." },
+        "senderId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "senderName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "senderPhoto": { "type": "string", "maxLength": 500 },
+        "text": { "type": "string", "maxLength": 2000 },
+        "attachmentType": { "type": "string", "enum": ["none", "image", "document"] },
+        "attachmentUrl": { "type": "string", "maxLength": 500 },
+        "attachmentName": { "type": "string", "maxLength": 140 },
+        "attachmentSize": { "type": "integer" },
+        "attachmentMime": { "type": "string", "maxLength": 120 },
+        "replyToId": { "type": "string", "maxLength": 128 },
+        "replyToSenderName": { "type": "string", "maxLength": 80 },
+        "replyToPreview": { "type": "string", "maxLength": 160 },
+        "isDeleted": { "type": "boolean" },
+        "viewOnce": { "type": "boolean" },
+        "viewOnceConsumed": { "type": "boolean" },
+        "viewOnceOpenedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "chatId", "participants", "senderId", "senderName", "senderPhoto", "text",
+        "attachmentType", "attachmentUrl", "attachmentName", "attachmentSize", "attachmentMime",
+        "replyToId", "replyToSenderName", "replyToPreview",
+        "isDeleted", "createdAt", "updatedAt"
+      ]
+    },
+    "MchartStatus": {
+      "title": "MchartStatus",
+      "description": "24-hour WhatsApp-style ephemeral photo status with strict audience privacy.",
+      "type": "object",
+      "properties": {
+        "authorId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "authorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "authorPhoto": { "type": "string", "maxLength": 500 },
+        "imageUrl": { "type": "string", "minLength": 10, "maxLength": 500 },
+        "caption": { "type": "string", "maxLength": 280 },
+        "privacy": { "type": "string", "enum": ["members", "selected"] },
+        "allowedViewerIds": { "type": "array", "description": "Up to 50 permitted viewer UIDs when privacy is selected." },
+        "audienceTokens": { "type": "array", "description": "Indexed visibility tokens: ['__MEMBERS__'] or [authorId, ...allowedViewerIds]." },
+        "viewsCount": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "authorId", "authorName", "authorPhoto", "imageUrl", "caption",
+        "privacy", "allowedViewerIds", "audienceTokens", "viewsCount",
+        "createdAt", "expiresAt"
+      ]
+    },
+    "MchartStatusView": {
+      "title": "MchartStatusView",
+      "description": "Status view receipt readable strictly by the status author and the viewer themselves.",
+      "type": "object",
+      "properties": {
+        "statusId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "statusAuthorId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "viewerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "viewerName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "viewerPhoto": { "type": "string", "maxLength": 500 },
+        "viewedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["statusId", "statusAuthorId", "viewerId", "viewerName", "viewerPhoto", "viewedAt"]
+    },
+    "VideoPost": {
+      "title": "VideoPost",
+      "description": "TikTok-style short vertical video or photo-with-music carousel uploaded to Cloudinary by a verified member.",
+      "type": "object",
+      "properties": {
+        "authorId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "authorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "authorPhoto": { "type": "string", "maxLength": 500 },
+        "mediaType": { "type": "string", "enum": ["video", "photo"] },
+        "videoUrl": { "type": "string", "maxLength": 500 },
+        "photoUrls": { "type": "array", "description": "Up to 10 Cloudinary HTTPS image URLs for photo carousel posts." },
+        "audioUrl": { "type": "string", "maxLength": 500 },
+        "cloudinaryPublicId": { "type": "string", "maxLength": 240 },
+        "thumbnailUrl": { "type": "string", "maxLength": 500 },
+        "caption": { "type": "string", "maxLength": 600 },
+        "soundName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "tags": { "type": "array", "description": "Up to 5 short hashtags." },
+        "durationSec": { "type": "integer" },
+        "likesCount": { "type": "integer" },
+        "commentsCount": { "type": "integer" },
+        "sharesCount": { "type": "integer" },
+        "isArchived": { "type": "boolean" },
+        "allowComments": { "type": "boolean" },
+        "allowDownload": { "type": "boolean" },
+        "allowLikes": { "type": "boolean" },
+        "showLikeCount": { "type": "boolean" },
+        "autoReplyEnabled": { "type": "boolean" },
+        "autoReplyMessage": { "type": "string", "maxLength": 300 },
+        "autoReplyTrigger": { "type": "string", "enum": ["all", "keyword"] },
+        "autoReplyKeyword": { "type": "string", "maxLength": 60 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "authorId", "authorName", "authorPhoto", "videoUrl", "cloudinaryPublicId", "thumbnailUrl",
+        "caption", "soundName", "tags", "durationSec",
+        "likesCount", "commentsCount", "sharesCount", "isArchived",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "VideoComment": {
+      "title": "VideoComment",
+      "description": "Comment or threaded/auto reply on a TikTok-style post.",
+      "type": "object",
+      "properties": {
+        "videoId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "authorId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "authorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "authorPhoto": { "type": "string", "maxLength": 500 },
+        "body": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "parentCommentId": { "type": "string", "maxLength": 128 },
+        "replyToAuthorName": { "type": "string", "maxLength": 80 },
+        "isAutoReply": { "type": "boolean" },
+        "isDeleted": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["videoId", "authorId", "authorName", "authorPhoto", "body", "isDeleted", "createdAt"]
     }
   },
   "firestore": {
@@ -307,6 +480,10 @@
     "/users/{userId}/notifications/{notificationId}": {
       "schema": { "$ref": "#/entities/UserNotification" },
       "description": "Private Facebook-style reply and comment notifications for a recipient user."
+    },
+    "/users/{userId}/followers/{followerId}": {
+      "schema": { "$ref": "#/entities/UserFollower" },
+      "description": "Real-time follower records for a forum member."
     },
     "/topics/{topicId}": {
       "schema": { "$ref": "#/entities/Topic" },
@@ -351,6 +528,34 @@
     "/user_presence/{userId}": {
       "schema": { "$ref": "#/entities/UserPresence" },
       "description": "Real-time online presence and Mchart typing status for active members."
+    },
+    "/direct_chats/{chatId}": {
+      "schema": { "$ref": "#/entities/DirectChat" },
+      "description": "Private 1-on-1 conversation threads accessible strictly to the two participants."
+    },
+    "/direct_chats/{chatId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/DirectChatMessage" },
+      "description": "Private 1-on-1 messages accessible strictly to the two chat participants."
+    },
+    "/mchart_statuses/{statusId}": {
+      "schema": { "$ref": "#/entities/MchartStatus" },
+      "description": "24-hour ephemeral WhatsApp-style photo statuses visible only to signed-in permitted members."
+    },
+    "/mchart_statuses/{statusId}/views/{viewerId}": {
+      "schema": { "$ref": "#/entities/MchartStatusView" },
+      "description": "Per-viewer receipt for a status, listable only by the status owner."
+    },
+    "/videos/{videoId}": {
+      "schema": { "$ref": "#/entities/VideoPost" },
+      "description": "TikTok-style Cloudinary short videos feed."
+    },
+    "/videos/{videoId}/likes/{userId}": {
+      "schema": { "$ref": "#/entities/Vote" },
+      "description": "Per-user video like records."
+    },
+    "/videos/{videoId}/comments/{commentId}": {
+      "schema": { "$ref": "#/entities/VideoComment" },
+      "description": "Comments under a video post."
     }
   }
 }
