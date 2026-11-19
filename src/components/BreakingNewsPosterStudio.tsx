@@ -9,7 +9,6 @@ import {
   Copy,
   Download,
   ExternalLink,
-  Eye,
   Globe,
   Hand,
   ImagePlus,
@@ -52,7 +51,8 @@ type XVerifyType = 'blue' | 'gold' | 'gray' | 'none';
 type XCardTheme = 'light' | 'dark' | 'dim';
 type StudioTabId = 'design' | 'media' | 'xcard' | 'text' | 'publish';
 type SocialPlatformKey = 'x' | 'facebook' | 'instagram' | 'youtube' | 'whatsapp';
-type StampSealId = 'none' | 'official' | 'verified' | 'exclusive' | 'breaking';
+type StampSealId = 'none' | 'verified' | 'exclusive' | 'breaking';
+type HeadlineBgMode = 'solid' | 'transparent';
 
 interface PosterPalette {
   id: string;
@@ -685,8 +685,8 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
   const [monogramText, setMonogramText] = useState('MLS');
   const [channelLabel, setChannelLabel] = useState('MALOSHA FORUMS');
   const [showVerifiedMasthead, setShowVerifiedMasthead] = useState(true);
-  const [stampSeal, setStampSeal] = useState<StampSealId>('official');
-  const [showWatermarkMark, setShowWatermarkMark] = useState(true);
+  const [stampSeal, setStampSeal] = useState<StampSealId>('none');
+  const [showWatermarkMark, setShowWatermarkMark] = useState(false);
   const [showHeaderBar, setShowHeaderBar] = useState(true);
   const [showLivePill, setShowLivePill] = useState(true);
   const [dateStamp, setDateStamp] = useState(() => getFormattedTodayStamp());
@@ -701,10 +701,9 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
     'Fuata uchambuzi kamili na majadiliano ya wadau moja kwa moja ndani ya jukwaa.'
   );
   const [headlineSize, setHeadlineSize] = useState<HeadlineSize>('normal');
-  const [scrimStrength, setScrimStrength] = useState(64);
-  const [transparentTextMode, setTransparentTextMode] = useState(false);
-  const [textBackdropOpacity, setTextBackdropOpacity] = useState(22);
-  const [photoStageShare, setPhotoStageShare] = useState(65);
+  const [scrimStrength, setScrimStrength] = useState(44);
+  const [headlineBgMode, setHeadlineBgMode] = useState<HeadlineBgMode>('solid');
+  const [textBackdropOpacity, setTextBackdropOpacity] = useState(0);
   const [circlesBehindText, setCirclesBehindText] = useState(false);
 
   // Custom Footer, Web Link, Social Icons & Malosha Results System Promo
@@ -1053,7 +1052,7 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
         ctx.restore();
       }
 
-      // 2. Layout-Specific Background Photo & Panel Geometry (generous photo stage)
+      // 2. Layout-Specific Background Photo & FIXED Headline Zone Geometry
       const stageTop = topBarH;
       const stageBottom = H - footerH;
       const stageH = stageBottom - stageTop;
@@ -1061,17 +1060,28 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
         stageBoundsRef.current = { top: stageTop, bottom: stageBottom, width: W, height: H };
       }
 
-      const photoShare = Math.max(0.5, Math.min(0.74, photoStageShare / 100));
-      const splitTopY = Math.round(stageTop + stageH * photoShare);
-      const frameH = Math.round(stageH * Math.max(0.56, photoShare));
+      // Fixed headline card geometry — centered with clear left, right & bottom margins so it never touches edges or footer
+      const fixedZoneH = Math.round(stageH * (isCompactH ? 0.35 : 0.31));
+      const headlineZoneBottom = stageBottom;
+      const headlineZoneTop = headlineZoneBottom - fixedZoneH;
+      const cardMarginX = Math.max(26, Math.round(padX * 0.68));
+      const cardMarginBottom = 16;
+      const headlineCardX = cardMarginX;
+      const headlineCardW = W - cardMarginX * 2;
+      const headlineCardY = headlineZoneTop + 4;
+      const headlineCardH = Math.max(120, fixedZoneH - cardMarginBottom - 4);
+      const headlineCardRadius = 20;
+
+      const splitTopY = headlineZoneTop - 8;
       const frameTop = stageTop + 16;
+      const frameH = Math.max(180, headlineCardY - frameTop - 14);
       const framePadX = 24;
 
-      const effectiveTransparent = layoutId === 'portrait_transparent' || transparentTextMode;
+      const effectiveTransparent = headlineBgMode === 'transparent';
 
       if (layoutId === 'split_editorial') {
-        // Larger Photo in upper area
-        const photoH = splitTopY - stageTop;
+        // Photo fills stage above centered headline card in Solid mode, or full stage in Transparent mode
+        const photoH = effectiveTransparent ? stageH : splitTopY - stageTop;
         if (loadedPhoto) {
           ctx.save();
           ctx.beginPath();
@@ -1080,23 +1090,12 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
           drawCoverImageInRect(ctx, loadedPhoto, 0, stageTop, W, photoH, photoZoom, photoOffsetX, photoOffsetY);
           ctx.restore();
         }
-        // Subtle shadow before card
-        const edge = ctx.createLinearGradient(0, splitTopY - 36, 0, splitTopY);
+        const edge = ctx.createLinearGradient(0, splitTopY - 32, 0, splitTopY);
         edge.addColorStop(0, 'rgba(0,0,0,0)');
-        edge.addColorStop(1, 'rgba(0,0,0,0.32)');
+        edge.addColorStop(1, 'rgba(0,0,0,0.28)');
         ctx.fillStyle = edge;
-        ctx.fillRect(0, splitTopY - 36, W, 36);
-
-        // Lower Editorial Surface (solid or translucent if transparentTextMode)
-        ctx.save();
-        ctx.globalAlpha = effectiveTransparent ? Math.max(0, textBackdropOpacity / 100) : 1;
-        ctx.fillStyle = colors.cardSurfaceBg;
-        ctx.fillRect(0, splitTopY, W, stageBottom - splitTopY);
-        ctx.restore();
-        ctx.fillStyle = colors.ribbonBg;
-        ctx.fillRect(0, splitTopY, W, 6);
+        ctx.fillRect(0, splitTopY - 32, W, 32);
       } else if (layoutId === 'framed_spotlight') {
-        // Larger Framed inset photo window
         const frameW = W - framePadX * 2;
 
         ctx.save();
@@ -1140,106 +1139,60 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
           ctx.restore();
         }
 
-        if (layoutId === 'diagonal_magazine') {
-          // Generous angled lower geometric slab leaving large top/mid photo visible
-          const alpha = effectiveTransparent
-            ? Math.max(0.08, textBackdropOpacity / 100)
-            : Math.min(0.98, Math.max(0.45, scrimStrength / 100));
-          const leftAnchorY = Math.round(stageTop + stageH * 0.57);
-          const rightAnchorY = Math.round(stageTop + stageH * 0.71);
-
-          ctx.save();
-          ctx.globalAlpha = alpha;
-          ctx.fillStyle = colors.cardSurfaceBg;
-          ctx.beginPath();
-          ctx.moveTo(0, leftAnchorY);
-          ctx.lineTo(W, rightAnchorY);
-          ctx.lineTo(W, stageBottom);
-          ctx.lineTo(0, stageBottom);
-          ctx.closePath();
-          ctx.fill();
-          ctx.restore();
-
-          ctx.strokeStyle = colors.accentColor;
-          ctx.lineWidth = 7;
-          ctx.beginPath();
-          ctx.moveTo(0, leftAnchorY);
-          ctx.lineTo(W, rightAnchorY);
-          ctx.stroke();
-        } else if (layoutId === 'portrait_transparent') {
-          // Pure natural portrait photo; only apply soft scrim if owner increases scrimStrength > 0
-          if (scrimStrength > 0) {
-            const alpha = Math.min(0.92, scrimStrength / 100);
-            const scrimStart = Math.round(stageTop + stageH * 0.48);
-            const scrim = ctx.createLinearGradient(0, scrimStart, 0, stageBottom);
-            scrim.addColorStop(0, 'rgba(6,10,18,0)');
-            scrim.addColorStop(1, `rgba(6,10,18,${alpha})`);
-            ctx.fillStyle = scrim;
-            ctx.fillRect(0, scrimStart, W, stageBottom - scrimStart);
-          }
-        } else if (layoutId === 'social_quote_stage') {
-          const alpha = Math.min(0.9, (scrimStrength / 100) * 0.72);
-          if (alpha > 0) {
-            ctx.fillStyle = `rgba(6, 10, 18, ${alpha})`;
-            ctx.fillRect(0, stageTop, W, stageH);
-          }
-        } else {
-          // Scrim for bbc_classic & urgent_ticker (0% allowed so natural photo shines if desired!)
-          const alphaStrong = Math.min(0.98, Math.max(0, scrimStrength / 100));
-          if (alphaStrong > 0 && !effectiveTransparent) {
-            const scrimStart = Math.round(stageTop + stageH * 0.34);
-            const scrim = ctx.createLinearGradient(0, scrimStart, 0, stageBottom);
-            scrim.addColorStop(0, 'rgba(6,10,18,0)');
-            scrim.addColorStop(0.45, `rgba(6,10,18,${alphaStrong * 0.46})`);
-            scrim.addColorStop(0.78, `rgba(6,10,18,${alphaStrong * 0.88})`);
-            scrim.addColorStop(1, `rgba(6,10,18,${alphaStrong})`);
-            ctx.fillStyle = scrim;
-            ctx.fillRect(0, scrimStart, W, stageBottom - scrimStart);
-          }
+        if (effectiveTransparent && scrimStrength > 0) {
+          const alphaStrong = Math.min(0.88, Math.max(0, scrimStrength / 100));
+          const scrimStart = Math.round(headlineZoneTop - 48);
+          const scrim = ctx.createLinearGradient(0, scrimStart, 0, stageBottom);
+          scrim.addColorStop(0, 'rgba(6,10,18,0)');
+          scrim.addColorStop(0.35, `rgba(6,10,18,${alphaStrong * 0.45})`);
+          scrim.addColorStop(1, `rgba(6,10,18,${alphaStrong})`);
+          ctx.fillStyle = scrim;
+          ctx.fillRect(0, scrimStart, W, stageBottom - scrimStart);
         }
       }
 
-      // Subtle Brand Watermark on Stage
+      // Subtle Brand Watermark on Stage (without "RASMI" / "OFFICIAL" label)
       if (showWatermarkMark) {
         ctx.save();
         ctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
         ctx.font = `800 18px ${sansFont}`;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'top';
-        ctx.fillText('MALOSHA FORUMS · OFFICIAL', padX, stageTop + 18);
+        ctx.fillText('MALOSHA FORUMS', padX, stageTop + 18);
         ctx.restore();
       }
 
-      // Official Corner Verification Stamp / Seal
+      // Optional Corner Verification Stamp / Seal (MALOSHA FORUMS RASMI removed)
       if (stampSeal !== 'none') {
         const sealMap: Record<Exclude<StampSealId, 'none'>, { label: string; badge: XVerifyType }> = {
-          official: { label: 'MALOSHA FORUMS RASMI', badge: 'blue' },
           verified: { label: 'TAARIFA YA KWELI', badge: 'blue' },
           exclusive: { label: 'EXCLUSIVE DESK', badge: 'gold' },
           breaking: { label: 'HABARI KUU', badge: 'gold' },
         };
         const sealCfg = sealMap[stampSeal];
-        ctx.save();
-        ctx.font = `800 14px ${sansFont}`;
-        const labelW = ctx.measureText(sealCfg.label).width;
-        const sealW = labelW + 46;
-        const sealH = 32;
-        const sealX = W - padX - sealW;
-        const sealY = stageTop + 16;
+        if (sealCfg) {
+          ctx.save();
+          ctx.font = `800 14px ${sansFont}`;
+          const labelW = ctx.measureText(sealCfg.label).width;
+          const sealW = labelW + 46;
+          const sealH = 32;
+          const sealX = W - padX - sealW;
+          const sealY = stageTop + 16;
 
-        ctx.fillStyle = 'rgba(9, 17, 32, 0.72)';
-        drawRoundedRect(ctx, sealX, sealY, sealW, sealH, 999);
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.34)';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
+          ctx.fillStyle = 'rgba(9, 17, 32, 0.72)';
+          drawRoundedRect(ctx, sealX, sealY, sealW, sealH, 999);
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.34)';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
 
-        drawXVerifiedBadge(ctx, sealX + 18, sealY + sealH / 2, 18, sealCfg.badge);
-        ctx.fillStyle = '#FFFFFF';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(sealCfg.label, sealX + 33, sealY + sealH / 2 + 0.5);
-        ctx.restore();
+          drawXVerifiedBadge(ctx, sealX + 18, sealY + sealH / 2, 18, sealCfg.badge);
+          ctx.fillStyle = '#FFFFFF';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(sealCfg.label, sealX + 33, sealY + sealH / 2 + 0.5);
+          ctx.restore();
+        }
       }
 
       // 3. Top Broadcast Header Bar
@@ -1315,77 +1268,86 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
         }
       }
 
-      // 4. Headline, Ribbon & Subheadline Rendering
-      const contentWidth = W - padX * 2;
+      // 4. FIXED Centered Headline Card, Ribbon & Subheadline Rendering (locked height, centered with margins)
+      const contentWidth = headlineCardW;
       const cleanHeadline = headline.trim();
       const cleanSub = subheadline.trim();
 
-      let baseFontSize =
-        headlineSize === 'xlarge'
-          ? 64
-          : headlineSize === 'large'
-            ? 54
-            : headlineSize === 'normal'
-              ? 44
-              : 36;
-
-      if (isCompactH) baseFontSize = Math.round(baseFontSize * 0.84);
-      if (layoutId === 'split_editorial' || layoutId === 'framed_spotlight') {
-        baseFontSize = Math.min(baseFontSize, isCompactH ? 38 : 46);
-      }
-      if (cleanHeadline.length > 110) baseFontSize = Math.max(30, baseFontSize - 8);
-      else if (cleanHeadline.length > 75) baseFontSize = Math.max(34, baseFontSize - 4);
-
-      const headlineFont = `800 ${baseFontSize}px ${displayFont}`;
-      const lineHeight = Math.round(baseFontSize * 1.18);
-
       const isUrgentCard = layoutId === 'urgent_ticker';
-      const cardInnerPadX = isUrgentCard ? 30 : 0;
+      const cardInnerPadX = 26;
       const textWrapWidth = contentWidth - cardInnerPadX * 2;
 
-      ctx.font = headlineFont;
-      let headlineLines = cleanHeadline ? wrapCanvasText(ctx, cleanHeadline, textWrapWidth) : [];
-      const maxHeadlineLines =
-        layoutId === 'social_quote_stage' ? 2 : isCompactH ? 3 : layoutId === 'split_editorial' ? 4 : 5;
-      if (headlineLines.length > maxHeadlineLines) {
-        headlineLines = headlineLines.slice(0, maxHeadlineLines);
-        const last = headlineLines[maxHeadlineLines - 1];
-        headlineLines[maxHeadlineLines - 1] = `${last.slice(0, Math.max(0, last.length - 3))}...`;
+      const bandPadTop = 18;
+      const bandPadBottom = 14;
+      const bandContentTop = headlineCardY + bandPadTop;
+      const bandContentBottom = headlineCardY + headlineCardH - bandPadBottom;
+
+      const ribbonH = showRibbon ? (isCompactH ? 38 : 42) : 0;
+      const gapRibbonToHead = showRibbon && cleanHeadline.length > 0 ? 12 : 0;
+      const gapHeadToSub = cleanHeadline.length > 0 && cleanSub.length > 0 ? 10 : 0;
+      const availTextH = Math.max(
+        72,
+        bandContentBottom - bandContentTop - ribbonH - gapRibbonToHead
+      );
+
+      let fitFontSize =
+        headlineSize === 'xlarge'
+          ? 56
+          : headlineSize === 'large'
+            ? 48
+            : headlineSize === 'normal'
+              ? 40
+              : 32;
+      if (isCompactH) fitFontSize = Math.round(fitFontSize * 0.84);
+
+      let headlineFont = `800 ${fitFontSize}px ${displayFont}`;
+      let lineHeight = Math.round(fitFontSize * 1.16);
+      let headlineLines: string[] = [];
+      let subFontSize = isCompactH ? 18 : 21;
+      let subLineHeight = Math.round(subFontSize * 1.28);
+      let subLines: string[] = [];
+
+      // Fit headline + optional subheadline cleanly inside the fixed headline zone height
+      while (fitFontSize >= 22) {
+        headlineFont = `800 ${fitFontSize}px ${displayFont}`;
+        lineHeight = Math.round(fitFontSize * 1.16);
+        ctx.font = headlineFont;
+        headlineLines = cleanHeadline ? wrapCanvasText(ctx, cleanHeadline, textWrapWidth) : [];
+
+        subFontSize = Math.max(15, Math.min(isCompactH ? 19 : 22, Math.round(fitFontSize * 0.56)));
+        subLineHeight = Math.round(subFontSize * 1.28);
+        ctx.font = `500 ${subFontSize}px ${sansFont}`;
+        subLines = cleanSub ? wrapCanvasText(ctx, cleanSub, textWrapWidth).slice(0, 2) : [];
+
+        const neededH =
+          headlineLines.length * lineHeight +
+          (subLines.length > 0 ? gapHeadToSub + subLines.length * subLineHeight : 0);
+        if (neededH <= availTextH || fitFontSize <= 22) break;
+        fitFontSize -= 2;
       }
 
-      const subFontSize = isCompactH ? 21 : layoutId === 'split_editorial' ? 23 : 25;
-      const subLineHeight = Math.round(subFontSize * 1.32);
-      ctx.font = `500 ${subFontSize}px ${sansFont}`;
-      let subLines = cleanSub ? wrapCanvasText(ctx, cleanSub, textWrapWidth) : [];
-      const maxSubLines = layoutId === 'social_quote_stage' ? 2 : isCompactH ? 2 : 3;
-      if (subLines.length > maxSubLines) {
-        subLines = subLines.slice(0, maxSubLines);
-        const lastSub = subLines[maxSubLines - 1];
-        subLines[maxSubLines - 1] = `${lastSub.slice(0, Math.max(0, lastSub.length - 3))}...`;
+      // Clamp any overflow if text is exceptionally long so box stays 100% fixed
+      const reserveSubH = subLines.length > 0 ? gapHeadToSub + subLines.length * subLineHeight : 0;
+      const maxHeadRows = Math.max(1, Math.floor((availTextH - reserveSubH) / lineHeight));
+      if (headlineLines.length > maxHeadRows) {
+        headlineLines = headlineLines.slice(0, maxHeadRows);
+        const last = headlineLines[maxHeadRows - 1];
+        headlineLines[maxHeadRows - 1] = `${last.slice(0, Math.max(0, last.length - 3))}...`;
+      }
+      const actualHeadH = headlineLines.length * lineHeight;
+      const maxSubRows = Math.max(
+        0,
+        Math.floor((availTextH - actualHeadH - (actualHeadH > 0 ? gapHeadToSub : 0)) / subLineHeight)
+      );
+      if (subLines.length > maxSubRows) {
+        subLines = subLines.slice(0, maxSubRows);
+        if (maxSubRows > 0) {
+          const lastSub = subLines[maxSubRows - 1];
+          subLines[maxSubRows - 1] = `${lastSub.slice(0, Math.max(0, lastSub.length - 3))}...`;
+        }
       }
 
-      const ribbonH = showRibbon ? (isCompactH ? 42 : 48) : 0;
-      const gapRibbonToHead = showRibbon && headlineLines.length > 0 ? 18 : 0;
-      const gapHeadToSub = headlineLines.length > 0 && subLines.length > 0 ? 14 : 0;
-      const totalHeadlineH = headlineLines.length * lineHeight;
-      const totalSubH = subLines.length * subLineHeight;
-      const totalBlockH = ribbonH + gapRibbonToHead + totalHeadlineH + gapHeadToSub + totalSubH;
-
-      let blockTopY: number;
-      if (layoutId === 'split_editorial') {
-        const avail = stageBottom - splitTopY - 6;
-        blockTopY = splitTopY + 6 + Math.max(16, (avail - totalBlockH) / 2);
-      } else if (layoutId === 'framed_spotlight') {
-        const frameBottom = frameTop + frameH;
-        const avail = stageBottom - frameBottom;
-        blockTopY = frameBottom + Math.max(14, (avail - totalBlockH) / 2);
-      } else if (layoutId === 'social_quote_stage') {
-        blockTopY = stageTop + 28;
-      } else {
-        blockTopY = stageBottom - 26 - totalBlockH - (isUrgentCard ? 20 : 0);
-      }
-
-      // Helper to render draggable circle photos (can sit either behind headline OR in front)
+      // Optional layer order: circle cutouts behind headline zone
       const drawCircleCutoutsLayer = () => {
         const nextHitboxes: { id: string; cx: number; cy: number; r: number }[] = [];
         for (const item of circlePhotos) {
@@ -1464,71 +1426,76 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
         drawCircleCutoutsLayer();
       }
 
-      // Transparent / Translucent Portrait Backdrop behind text OR Urgent Card box
-      if (effectiveTransparent && layoutId !== 'split_editorial' && layoutId !== 'diagonal_magazine' && totalBlockH > 0) {
-        const panelAlpha = Math.max(0, Math.min(0.95, textBackdropOpacity / 100));
-        if (panelAlpha > 0.01) {
-          const boxPadY = 20;
-          const boxPadX = 24;
-          const boxX = padX - 10;
-          const boxY = blockTopY - boxPadY;
-          const boxW = contentWidth + 20;
-          const boxH = totalBlockH + boxPadY * 2;
-          ctx.save();
-          ctx.globalAlpha = panelAlpha;
-          ctx.fillStyle = colors.cardSurfaceBg;
-          drawRoundedRect(ctx, boxX, boxY, boxW, boxH, 18);
-          ctx.fill();
-          ctx.globalAlpha = Math.min(0.45, panelAlpha + 0.14);
-          ctx.strokeStyle = 'rgba(255,255,255,0.45)';
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
-          ctx.restore();
-          void boxPadX;
-        }
-      } else if (isUrgentCard && totalBlockH > 0) {
-        const boxPadY = 22;
-        const boxX = padX;
-        const boxY = blockTopY - boxPadY;
-        const boxW = contentWidth;
-        const boxH = totalBlockH + boxPadY * 2;
+      // Draw Centered FIXED Headline Card Backdrop: SOLID vs TRANSPARENT (with margins separating left, right & bottom)
+      if (!effectiveTransparent) {
         ctx.save();
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
+        ctx.shadowBlur = 22;
+        ctx.shadowOffsetY = 8;
         ctx.fillStyle = colors.cardSurfaceBg;
-        ctx.globalAlpha = effectiveTransparent ? Math.max(0.05, textBackdropOpacity / 100) : 0.92;
-        drawRoundedRect(ctx, boxX, boxY, boxW, boxH, 16);
+        drawRoundedRect(ctx, headlineCardX, headlineCardY, headlineCardW, headlineCardH, headlineCardRadius);
         ctx.fill();
-        ctx.globalAlpha = 1;
-        ctx.strokeStyle = colors.accentColor;
-        ctx.lineWidth = 3;
+        ctx.restore();
+
+        // Top accent stripe neatly clipped inside the rounded card
+        ctx.save();
+        drawRoundedRect(ctx, headlineCardX, headlineCardY, headlineCardW, headlineCardH, headlineCardRadius);
+        ctx.clip();
+        ctx.fillStyle = isUrgentCard ? colors.accentColor : colors.ribbonBg;
+        ctx.fillRect(headlineCardX, headlineCardY, headlineCardW, 5);
+        ctx.restore();
+
+        // Crisp separation border around centered card
+        ctx.save();
+        drawRoundedRect(ctx, headlineCardX, headlineCardY, headlineCardW, headlineCardH, headlineCardRadius);
+        ctx.strokeStyle = isUrgentCard
+          ? colors.accentColor
+          : isLightHex(colors.cardSurfaceBg)
+            ? 'rgba(15, 23, 42, 0.14)'
+            : 'rgba(255, 255, 255, 0.2)';
+        ctx.lineWidth = isUrgentCard ? 2.8 : 1.5;
+        ctx.stroke();
+        ctx.restore();
+      } else if (textBackdropOpacity > 2) {
+        const panelAlpha = Math.max(0, Math.min(0.85, textBackdropOpacity / 100));
+        ctx.save();
+        ctx.globalAlpha = panelAlpha;
+        ctx.fillStyle = colors.cardSurfaceBg;
+        drawRoundedRect(ctx, headlineCardX, headlineCardY, headlineCardW, headlineCardH, headlineCardRadius);
+        ctx.fill();
+        ctx.globalAlpha = Math.min(0.45, panelAlpha + 0.14);
+        ctx.strokeStyle = 'rgba(255,255,255,0.42)';
+        ctx.lineWidth = 1.5;
         ctx.stroke();
         ctx.restore();
       }
 
-      // Safe-zone guide during active drag so user avoids overlapping headline accidentally
-      if (showSelectionGuide && isDraggingCanvas && totalBlockH > 0) {
+      // Safe-zone guide during active drag so user avoids overlapping headline
+      if (showSelectionGuide && isDraggingCanvas) {
         ctx.save();
         ctx.strokeStyle = 'rgba(250, 204, 21, 0.72)';
         ctx.lineWidth = 2;
         ctx.setLineDash([8, 6]);
-        drawRoundedRect(ctx, padX - 8, blockTopY - 12, contentWidth + 16, totalBlockH + 24, 10);
+        drawRoundedRect(ctx, headlineCardX - 4, headlineCardY - 4, headlineCardW + 8, headlineCardH + 8, headlineCardRadius + 2);
         ctx.stroke();
         ctx.restore();
       }
 
-      const contentStartX = padX + cardInnerPadX;
+      const contentStartX = headlineCardX + cardInnerPadX;
+      const blockTopY = bandContentTop;
 
-      // Ribbon + Location Tag
+      // Ribbon + Location Tag at fixed top of Headline Zone
       if (showRibbon) {
         const cleanRibbon = (ribbonText.trim() || 'BREAKING NEWS').toUpperCase();
-        ctx.font = `800 ${isCompactH ? 20 : 23}px ${sansFont}`;
-        const ribbonW = Math.min(textWrapWidth, ctx.measureText(cleanRibbon).width + 46);
+        ctx.font = `800 ${isCompactH ? 18 : 21}px ${sansFont}`;
+        const ribbonW = Math.min(textWrapWidth, ctx.measureText(cleanRibbon).width + 44);
 
         ctx.save();
         ctx.fillStyle = colors.ribbonBg;
         ctx.beginPath();
         ctx.moveTo(contentStartX, blockTopY);
         ctx.lineTo(contentStartX + ribbonW, blockTopY);
-        ctx.lineTo(contentStartX + ribbonW - 12, blockTopY + ribbonH);
+        ctx.lineTo(contentStartX + ribbonW - 10, blockTopY + ribbonH);
         ctx.lineTo(contentStartX, blockTopY + ribbonH);
         ctx.closePath();
         ctx.fill();
@@ -1544,13 +1511,11 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
 
         if (locationTag.trim()) {
           const locText = locationTag.trim().toUpperCase();
-          ctx.font = `700 ${isCompactH ? 18 : 20}px ${sansFont}`;
+          ctx.font = `700 ${isCompactH ? 16 : 18}px ${sansFont}`;
           const locX = contentStartX + ribbonW + 12;
-          const locW = Math.min(contentStartX + textWrapWidth - locX, ctx.measureText(locText).width + 28);
-          if (locW > 64) {
-            const lightSurface =
-              (layoutId === 'split_editorial' || layoutId === 'diagonal_magazine' || layoutId === 'urgent_ticker') &&
-              isLightHex(colors.cardSurfaceBg);
+          const locW = Math.min(contentStartX + textWrapWidth - locX, ctx.measureText(locText).width + 26);
+          if (locW > 60) {
+            const lightSurface = !effectiveTransparent && isLightHex(colors.cardSurfaceBg);
             ctx.fillStyle = lightSurface ? '#F1F5F9' : 'rgba(15, 23, 42, 0.85)';
             drawRoundedRect(ctx, locX, blockTopY + 3, locW, ribbonH - 6, 6);
             ctx.fill();
@@ -1566,42 +1531,42 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
         }
       }
 
-      // Headline Color Logic
-      const usesCardSurface =
-        layoutId === 'split_editorial' ||
-        layoutId === 'diagonal_magazine' ||
-        layoutId === 'urgent_ticker';
-      const headColor =
-        usesCardSurface || layoutId === 'framed_spotlight'
-          ? layoutId === 'framed_spotlight'
-            ? isLightHex(colors.studioBgBottom)
-              ? '#0F172A'
-              : colors.headlineColor
-            : colors.headlineColor
-          : colors.headlineColor;
-      const subColor =
-        usesCardSurface || layoutId === 'framed_spotlight'
-          ? layoutId === 'framed_spotlight'
-            ? isLightHex(colors.studioBgBottom)
-              ? '#475569'
-              : colors.subheadlineColor
-            : colors.subheadlineColor
-          : colors.subheadlineColor;
+      // Headline & Subheadline Colors (guarantee contrast in both Solid & Transparent modes)
+      const solidIsLight = !effectiveTransparent && isLightHex(colors.cardSurfaceBg);
+      const headColor = effectiveTransparent
+        ? isLightHex(colors.headlineColor)
+          ? colors.headlineColor
+          : '#FFFFFF'
+        : solidIsLight && isLightHex(colors.headlineColor)
+          ? '#0F172A'
+          : !solidIsLight && !isLightHex(colors.headlineColor)
+            ? '#FFFFFF'
+            : colors.headlineColor;
+
+      const subColor = effectiveTransparent
+        ? isLightHex(colors.subheadlineColor)
+          ? colors.subheadlineColor
+          : '#E2E8F0'
+        : solidIsLight && isLightHex(colors.subheadlineColor)
+          ? '#475569'
+          : !solidIsLight && !isLightHex(colors.subheadlineColor)
+            ? '#E2E8F0'
+            : colors.subheadlineColor;
 
       let yCursor = blockTopY + ribbonH + gapRibbonToHead;
       if (headlineLines.length > 0) {
         ctx.font = headlineFont;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'top';
-        if (!usesCardSurface && layoutId !== 'framed_spotlight') {
-          ctx.shadowColor = effectiveTransparent ? 'rgba(0,0,0,0.88)' : 'rgba(0,0,0,0.68)';
-          ctx.shadowBlur = effectiveTransparent ? 18 : 12;
+        if (effectiveTransparent) {
+          ctx.shadowColor = 'rgba(0,0,0,0.88)';
+          ctx.shadowBlur = 16;
           ctx.shadowOffsetY = 3;
         }
         ctx.fillStyle = headColor;
         for (const line of headlineLines) {
-          if (effectiveTransparent && textBackdropOpacity <= 15) {
-            ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+          if (effectiveTransparent && textBackdropOpacity <= 12) {
+            ctx.strokeStyle = 'rgba(0,0,0,0.6)';
             ctx.lineWidth = 3;
             ctx.strokeText(line, contentStartX, yCursor);
           }
@@ -1905,9 +1870,8 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
       headlineSize,
       subheadline,
       scrimStrength,
-      transparentTextMode,
+      headlineBgMode,
       textBackdropOpacity,
-      photoStageShare,
       circlesBehindText,
       loadedPhoto,
       photoZoom,
@@ -2472,8 +2436,84 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
             </div>
           </div>
 
-          {/* RIGHT COLUMN: Full Studio Tabbed Controls */}
+          {/* RIGHT COLUMN: Fixed Headline Card + Tabbed Studio Controls */}
           <div className="space-y-4 lg:col-span-6">
+            {/* FIXED HEADLINE EDITOR: Always pinned at top, fixed height, never shifts when adding photos or X comments */}
+            <div className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-2xs sm:p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label
+                  htmlFor="poster-headline"
+                  className="text-xs font-bold tracking-wide text-slate-800 uppercase"
+                >
+                  {tr('Sehemu ya Headline (Fixed)', 'Headline Box (Fixed)')}
+                </label>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Solid vs Transparent Headline Mode Selector */}
+                  <div
+                    role="group"
+                    aria-label={tr('Muonekano wa Headline', 'Headline Background Mode')}
+                    className="inline-flex rounded-lg border border-slate-300 bg-slate-100 p-0.5 text-[11px] font-bold"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setHeadlineBgMode('solid')}
+                      className={`rounded-md px-2.5 py-1 transition-colors ${
+                        headlineBgMode === 'solid'
+                          ? 'bg-[#0E2640] text-white shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      {tr('Solid', 'Solid')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setHeadlineBgMode('transparent')}
+                      className={`rounded-md px-2.5 py-1 transition-colors ${
+                        headlineBgMode === 'transparent'
+                          ? 'bg-[#1D4E89] text-white shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      {tr('Transparent', 'Transparent')}
+                    </button>
+                  </div>
+
+                  {/* Headline Size */}
+                  <div className="inline-flex rounded-md border border-slate-200 bg-slate-50 p-0.5 text-[10px] font-bold">
+                    {(
+                      [
+                        { id: 'small', label: tr('Ndogo', 'S') },
+                        { id: 'normal', label: tr('Wastani', 'M') },
+                        { id: 'large', label: tr('Kubwa', 'L') },
+                        { id: 'xlarge', label: tr('XL', 'XL') },
+                      ] as { id: HeadlineSize; label: string }[]
+                    ).map((sz) => (
+                      <button
+                        key={sz.id}
+                        type="button"
+                        onClick={() => setHeadlineSize(sz.id)}
+                        className={`rounded px-2 py-0.5 ${
+                          headlineSize === sz.id ? 'bg-[#0E2640] text-white' : 'text-slate-600'
+                        }`}
+                      >
+                        {sz.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <textarea
+                id="poster-headline"
+                maxLength={190}
+                value={headline}
+                onChange={(e) => setHeadline(e.target.value)}
+                placeholder={tr('Andika kichwa kikuu hapa...', 'Enter main headline here...')}
+                className="mt-2 h-[84px] w-full resize-none overflow-y-auto rounded-lg border border-slate-300 bg-slate-50/50 p-2.5 text-sm font-bold text-slate-900 focus:border-[#BB1919] focus:bg-white focus:outline-none"
+              />
+            </div>
+
             {/* Studio Navigation Tabs */}
             <div
               role="tablist"
@@ -2542,28 +2582,30 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
                     <h3 className="text-xs font-bold tracking-wide text-slate-800 uppercase">
                       {tr('Chagua Muundo wa Template (Miundo 7 Tofauti)', 'Choose Structural Layout (7 Designs)')}
                     </h3>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setTransparentTextMode((v) => {
-                          const next = !v;
-                          if (next) setScrimStrength((s) => Math.min(s, 18));
-                          return next;
-                        });
-                      }}
-                      className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-bold transition-colors ${
-                        transparentTextMode || layoutId === 'portrait_transparent'
-                          ? 'border-[#1D4E89] bg-sky-50 text-[#0E2640]'
-                          : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
-                      }`}
-                    >
-                      <Eye className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>
-                        {transparentTextMode || layoutId === 'portrait_transparent'
-                          ? tr('Portrait Transparent: WAZI ✓', 'Portrait Transparent: ON ✓')
-                          : tr('Washa Portrait Transparent', 'Enable Portrait Transparent')}
-                      </span>
-                    </button>
+                    <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-[11px] font-bold">
+                      <button
+                        type="button"
+                        onClick={() => setHeadlineBgMode('solid')}
+                        className={`rounded-md px-2.5 py-1 transition-colors ${
+                          headlineBgMode === 'solid'
+                            ? 'bg-[#0E2640] text-white'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {tr('Headline: Solid', 'Headline: Solid')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHeadlineBgMode('transparent')}
+                        className={`rounded-md px-2.5 py-1 transition-colors ${
+                          headlineBgMode === 'transparent'
+                            ? 'bg-[#1D4E89] text-white'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {tr('Transparent', 'Transparent')}
+                      </button>
+                    </div>
                   </div>
                   <div className="mt-2.5 grid grid-cols-2 gap-2 sm:grid-cols-3">
                     {LAYOUT_OPTIONS.map((lay) => {
@@ -2575,8 +2617,7 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
                           onClick={() => {
                             setLayoutId(lay.id);
                             if (lay.id === 'portrait_transparent') {
-                              setTransparentTextMode(true);
-                              setScrimStrength((s) => Math.min(s, 15));
+                              setHeadlineBgMode('transparent');
                             }
                           }}
                           className={`rounded-lg border p-2.5 text-left transition-all ${
@@ -2798,68 +2839,55 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
                     </p>
                   )}
 
-                  {/* Photo Stage Size & Portrait Transparent Mode Controls */}
+                  {/* Headline Solid vs Transparent Backdrop Controls (Fixed Headline Box) */}
                   <div className="space-y-2.5 rounded-lg border border-sky-200/80 bg-sky-50/50 p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-bold text-[#0E2640]">
-                        <input
-                          type="checkbox"
-                          checked={transparentTextMode}
-                          onChange={(e) => {
-                            const checked = e.target.checked;
-                            setTransparentTextMode(checked);
-                            if (checked) {
-                              setScrimStrength((s) => Math.min(s, 15));
-                            }
-                          }}
-                          className="h-4 w-4 rounded accent-[#1D4E89]"
-                        />
-                        <span>
-                          {tr(
-                            'Portrait Mode (Maandishi Transparent, Picha Ionekane Halisi)',
-                            'Portrait Mode (Transparent Text Backdrop, Clear Photo)'
-                          )}
-                        </span>
-                      </label>
+                      <span className="text-xs font-bold text-[#0E2640]">
+                        {tr('Mandhari ya Nyuma ya Headline (Fixed):', 'Headline Box Style (Fixed):')}
+                      </span>
+                      <div className="inline-flex rounded-lg border border-slate-300 bg-white p-0.5 text-[11px] font-bold">
+                        <button
+                          type="button"
+                          onClick={() => setHeadlineBgMode('solid')}
+                          className={`rounded-md px-2.5 py-1 transition-colors ${
+                            headlineBgMode === 'solid'
+                              ? 'bg-[#0E2640] text-white'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          {tr('Solid (Rangi Kamili)', 'Solid')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setHeadlineBgMode('transparent')}
+                          className={`rounded-md px-2.5 py-1 transition-colors ${
+                            headlineBgMode === 'transparent'
+                              ? 'bg-[#1D4E89] text-white'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          {tr('Transparent (Angavu)', 'Transparent')}
+                        </button>
+                      </div>
                     </div>
 
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {headlineBgMode === 'transparent' && (
                       <div>
                         <div className="flex justify-between text-[11px] font-semibold text-slate-700">
-                          <span>{tr('Ukubwa wa Eneo la Picha', 'Photo Area Size')}</span>
-                          <span className="font-mono tabular-nums">{photoStageShare}%</span>
-                        </div>
-                        <input
-                          type="range"
-                          min={50}
-                          max={74}
-                          step={1}
-                          value={photoStageShare}
-                          onChange={(e) => setPhotoStageShare(Number(e.target.value))}
-                          className="mt-1 w-full accent-[#0E2640]"
-                        />
-                      </div>
-                      <div>
-                        <div className="flex justify-between text-[11px] font-semibold text-slate-700">
-                          <span>{tr('Uwazi wa Sanduku la Maandishi', 'Text Box Opacity')}</span>
+                          <span>{tr('Uwazi wa Sanduku la Headline (0% = Wazi Kabisa)', 'Headline Tint Opacity')}</span>
                           <span className="font-mono tabular-nums">{textBackdropOpacity}%</span>
                         </div>
                         <input
                           type="range"
                           min={0}
-                          max={90}
+                          max={85}
                           step={2}
                           value={textBackdropOpacity}
-                          onChange={(e) => {
-                            setTextBackdropOpacity(Number(e.target.value));
-                            if (!transparentTextMode && layoutId !== 'portrait_transparent') {
-                              setTransparentTextMode(true);
-                            }
-                          }}
+                          onChange={(e) => setTextBackdropOpacity(Number(e.target.value))}
                           className="mt-1 w-full accent-[#1D4E89]"
                         />
                       </div>
-                    </div>
+                    )}
                   </div>
                 </div>
 
@@ -3404,14 +3432,14 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
               </div>
             )}
 
-            {/* TAB 4: HEADLINES, TOP BAR & CUSTOM WEB/SOCIAL/RESULTS FOOTER */}
+            {/* TAB 4: RIBBON, SUBHEADLINE, TOP BAR & CUSTOM WEB/SOCIAL/RESULTS FOOTER */}
             {activeTab === 'text' && (
               <div className="space-y-4">
-                {/* Headline & Ribbon */}
+                {/* Ribbon & Subheadline */}
                 <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <h3 className="text-xs font-bold tracking-wide text-slate-800 uppercase">
-                      {tr('Kichwa Kikuu & Utepe', 'Headline & Banner')}
+                      {tr('Utepe & Maelezo Mafupi', 'Ribbon & Sub-headline')}
                     </h3>
                     <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-semibold text-slate-700">
                       <input
@@ -3464,54 +3492,15 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
                   )}
 
                   <div>
-                    <div className="flex items-center justify-between gap-2">
-                      <label htmlFor="poster-headline" className="text-xs font-semibold text-slate-700">
-                        {tr('Kichwa Kikuu cha Habari', 'Main Headline')}
-                      </label>
-                      <div className="inline-flex rounded-md border border-slate-200 bg-slate-50 p-0.5 text-[10px] font-bold">
-                        {(
-                          [
-                            { id: 'small', label: tr('Ndogo', 'S') },
-                            { id: 'normal', label: tr('Wastani', 'M') },
-                            { id: 'large', label: tr('Kubwa', 'L') },
-                            { id: 'xlarge', label: tr('XL', 'XL') },
-                          ] as { id: HeadlineSize; label: string }[]
-                        ).map((sz) => (
-                          <button
-                            key={sz.id}
-                            type="button"
-                            onClick={() => setHeadlineSize(sz.id)}
-                            className={`rounded px-2 py-0.5 ${
-                              headlineSize === sz.id ? 'bg-[#0E2640] text-white' : 'text-slate-600'
-                            }`}
-                          >
-                            {sz.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <textarea
-                      id="poster-headline"
-                      rows={3}
-                      maxLength={190}
-                      value={headline}
-                      onChange={(e) => setHeadline(e.target.value)}
-                      placeholder={tr('Andika kichwa kikuu au acha wazi...', 'Enter headline or leave blank...')}
-                      className="mt-1.5 w-full rounded-lg border border-slate-300 p-2.5 text-sm font-bold text-slate-900 focus:border-[#BB1919] focus:outline-none"
-                    />
-                  </div>
-
-                  <div>
                     <label htmlFor="poster-sub" className="block text-xs font-semibold text-slate-700">
                       {tr('Maelezo Mafupi (Hiari)', 'Sub-headline (Optional)')}
                     </label>
                     <textarea
                       id="poster-sub"
-                      rows={2}
                       maxLength={220}
                       value={subheadline}
                       onChange={(e) => setSubheadline(e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-slate-300 p-2.5 text-xs text-slate-800 focus:border-[#1D4E89] focus:outline-none"
+                      className="mt-1 h-[64px] w-full resize-none overflow-y-auto rounded-lg border border-slate-300 p-2.5 text-xs text-slate-800 focus:border-[#1D4E89] focus:outline-none"
                     />
                   </div>
                 </div>
@@ -3607,12 +3596,12 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
                   )}
                 </div>
 
-                {/* Official Seals, Verification Marks & Watermark */}
+                {/* Corner Seals & Watermark */}
                 <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <h3 className="flex items-center gap-1.5 text-xs font-bold tracking-wide text-slate-800 uppercase">
                       <BadgeCheck className="h-4 w-4 text-[#1D9BF0]" aria-hidden="true" />
-                      <span>{tr('Alama Rasmi za Malosha Forums & Watermark', 'Official Seals & Watermark')}</span>
+                      <span>{tr('Muhuri wa Kona & Watermark', 'Corner Stamp & Watermark')}</span>
                     </h3>
                     <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-semibold text-slate-700">
                       <input
@@ -3627,16 +3616,15 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
 
                   <div>
                     <span className="block text-[11px] font-semibold text-slate-600">
-                      {tr('Muhuri Rasmi wa Kona (Official Stamp Seal):', 'Corner Official Stamp Seal:')}
+                      {tr('Muhuri wa Kona (Corner Stamp):', 'Corner Stamp:')}
                     </span>
                     <div className="mt-1.5 flex flex-wrap gap-1.5">
                       {(
                         [
-                          { id: 'official', labelSw: 'Malosha Rasmi', labelEn: 'Official' },
+                          { id: 'none', labelSw: 'Hakuna', labelEn: 'None' },
                           { id: 'verified', labelSw: 'Taarifa ya Kweli ✓', labelEn: 'Verified ✓' },
                           { id: 'exclusive', labelSw: 'Exclusive Desk', labelEn: 'Exclusive' },
                           { id: 'breaking', labelSw: 'Habari Kuu', labelEn: 'Breaking' },
-                          { id: 'none', labelSw: 'Hakuna', labelEn: 'None' },
                         ] as { id: StampSealId; labelSw: string; labelEn: string }[]
                       ).map((seal) => {
                         const active = stampSeal === seal.id;

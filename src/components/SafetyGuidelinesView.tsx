@@ -15,8 +15,11 @@ import {
   Camera,
   Check,
   CheckCircle2,
+  ChevronDown,
   Circle,
+  ClipboardList,
   Copy,
+  CreditCard,
   Eye,
   EyeOff,
   Globe,
@@ -26,11 +29,14 @@ import {
   Loader2,
   Lock,
   MessageCircle,
+  ShieldAlert,
   ShieldCheck,
   Sparkles,
   Trash2,
   UserCheck,
+  UserPlus,
   Users,
+  Video as VideoIcon,
 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 import { ADMIN_EMAIL, auth, googleProvider } from '../firebase';
@@ -45,16 +51,20 @@ import {
   setPhoneAlertsEnabled,
 } from '../services/notificationService';
 import {
+  COMMUNITY_SAFETY_RULES,
   MONETIZATION_REQUIREMENTS,
   PrimaryBoard,
   Report,
   Topic,
   TopicCategory,
+  UserNotification,
   VERIFICATION_BADGE_META,
   VerificationBadgeType,
+  VideoPost,
   UserProfile,
   computeAuthorMetrics,
   computeMemberControlSerial,
+  findCommunityRule,
   formatMemberCode,
 } from '../types';
 import { Avatar, OnlineStatusPill } from './Avatar';
@@ -78,6 +88,9 @@ interface SafetyGuidelinesViewProps {
   isSuspended?: boolean;
   myReports: Report[];
   topics?: Topic[];
+  videos?: VideoPost[];
+  friendsCount?: number;
+  userNotifications?: UserNotification[];
   onSaveProfile: (displayName: string, bio: string, phoneNumber?: string) => Promise<void>;
   onUpdateProfilePhoto?: (photoURL: string) => Promise<void>;
   onPublishPosterTopic?: (data: {
@@ -91,6 +104,7 @@ interface SafetyGuidelinesViewProps {
   onSignIn: () => void;
   onUpdateReportStatus: (reportId: string, status: 'reviewed' | 'dismissed') => Promise<void>;
   onOpenTopic: (topicId: string) => void;
+  onOpenVideo?: (videoId: string) => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
 }
 
@@ -117,6 +131,9 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
   isSuspended = false,
   myReports,
   topics = [],
+  videos = [],
+  friendsCount = 0,
+  userNotifications = [],
   onSaveProfile,
   onUpdateProfilePhoto,
   onPublishPosterTopic,
@@ -124,6 +141,7 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
   onSignIn,
   onUpdateReportStatus,
   onOpenTopic,
+  onOpenVideo,
   onToast,
 }) => {
   const { lang, setLang, tr, formatTime, getReportReasonLabel, getBadgeLabel, getBadgeDescription } =
@@ -157,6 +175,14 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
   const [copiedUid, setCopiedUid] = useState(false);
   const [passwordLinkedNow, setPasswordLinkedNow] = useState(false);
   const [profileTab, setProfileTab] = useState<'profile' | 'poster'>('profile');
+  const [openAccordions, setOpenAccordions] = useState<Record<string, boolean>>({});
+
+  const toggleAccordion = (key: string) => {
+    setOpenAccordions((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
 
   useEffect(() => {
     setPasswordLinkedNow(false);
@@ -703,1035 +729,1535 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
           onToast={onToast}
         />
       ) : (
-        <>
-      {/* Profile Editor, Language Setting & User's Reports */}
-      <section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="font-display text-xl font-semibold text-slate-900">
-            {tr('Wasifu Wako', 'Your Profile')}
-          </h2>
-          {userUid && userProfile && (
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              {isSuspended && !isAdmin && (
-                <span className="inline-flex items-center gap-1 rounded bg-red-100 px-2 py-0.5 font-bold text-red-800">
-                  <Lock className="h-3 w-3" aria-hidden="true" />
-                  <span>{tr('Akaunti Imefungwa', 'Account Closed')}</span>
-                </span>
-              )}
-              {userProfile.verificationBadge !== 'none' ? (
-                <VerificationBadge
-                  badge={userProfile.verificationBadge}
-                  size="md"
-                  showLabel
-                  fullLabel
-                />
-              ) : (
-                <span className="text-slate-500">
-                  {tr(
-                    'Akaunti ya Kawaida (Haijathibitishwa kwa beji)',
-                    'Standard Account (No verification badge)'
-                  )}
-                </span>
-              )}
-            </div>
-          )}
-        </div>
-
-        {isSuspended && !isAdmin && (
-          <div
-            role="alert"
-            className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-xs text-red-900"
-          >
-            <div className="flex items-start gap-2.5">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-700" aria-hidden="true" />
-              <div className="space-y-1">
-                <p className="text-sm font-bold">
-                  {tr('Akaunti Yako Imefungwa na Mmiliki wa Jukwaa', 'Your Account Has Been Closed by the Platform Owner')}
-                </p>
-                <p className="leading-relaxed">
-                  {tr(
-                    'Huwezi kupost mada, ku-comment, kupenda (like), kuripoti, au kubadilisha taarifa za akaunti kwa sasa.',
-                    'You cannot create posts, comment, like, report, or edit account details while your account is closed.'
-                  )}
-                </p>
-                {userProfile?.suspendedReason && (
-                  <p className="font-semibold">
-                    {tr('Sababu', 'Reason')}: {userProfile.suspendedReason}
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {isUnverifiedOwner && (
-          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-950">
-            <p className="text-sm font-bold">
-              {tr('Thibitisha Barua Pepe ya Mmiliki (mifumomaster@gmail.com)', 'Verify Owner Email (mifumomaster@gmail.com)')}
-            </p>
-            <p className="mt-1 leading-relaxed text-amber-900">
-              {tr(
-                'Kwa usalama wa mfumo, jopo la mmiliki linafunguka mara tu barua pepe ya mifumomaster@gmail.com ikithibitishwa (au ukiingia kwa Google).',
-                'For platform security, owner controls unlock once mifumomaster@gmail.com is verified (or when signing in with Google).'
-              )}
-            </p>
-            <button
-              type="button"
-              disabled={sendingVerify}
-              onClick={() => void handleSendOwnerVerification()}
-              className="mt-3 inline-flex min-h-[38px] items-center rounded-lg bg-[#0E2640] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#163A5F] disabled:opacity-60"
-            >
-              {sendingVerify
-                ? tr('Inatuma kiungo...', 'Sending link...')
-                : tr('Tuma Barua Pepe ya Uthibitisho', 'Send Verification Email')}
-            </button>
-          </div>
-        )}
-
-        {/* Phone Notifications Setting for Mobile App / PWA */}
-        {isNotificationSupported() && (
-          <div className="mt-4 flex flex-col justify-between gap-3 rounded-lg border border-slate-200 bg-[#F8FAFC] p-3.5 sm:flex-row sm:items-center">
-            <div className="flex items-start gap-2.5">
-              <BellRing className="mt-0.5 h-4 w-4 text-[#D97706] shrink-0" aria-hidden="true" />
-              <div>
-                <p className="text-xs font-bold text-slate-900">
-                  {tr('Arifa za Simu (App Notifications)', 'Phone Notifications (PWA Alerts)')}
-                </p>
-                <p className="text-[11px] text-slate-600">
-                  {notifPerm === 'granted' && phoneAlertsOn
-                    ? tr(
-                        'Imewashwa — utapokea ujumbe wa taarifa mpya kwenye simu yako.',
-                        'Active — you will receive new post alerts on your device.'
-                      )
-                    : notifPerm === 'denied'
-                      ? tr(
-                          'Imezuiwa na kivinjari/simu. Ruhusu Notifications kupitia Settings ya kifaa.',
-                          'Blocked by device/browser. Enable Notifications in device Settings.'
-                        )
-                      : tr(
-                          'Washa ili upate taarifa papo hapo simu yako ikiwa imeweka app ya Malosha.',
-                          'Enable to get instant alerts when Malosha is installed on your phone.'
-                        )}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 shrink-0">
-              {notifPerm === 'granted' && phoneAlertsOn && (
-                <button
-                  type="button"
-                  onClick={() => void handleSendTestAlert()}
-                  className="min-h-[36px] rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                >
-                  {tr('Jaribu Arifa', 'Test Alert')}
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => void handleTogglePhoneAlerts()}
-                className={`min-h-[36px] rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors ${
-                  notifPerm === 'granted' && phoneAlertsOn
-                    ? 'border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-                    : 'bg-[#0E2640] text-white hover:bg-[#163A5F]'
-                }`}
+        <div className="space-y-3">
+          {/* Urgent Account Banners (Always Visible When Applicable) */}
+          {isSuspended && !isAdmin && (() => {
+            const suspendedRule = userProfile?.suspendedRuleNumber
+              ? findCommunityRule(userProfile.suspendedRuleNumber)
+              : null;
+            return (
+              <div
+                role="alert"
+                className="rounded-xl border border-red-200 bg-red-50 p-4 text-xs text-red-900"
               >
-                {notifPerm === 'granted'
-                  ? phoneAlertsOn
-                    ? tr('Zimewashwa · Zima', 'Enabled · Mute')
-                    : tr('Zimezimwa · Washa', 'Muted · Enable')
-                  : tr('Washa Arifa za Simu', 'Enable Phone Alerts')}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {!userUid ? (
-          <div className="mt-5 flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
-            <p className="text-sm text-slate-600">
-              {tr(
-                'Ingia kwenye akaunti yako ili kuhariri jina lako la hadhara, kubadilisha lugha, na kuona historia ya ripoti ulizotuma.',
-                'Sign in to your account to edit your public name, change language, and view your submitted safety reports.'
-              )}
-            </p>
-            <button
-              type="button"
-              onClick={onSignIn}
-              className="min-h-[40px] rounded-lg bg-[#1D4E89] px-4 py-2 text-sm font-semibold text-white hover:bg-[#163A5F]"
-            >
-              {tr('Ingia / Jisajili', 'Sign in / Register')}
-            </button>
-          </div>
-        ) : (
-          <>
-            {/* Language Preference Control inside Authenticated Account */}
-            <div className="mt-4 flex flex-col justify-between gap-3 rounded-lg border border-slate-200 bg-[#F8FAFC] p-3.5 sm:flex-row sm:items-center">
-              <div className="flex items-center gap-2.5">
-                <Globe className="h-4 w-4 text-[#1D4E89] shrink-0" aria-hidden="true" />
-                <div>
-                  <p className="text-xs font-bold text-slate-900">
-                    {tr('Lugha ya Akaunti Yako', 'Your Account Language')}
-                  </p>
-                  <p className="text-[11px] text-slate-600">
-                    {tr(
-                      'Chagua lugha unayopendelea kutumia ndani ya Malosha Forums.',
-                      'Choose your preferred display language across Malosha Forums.'
+                <div className="flex items-start gap-2.5">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-700" aria-hidden="true" />
+                  <div className="space-y-1.5">
+                    <p className="text-sm font-bold">
+                      {tr('Akaunti Yako Imefungwa na Mmiliki wa Jukwaa', 'Your Account Has Been Closed by the Platform Owner')}
+                    </p>
+                    <p className="leading-relaxed">
+                      {tr(
+                        'Huwezi kupost mada, ku-comment, kupenda (like), kuripoti, au kubadilisha taarifa za akaunti kwa sasa.',
+                        'You cannot create posts, comment, like, report, or edit account details while your account is closed.'
+                      )}
+                    </p>
+                    {suspendedRule && (
+                      <div className="rounded-lg border border-red-200 bg-white/80 px-3 py-2 text-red-900">
+                        <p className="font-bold">
+                          {tr(`Sheria Iliyokiukwa — Kanuni #${suspendedRule.number}`, `Violated Rule — #${suspendedRule.number}`)}:{' '}
+                          {tr(suspendedRule.titleSw, suspendedRule.titleEn)}
+                        </p>
+                        <p className="mt-0.5 text-[11px] text-red-800">
+                          {tr(suspendedRule.summarySw, suspendedRule.summaryEn)}
+                        </p>
+                      </div>
                     )}
-                  </p>
+                    {userProfile?.suspendedReason && (
+                      <p className="font-semibold">
+                        {tr('Sababu', 'Reason')}: {userProfile.suspendedReason}
+                      </p>
+                    )}
+                  </div>
                 </div>
               </div>
+            );
+          })()}
 
-              <div
-                role="group"
-                aria-label={tr('Badilisha lugha', 'Switch language')}
-                className="inline-flex rounded-lg border border-slate-300 bg-white p-1 shrink-0"
-              >
-                <button
-                  type="button"
-                  onClick={() => setLang('sw')}
-                  className={`min-h-[34px] rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
-                    lang === 'sw'
-                      ? 'bg-[#1D4E89] text-white'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  Kiswahili
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setLang('en')}
-                  className={`min-h-[34px] rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
-                    lang === 'en'
-                      ? 'bg-[#1D4E89] text-white'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  English
-                </button>
-              </div>
-            </div>
+          {/* Video & Account Rule-Violation Moderation Notices */}
+          {userUid && (() => {
+            const moderationAlerts = userNotifications.filter(
+              (n) =>
+                n.type === 'account_moderation' ||
+                n.type === 'video_moderation' ||
+                n.type === 'post_moderation'
+            );
+            const blockedOwnVideos = videos.filter(
+              (v) => v.authorId === userUid && v.isArchived && (v.moderationRuleNumber || v.moderationReason)
+            );
+            if (moderationAlerts.length === 0 && blockedOwnVideos.length === 0) return null;
 
-            {/* Own Creator Metrics & Monetization Progress */}
-            {userProfile && (() => {
-              const ownMetrics = computeAuthorMetrics(
-                topics,
-                userUid,
-                userProfile.followersCount || 0
-              );
-              const criteria = [
-                {
-                  label: tr('Wanaokufuatilia (Followers)', 'Followers'),
-                  current: ownMetrics.followersCount,
-                  target: MONETIZATION_REQUIREMENTS.minFollowers,
-                  met: ownMetrics.followersCount >= MONETIZATION_REQUIREMENTS.minFollowers,
-                },
-                {
-                  label: tr('Machapisho yako hai', 'Active Posts'),
-                  current: ownMetrics.postsCount,
-                  target: MONETIZATION_REQUIREMENTS.minPosts,
-                  met: ownMetrics.postsCount >= MONETIZATION_REQUIREMENTS.minPosts,
-                },
-                {
-                  label: tr('Likes ulizopata', 'Likes Received'),
-                  current: ownMetrics.totalLikesReceived,
-                  target: MONETIZATION_REQUIREMENTS.minLikes,
-                  met: ownMetrics.totalLikesReceived >= MONETIZATION_REQUIREMENTS.minLikes,
-                },
-                {
-                  label: tr('Maoni uliyopokea', 'Comments Received'),
-                  current: ownMetrics.totalCommentsReceived,
-                  target: MONETIZATION_REQUIREMENTS.minComments,
-                  met: ownMetrics.totalCommentsReceived >= MONETIZATION_REQUIREMENTS.minComments,
-                },
-              ];
-
-              return (
-                <div className="mt-5 rounded-xl border border-amber-200 bg-gradient-to-br from-amber-50/70 via-white to-sky-50/40 p-4 sm:p-5">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <Award className="h-4 w-4 text-amber-700 shrink-0" aria-hidden="true" />
-                      <h3 className="text-xs font-bold tracking-wide text-slate-900 uppercase">
-                        {tr('Takwimu Zako & Masharti ya Kulipwa', 'Your Stats & Monetization Rules')}
-                      </h3>
-                    </div>
-                    <span
-                      className={`rounded-md px-2.5 py-0.5 text-[11px] font-bold tabular-nums ${
-                        ownMetrics.isEligibleForMonetization
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : 'bg-amber-100 text-amber-900'
-                      }`}
-                    >
-                      {ownMetrics.isEligibleForMonetization
-                        ? tr('Umekidhi Masharti Yote ya Malipo!', 'Eligible for Creator Payouts!')
-                        : `${ownMetrics.progressPercent}% ${tr('imefikiwa', 'complete')}`}
-                    </span>
-                  </div>
-
-                  <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-                    <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
-                      <Users className="mx-auto h-4 w-4 text-[#1D4E89]" aria-hidden="true" />
-                      <p className="mt-1 font-display text-xl font-bold text-slate-900 tabular-nums">
-                        {ownMetrics.followersCount}
-                      </p>
-                      <p className="text-[11px] font-medium text-slate-600">
-                        {tr('Wanaokufuatilia', 'Followers')}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
-                      <Sparkles className="mx-auto h-4 w-4 text-amber-600" aria-hidden="true" />
-                      <p className="mt-1 font-display text-xl font-bold text-slate-900 tabular-nums">
-                        {ownMetrics.postsCount}
-                      </p>
-                      <p className="text-[11px] font-medium text-slate-600">
-                        {tr('Machapisho', 'Posts')}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
-                      <Heart className="mx-auto h-4 w-4 text-rose-600" aria-hidden="true" />
-                      <p className="mt-1 font-display text-xl font-bold text-slate-900 tabular-nums">
-                        {ownMetrics.totalLikesReceived}
-                      </p>
-                      <p className="text-[11px] font-medium text-slate-600">
-                        {tr('Likes Ulizopata', 'Likes Received')}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
-                      <MessageCircle className="mx-auto h-4 w-4 text-emerald-700" aria-hidden="true" />
-                      <p className="mt-1 font-display text-xl font-bold text-slate-900 tabular-nums">
-                        {ownMetrics.totalCommentsReceived}
-                      </p>
-                      <p className="text-[11px] font-medium text-slate-600">
-                        {tr('Maoni', 'Comments')}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-amber-100">
-                    <div
-                      className={`h-full rounded-full transition-all duration-300 ${
-                        ownMetrics.isEligibleForMonetization ? 'bg-emerald-600' : 'bg-amber-500'
-                      }`}
-                      style={{ width: `${ownMetrics.progressPercent}%` }}
-                    />
-                  </div>
-
-                  <p className="mt-2.5 text-[11px] leading-relaxed text-slate-600">
-                    {tr(
-                      'Masharti ya kuanza kulipwa kwa akaunti zinazofanya vizuri: Wafuasi (Followers) 50+, Machapisho 10+, Likes 100+, na Maoni 20+ bila ukiukaji wa kanuni.',
-                      'Eligibility criteria for top creator payouts: 50+ Followers, 10+ Active Posts, 100+ Likes, and 20+ Comments in good standing.'
-                    )}
-                  </p>
-
-                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    {criteria.map((c) => (
-                      <div
-                        key={c.label}
-                        className="flex items-center justify-between rounded-lg border border-slate-200/80 bg-white px-3 py-1.5 text-xs"
-                      >
-                        <span className="flex items-center gap-1.5 text-slate-700">
-                          {c.met ? (
-                            <CheckCircle2
-                              className="h-3.5 w-3.5 shrink-0 text-emerald-600"
-                              aria-hidden="true"
-                            />
-                          ) : (
-                            <Circle
-                              className="h-3.5 w-3.5 shrink-0 text-slate-300"
-                              aria-hidden="true"
-                            />
+            return (
+              <div className="rounded-xl border border-amber-300 bg-amber-50/90 p-4 text-xs text-amber-950">
+                <div className="flex items-start gap-2.5">
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
+                  <div className="min-w-0 flex-1 space-y-2">
+                    <p className="text-sm font-bold text-amber-950">
+                      {tr(
+                        'Taarifa za Usalama & Ukiukaji wa Sheria za Jukwaa',
+                        'Account & Video Moderation Notices'
+                      )}
+                    </p>
+                    {blockedOwnVideos.map((vid) => {
+                      const r = vid.moderationRuleNumber
+                        ? findCommunityRule(vid.moderationRuleNumber)
+                        : null;
+                      return (
+                        <div
+                          key={`blocked-vid-${vid.id}`}
+                          className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-slate-800"
+                        >
+                          <p className="font-bold text-rose-800">
+                            {tr('Video Yako Imefungiwa:', 'Your Video Was Blocked:')}{' '}
+                            <span className="text-slate-900">
+                              {vid.caption?.slice(0, 60) || vid.soundName || vid.id}
+                            </span>
+                          </p>
+                          {r && (
+                            <p className="mt-0.5 font-semibold text-rose-700">
+                              {tr(`Kanuni #${r.number}`, `Rule #${r.number}`)}:{' '}
+                              {tr(r.titleSw, r.titleEn)}
+                            </p>
                           )}
-                          <span>{c.label}</span>
+                          {vid.moderationReason && (
+                            <p className="mt-0.5 text-[11px] text-slate-600">{vid.moderationReason}</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {moderationAlerts.slice(0, 5).map((alert) => {
+                      const r = alert.ruleNumber ? findCommunityRule(alert.ruleNumber) : null;
+                      return (
+                        <div
+                          key={alert.id}
+                          className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-slate-800"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-1">
+                            <p className="font-bold text-slate-900">{alert.topicTitle}</p>
+                            {alert.createdAt && (
+                              <span className="text-[10px] text-slate-400">
+                                {formatTime(alert.createdAt)}
+                              </span>
+                            )}
+                          </div>
+                          {r && (
+                            <p className="mt-0.5 text-[11px] font-bold text-rose-700">
+                              {tr(`Kanuni #${r.number}`, `Rule #${r.number}`)}:{' '}
+                              {tr(r.titleSw, r.titleEn)}
+                            </p>
+                          )}
+                          {alert.replyPreview && (
+                            <p className="mt-0.5 text-[11px] text-slate-600">{alert.replyPreview}</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {isUnverifiedOwner && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-950">
+              <p className="text-sm font-bold">
+                {tr('Thibitisha Barua Pepe ya Mmiliki (mifumomaster@gmail.com)', 'Verify Owner Email (mifumomaster@gmail.com)')}
+              </p>
+              <p className="mt-1 leading-relaxed text-amber-900">
+                {tr(
+                  'Kwa usalama wa mfumo, jopo la mmiliki linafunguka mara tu barua pepe ya mifumomaster@gmail.com ikithibitishwa (au ukiingia kwa Google).',
+                  'For platform security, owner controls unlock once mifumomaster@gmail.com is verified (or when signing in with Google).'
+                )}
+              </p>
+              <button
+                type="button"
+                disabled={sendingVerify}
+                onClick={() => void handleSendOwnerVerification()}
+                className="mt-3 inline-flex min-h-[40px] items-center rounded-lg bg-[#0E2640] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#163A5F] disabled:opacity-60"
+              >
+                {sendingVerify
+                  ? tr('Inatuma kiungo...', 'Sending link...')
+                  : tr('Tuma Barua Pepe ya Uthibitisho', 'Send Verification Email')}
+              </button>
+            </div>
+          )}
+
+          {!userUid && (
+            <div className="flex flex-col items-start justify-between gap-4 rounded-xl border border-slate-200 bg-white p-5 sm:flex-row sm:items-center">
+              <p className="text-sm text-slate-600">
+                {tr(
+                  'Ingia kwenye akaunti yako ili kuhariri jina lako la hadhara, kupata kitambulisho, kubadilisha lugha, na kuona historia ya ripoti ulizotuma.',
+                  'Sign in to your account to edit your public name, access your ID card, change language, and view your submitted safety reports.'
+                )}
+              </p>
+              <button
+                type="button"
+                onClick={onSignIn}
+                className="min-h-[44px] shrink-0 rounded-lg bg-[#1D4E89] px-4 py-2 text-sm font-semibold text-white hover:bg-[#163A5F]"
+              >
+                {tr('Ingia / Jisajili', 'Sign in / Register')}
+              </button>
+            </div>
+          )}
+
+          {/* Accordion 1: Official Tanzania Member ID Card */}
+          {userUid && userProfile && (
+            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <button
+                type="button"
+                aria-expanded={Boolean(openAccordions.id_card)}
+                onClick={() => toggleAccordion('id_card')}
+                className="flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-50 sm:px-5"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">
+                    <CreditCard className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0">
+                    <h2 className="truncate font-display text-sm font-bold text-slate-900 sm:text-base">
+                      {tr('Kitambulisho Rasmi cha Mwanachama (Tanzania)', 'Official Tanzania Member ID Card')}
+                    </h2>
+                    <p className="truncate text-xs text-slate-500">
+                      {tr(
+                        'Kitambulisho chenye Mlima Kilimanjaro, Twiga, pakua au shiriki PNG',
+                        'Tanzania ID card with Kilimanjaro & Twiga watermark, download or share PNG'
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <ChevronDown
+                  className={`h-5 w-5 shrink-0 text-slate-500 transition-transform duration-200 ${
+                    openAccordions.id_card ? 'rotate-180 text-[#0E2640]' : ''
+                  }`}
+                  aria-hidden="true"
+                />
+              </button>
+
+              {openAccordions.id_card && (
+                <div className="border-t border-slate-100 px-3.5 pb-5 pt-2 sm:px-5">
+                  <MemberIdCard
+                    profile={userProfile}
+                    isAdmin={isAdmin}
+                    onToast={onToast}
+                  />
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* Accordion 2: Profile Photo & Details Editor */}
+          {userUid && (
+            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <button
+                type="button"
+                aria-expanded={Boolean(openAccordions.profile_edit)}
+                onClick={() => toggleAccordion('profile_edit')}
+                className="flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-50 sm:px-5"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-sky-50 text-[#1D4E89] ring-1 ring-sky-200">
+                    <UserCheck className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0">
+                    <h2 className="truncate font-display text-sm font-bold text-slate-900 sm:text-base">
+                      {tr('Taarifa za Wasifu & Picha', 'Profile Details & Photo')}
+                    </h2>
+                    <p className="truncate text-xs text-slate-500">
+                      {tr(
+                        'Badilisha picha ya akaunti/kitambulisho, jina, simu na utambulisho mfupi',
+                        'Update profile & ID photo, display name, phone number, and bio'
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <ChevronDown
+                  className={`h-5 w-5 shrink-0 text-slate-500 transition-transform duration-200 ${
+                    openAccordions.profile_edit ? 'rotate-180 text-[#0E2640]' : ''
+                  }`}
+                  aria-hidden="true"
+                />
+              </button>
+
+              {openAccordions.profile_edit && (
+                <div className="border-t border-slate-100 p-4 sm:p-5">
+                  {userProfile && (
+                    <div className="flex flex-wrap items-center justify-between gap-2 pb-4">
+                      {userProfile.verificationBadge !== 'none' ? (
+                        <VerificationBadge
+                          badge={userProfile.verificationBadge}
+                          size="md"
+                          showLabel
+                          fullLabel
+                        />
+                      ) : (
+                        <span className="text-xs text-slate-500">
+                          {tr(
+                            'Akaunti ya Kawaida (Haijathibitishwa kwa beji)',
+                            'Standard Account (No verification badge)'
+                          )}
                         </span>
-                        <span className="font-mono text-[11px] font-bold text-slate-900 tabular-nums">
-                          {c.current}/{c.target}
+                      )}
+                      {isSuspended && !isAdmin && (
+                        <span className="inline-flex items-center gap-1 rounded bg-red-100 px-2 py-0.5 text-xs font-bold text-red-800">
+                          <Lock className="h-3 w-3" aria-hidden="true" />
+                          <span>{tr('Akaunti Imefungwa', 'Account Closed')}</span>
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {userProfile && (
+                    <div className="flex flex-col justify-between gap-4 rounded-xl border border-slate-200 bg-[#F8FAFC] p-4 sm:flex-row sm:items-center">
+                      <div className="flex items-center gap-3.5">
+                        <Avatar
+                          name={userProfile.displayName}
+                          photoURL={userProfile.photoURL}
+                          size="lg"
+                          uid={userUid}
+                          showOnlineIndicator
+                        />
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-slate-900">
+                            {tr('Picha ya Wasifu na Kitambulisho', 'Profile & ID Card Photo')}
+                          </p>
+                          <p className="mt-0.5 text-xs leading-relaxed text-slate-600">
+                            {tr(
+                              'Ukibadilisha picha hapa, picha ya akaunti yako na Kitambulisho chako cha Mwanachama hubadilika papo hapo.',
+                              'Updating your photo here immediately updates both your account avatar and Member ID Card.'
+                            )}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex shrink-0 flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={uploadingPhoto || isSuspended}
+                          onClick={() => photoInputRef.current?.click()}
+                          className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-[#0E2640] px-3.5 py-2 text-xs font-bold text-white transition-colors hover:bg-[#163A5F] disabled:opacity-60"
+                        >
+                          {uploadingPhoto ? (
+                            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <Camera className="h-4 w-4 text-amber-400" aria-hidden="true" />
+                          )}
+                          <span>
+                            {uploadingPhoto
+                              ? tr('Inapakia Picha...', 'Uploading...')
+                              : tr('Badilisha Picha', 'Change Photo')}
+                          </span>
+                        </button>
+
+                        {userProfile.photoURL && (
+                          <button
+                            type="button"
+                            disabled={uploadingPhoto || isSuspended}
+                            onClick={() => void handleRemoveProfilePhoto()}
+                            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 disabled:opacity-60"
+                          >
+                            <Trash2 className="h-3.5 w-3.5 text-red-600" aria-hidden="true" />
+                            <span>{tr('Ondoa', 'Remove')}</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <form onSubmit={handleSubmit} className="mt-5 space-y-4">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label
+                          htmlFor="profile-name"
+                          className="block text-xs font-semibold text-slate-700"
+                        >
+                          {tr('Jina Linaloonekana Hadharani', 'Public Display Name')}
+                        </label>
+                        <input
+                          id="profile-name"
+                          type="text"
+                          required
+                          minLength={1}
+                          maxLength={80}
+                          disabled={saving || isSuspended}
+                          value={displayName}
+                          onChange={(e) => setDisplayName(e.target.value)}
+                          className="mt-1.5 min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
+                        />
+                      </div>
+
+                      <div>
+                        <span className="block text-xs font-semibold text-slate-700">
+                          {tr(
+                            'Barua Pepe (Binafsi — Haionekani Hadharani)',
+                            'Email Address (Private — Never Shown Publicly)'
+                          )}
+                        </span>
+                        <p className="mt-1.5 flex min-h-[44px] items-center rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2 text-sm text-slate-600">
+                          {userEmail || tr('Imefichwa', 'Hidden')}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label htmlFor="profile-phone" className="block text-xs font-semibold text-slate-700">
+                        {tr(
+                          'Namba ya Simu (Binafsi — Haionekani Hadharani)',
+                          'Phone Number (Private — Never Shown Publicly)'
+                        )}
+                      </label>
+                      <input
+                        id="profile-phone"
+                        type="tel"
+                        maxLength={30}
+                        disabled={saving || isSuspended}
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value)}
+                        placeholder={tr('Mfano: +255 712 345 678', 'e.g. +255 712 345 678')}
+                        className="mt-1.5 min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none disabled:bg-slate-100 disabled:text-slate-500 sm:max-w-sm"
+                      />
+                    </div>
+
+                    <div>
+                      <label htmlFor="profile-bio" className="block text-xs font-semibold text-slate-700">
+                        {tr('Utambulisho Mfupi (Hiari)', 'Short Bio (Optional)')}
+                      </label>
+                      <textarea
+                        id="profile-bio"
+                        rows={3}
+                        maxLength={300}
+                        disabled={saving || isSuspended}
+                        value={bio}
+                        onChange={(e) => setBio(e.target.value)}
+                        placeholder={tr(
+                          'Mfano: Mhandisi wa programu anayependa usalama wa mitandao...',
+                          'Example: Software engineer passionate about digital communities...'
+                        )}
+                        className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white p-3 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
+                      />
+                    </div>
+
+                    {error && <p className="text-xs font-medium text-red-700">{error}</p>}
+                    {savedNotice && <p className="text-xs font-medium text-emerald-800">{savedNotice}</p>}
+
+                    <div className="flex justify-end">
+                      <button
+                        type="submit"
+                        disabled={saving || isSuspended}
+                        className="min-h-[44px] rounded-lg bg-[#1D4E89] px-5 py-2 text-sm font-semibold text-white hover:bg-[#163A5F] disabled:opacity-60"
+                      >
+                        {saving
+                          ? tr('Inahifadhi...', 'Saving...')
+                          : tr('Hifadhi Wasifu', 'Save Profile')}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* Accordion 3: Creator Metrics & Monetization Rules */}
+          {userUid && userProfile && (() => {
+            const ownMetrics = computeAuthorMetrics(
+              topics,
+              userUid,
+              userProfile.followersCount || 0,
+              videos,
+              friendsCount
+            );
+            const criteria = [
+              {
+                label: tr('Wafuasi (Followers)', 'Followers'),
+                current: ownMetrics.followersCount,
+                target: MONETIZATION_REQUIREMENTS.minFollowers,
+                met: ownMetrics.followersCount >= MONETIZATION_REQUIREMENTS.minFollowers,
+              },
+              {
+                label: tr('Marafiki (Friends)', 'Friends'),
+                current: ownMetrics.friendsCount,
+                target: MONETIZATION_REQUIREMENTS.minFriends,
+                met: ownMetrics.friendsCount >= MONETIZATION_REQUIREMENTS.minFriends,
+              },
+              {
+                label: tr('Video zilizopakiwa', 'Videos Posted'),
+                current: ownMetrics.videosCount,
+                target: MONETIZATION_REQUIREMENTS.minVideos,
+                met: ownMetrics.videosCount >= MONETIZATION_REQUIREMENTS.minVideos,
+              },
+              {
+                label: tr('Machapisho (Posts)', 'Posts'),
+                current: ownMetrics.postsCount,
+                target: MONETIZATION_REQUIREMENTS.minPosts,
+                met: ownMetrics.postsCount >= MONETIZATION_REQUIREMENTS.minPosts,
+              },
+              {
+                label: tr('Likes ulizopata', 'Likes Received'),
+                current: ownMetrics.totalLikesReceived,
+                target: MONETIZATION_REQUIREMENTS.minLikes,
+                met: ownMetrics.totalLikesReceived >= MONETIZATION_REQUIREMENTS.minLikes,
+              },
+              {
+                label: tr('Maoni uliyopokea', 'Comments Received'),
+                current: ownMetrics.totalCommentsReceived,
+                target: MONETIZATION_REQUIREMENTS.minComments,
+                met: ownMetrics.totalCommentsReceived >= MONETIZATION_REQUIREMENTS.minComments,
+              },
+            ];
+
+            return (
+              <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                <button
+                  type="button"
+                  aria-expanded={Boolean(openAccordions.stats_monetization)}
+                  onClick={() => toggleAccordion('stats_monetization')}
+                  className="flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-50 sm:px-5"
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700 ring-1 ring-amber-200">
+                      <Award className="h-5 w-5" aria-hidden="true" />
+                    </span>
+                    <div className="min-w-0">
+                      <h2 className="truncate font-display text-sm font-bold text-slate-900 sm:text-base">
+                        {tr('Takwimu Zako & Masharti ya Malipo', 'Your Stats & Monetization Progress')}
+                      </h2>
+                      <p className="truncate text-xs text-slate-500 tabular-nums">
+                        {ownMetrics.isEligibleForMonetization
+                          ? tr('Umekidhi masharti yote ya malipo!', 'Eligible for Creator Payouts!')
+                          : tr(
+                              `${ownMetrics.progressPercent}% imefikiwa · Wafuasi ${ownMetrics.followersCount.toLocaleString()}, Video ${ownMetrics.videosCount.toLocaleString()}, Post ${ownMetrics.postsCount.toLocaleString()}`,
+                              `${ownMetrics.progressPercent}% complete · ${ownMetrics.followersCount.toLocaleString()} Followers, ${ownMetrics.videosCount.toLocaleString()} Videos, ${ownMetrics.postsCount.toLocaleString()} Posts`
+                            )}
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronDown
+                    className={`h-5 w-5 shrink-0 text-slate-500 transition-transform duration-200 ${
+                      openAccordions.stats_monetization ? 'rotate-180 text-[#0E2640]' : ''
+                    }`}
+                    aria-hidden="true"
+                  />
+                </button>
+
+                {openAccordions.stats_monetization && (
+                  <div className="border-t border-slate-100 p-4 sm:p-5">
+                    <div className="rounded-xl border border-amber-200 bg-gradient-to-br from-amber-50/70 via-white to-sky-50/40 p-4 sm:p-5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs font-bold tracking-wide text-slate-900 uppercase">
+                          {tr('Masharti ya Wabunifu Kuanza Kulipwa', 'Creator Payout Eligibility')}
+                        </span>
+                        <span
+                          className={`rounded-md px-2.5 py-0.5 text-[11px] font-bold tabular-nums ${
+                            ownMetrics.isEligibleForMonetization
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-amber-100 text-amber-900'
+                          }`}
+                        >
+                          {ownMetrics.isEligibleForMonetization
+                            ? tr('Umekidhi Masharti Yote ya Malipo!', 'Eligible for Creator Payouts!')
+                            : `${ownMetrics.progressPercent}% ${tr('imefikiwa', 'complete')}`}
+                        </span>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
+                        <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                          <Users className="mx-auto h-4 w-4 text-[#1D4E89]" aria-hidden="true" />
+                          <p className="mt-1 font-display text-lg font-bold text-slate-900 tabular-nums">
+                            {ownMetrics.followersCount.toLocaleString()}
+                          </p>
+                          <p className="text-[11px] font-medium text-slate-600">
+                            {tr('Wafuasi', 'Followers')}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                          <UserPlus className="mx-auto h-4 w-4 text-sky-600" aria-hidden="true" />
+                          <p className="mt-1 font-display text-lg font-bold text-slate-900 tabular-nums">
+                            {ownMetrics.friendsCount.toLocaleString()}
+                          </p>
+                          <p className="text-[11px] font-medium text-slate-600">
+                            {tr('Marafiki', 'Friends')}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                          <VideoIcon className="mx-auto h-4 w-4 text-purple-600" aria-hidden="true" />
+                          <p className="mt-1 font-display text-lg font-bold text-slate-900 tabular-nums">
+                            {ownMetrics.videosCount.toLocaleString()}
+                          </p>
+                          <p className="text-[11px] font-medium text-slate-600">
+                            {tr('Video', 'Videos')}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                          <Sparkles className="mx-auto h-4 w-4 text-amber-600" aria-hidden="true" />
+                          <p className="mt-1 font-display text-lg font-bold text-slate-900 tabular-nums">
+                            {ownMetrics.postsCount.toLocaleString()}
+                          </p>
+                          <p className="text-[11px] font-medium text-slate-600">
+                            {tr('Post', 'Posts')}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                          <Heart className="mx-auto h-4 w-4 text-rose-600" aria-hidden="true" />
+                          <p className="mt-1 font-display text-lg font-bold text-slate-900 tabular-nums">
+                            {ownMetrics.totalLikesReceived.toLocaleString()}
+                          </p>
+                          <p className="text-[11px] font-medium text-slate-600">
+                            {tr('Likes', 'Likes')}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                          <MessageCircle className="mx-auto h-4 w-4 text-emerald-700" aria-hidden="true" />
+                          <p className="mt-1 font-display text-lg font-bold text-slate-900 tabular-nums">
+                            {ownMetrics.totalCommentsReceived.toLocaleString()}
+                          </p>
+                          <p className="text-[11px] font-medium text-slate-600">
+                            {tr('Maoni', 'Comments')}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-amber-100">
+                        <div
+                          className={`h-full rounded-full transition-all duration-300 ${
+                            ownMetrics.isEligibleForMonetization ? 'bg-emerald-600' : 'bg-amber-500'
+                          }`}
+                          style={{ width: `${ownMetrics.progressPercent}%` }}
+                        />
+                      </div>
+
+                      <p className="mt-2.5 text-[11px] leading-relaxed text-slate-600">
+                        {tr(
+                          'Masharti rasmi ya kuanza kulipwa: Wafuasi 1,000+, Marafiki 5,000+, Video 1,000+, Machapisho (Post) 8,000+, Likes 10,000+, na Maoni 15,000+ bila kukiuka sheria 13 za jukwaa.',
+                          'Creator payout thresholds: 1,000+ Followers, 5,000+ Friends, 1,000+ Videos, 8,000+ Posts, 10,000+ Likes, and 15,000+ Comments in good standing.'
+                        )}
+                      </p>
+
+                      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        {criteria.map((c) => (
+                          <div
+                            key={c.label}
+                            className="flex items-center justify-between rounded-lg border border-slate-200/80 bg-white px-3 py-2 text-xs"
+                          >
+                            <span className="flex items-center gap-1.5 text-slate-700">
+                              {c.met ? (
+                                <CheckCircle2
+                                  className="h-3.5 w-3.5 shrink-0 text-emerald-600"
+                                  aria-hidden="true"
+                                />
+                              ) : (
+                                <Circle
+                                  className="h-3.5 w-3.5 shrink-0 text-slate-300"
+                                  aria-hidden="true"
+                                />
+                              )}
+                              <span>{c.label}</span>
+                            </span>
+                            <span className="font-mono text-[11px] font-bold text-slate-900 tabular-nums">
+                              {c.current.toLocaleString()} / {c.target.toLocaleString()}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </section>
+            );
+          })()}
+
+          {/* Accordion 4: Complete Registration Records */}
+          {userUid && userProfile && (
+            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <button
+                type="button"
+                aria-expanded={Boolean(openAccordions.registration_summary)}
+                onClick={() => toggleAccordion('registration_summary')}
+                className="flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-50 sm:px-5"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700 ring-1 ring-slate-200">
+                    <ClipboardList className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0">
+                    <h2 className="truncate font-display text-sm font-bold text-slate-900 sm:text-base">
+                      {tr('Kumbukumbu Kamili za Usajili', 'Complete Registration Records')}
+                    </h2>
+                    <p className="truncate text-xs text-slate-500 tabular-nums">
+                      {tr(
+                        `ID: ${memberCode} · Serial: ${controlSerial}`,
+                        `ID: ${memberCode} · Serial: ${controlSerial}`
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <ChevronDown
+                  className={`h-5 w-5 shrink-0 text-slate-500 transition-transform duration-200 ${
+                    openAccordions.registration_summary ? 'rotate-180 text-[#0E2640]' : ''
+                  }`}
+                  aria-hidden="true"
+                />
+              </button>
+
+              {openAccordions.registration_summary && (
+                <div className="border-t border-slate-100 p-4 sm:p-5">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-3">
+                    <p className="text-xs text-slate-600">
+                      {tr(
+                        'Muhtasari wa kumbukumbu zote zilizosajiliwa kwenye akaunti yako ya Malosha Forums.',
+                        'Full record of your registered account details on Malosha Forums.'
+                      )}
+                    </p>
+                    {!userEmailVerified && userEmail && (
+                      <button
+                        type="button"
+                        disabled={sendingVerify}
+                        onClick={() => void handleSendOwnerVerification()}
+                        className="min-h-[38px] rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-60"
+                      >
+                        {sendingVerify
+                          ? tr('Inatuma...', 'Sending...')
+                          : tr('Thibitisha Email Yako', 'Verify Email')}
+                      </button>
+                    )}
+                  </div>
+
+                  <dl className="grid grid-cols-1 divide-y divide-slate-200 border-y border-slate-200 text-xs sm:grid-cols-2 sm:gap-x-8 sm:divide-y-0">
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                      <dt className="font-medium text-slate-500">
+                        {tr('Jina Kamili la Usajili', 'Registered Name')}
+                      </dt>
+                      <dd className="truncate font-semibold text-slate-900">
+                        {userProfile.displayName}
+                      </dd>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                      <dt className="font-medium text-slate-500">
+                        {tr('Barua Pepe (Email)', 'Email Address')}
+                      </dt>
+                      <dd className="truncate font-semibold text-slate-900">
+                        {userEmail || tr('Haijawekwa', 'Not set')}
+                      </dd>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                      <dt className="font-medium text-slate-500">
+                        {tr('Uthibitisho wa Email', 'Email Verification')}
+                      </dt>
+                      <dd
+                        className={`font-semibold ${
+                          userEmailVerified ? 'text-emerald-700' : 'text-amber-700'
+                        }`}
+                      >
+                        {userEmailVerified
+                          ? tr('Imethibitishwa', 'Verified')
+                          : tr('Haijathibitishwa', 'Not verified')}
+                      </dd>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                      <dt className="font-medium text-slate-500">
+                        {tr('Namba ya Simu', 'Phone Number')}
+                      </dt>
+                      <dd className="font-semibold text-slate-900 tabular-nums">
+                        {userPhone || tr('Haijawekwa', 'Not set')}
+                      </dd>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                      <dt className="font-medium text-slate-500">
+                        {tr('Namba ya Kitambulisho', 'Member ID No.')}
+                      </dt>
+                      <dd className="font-mono font-bold text-[#0E2640] tabular-nums">
+                        {memberCode}
+                      </dd>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                      <dt className="font-medium text-slate-500">
+                        {tr('Namba ya Usalama (Serial)', 'Security Serial')}
+                      </dt>
+                      <dd className="font-mono font-bold text-[#0E2640] tabular-nums">
+                        {controlSerial}
+                      </dd>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                      <dt className="font-medium text-slate-500">
+                        {tr('Njia ya Kuingia', 'Sign-In Method')}
+                      </dt>
+                      <dd className="font-semibold text-slate-900">
+                        {[
+                          hasGoogleProvider ? 'Google' : null,
+                          hasPasswordProvider ? tr('Barua Pepe & Nenosiri', 'Email & Password') : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ') || tr('Akaunti ya Malosha', 'Malosha Account')}
+                      </dd>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                      <dt className="font-medium text-slate-500">
+                        {tr('Wadhifa & Beji', 'Role & Badge')}
+                      </dt>
+                      <dd className="font-semibold text-slate-900">
+                        {isAdmin
+                          ? tr('Mmiliki wa Mfumo', 'Platform Owner')
+                          : userProfile.role === 'moderator'
+                            ? tr('Msimamizi', 'Moderator')
+                            : tr('Mwanachama', 'Member')}{' '}
+                        · {getBadgeLabel(userProfile.verificationBadge)}
+                      </dd>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                      <dt className="font-medium text-slate-500">
+                        {tr('Tarehe ya Kusajiliwa', 'Registered On')}
+                      </dt>
+                      <dd className="font-semibold text-slate-900 tabular-nums">
+                        {formatFullDate(userProfile.createdAt, userCreationTime)}
+                      </dd>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                      <dt className="font-medium text-slate-500">
+                        {tr('Mara ya Mwisho Kuingia', 'Last Sign-In')}
+                      </dt>
+                      <dd className="font-semibold text-slate-900 tabular-nums">
+                        {formatFullDate(null, userLastSignInTime)}
+                      </dd>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                      <dt className="font-medium text-slate-500">
+                        {tr('Hali ya Akaunti', 'Account Status')}
+                      </dt>
+                      <dd
+                        className={`font-semibold ${
+                          isSuspended && !isAdmin ? 'text-red-700' : 'text-emerald-700'
+                        }`}
+                      >
+                        {isSuspended && !isAdmin
+                          ? tr('Imefungwa', 'Closed')
+                          : tr('Hai / Active', 'Active')}
+                      </dd>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
+                      <dt className="font-medium text-slate-500">
+                        {tr('Namba ya Akaunti (UID)', 'Account UID')}
+                      </dt>
+                      <dd className="flex min-w-0 items-center gap-1.5">
+                        <span className="max-w-[140px] truncate font-mono text-[11px] font-semibold text-slate-700">
+                          {userUid}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void handleCopyUid()}
+                          className="inline-flex min-h-[30px] items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-100"
+                        >
+                          {copiedUid ? (
+                            <Check className="h-3 w-3 text-emerald-600" aria-hidden="true" />
+                          ) : (
+                            <Copy className="h-3 w-3 text-slate-500" aria-hidden="true" />
+                          )}
+                          <span>{copiedUid ? tr('Imenakiliwa', 'Copied') : tr('Nakili', 'Copy')}</span>
+                        </button>
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* Accordion 5: Password & Security */}
+          {userUid && (
+            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <button
+                type="button"
+                aria-expanded={Boolean(openAccordions.security_password)}
+                onClick={() => toggleAccordion('security_password')}
+                className="flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-50 sm:px-5"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200">
+                    <KeyRound className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0">
+                    <h2 className="truncate font-display text-sm font-bold text-slate-900 sm:text-base">
+                      {hasPasswordProvider
+                        ? tr('Usalama & Badilisha Nenosiri', 'Security & Change Password')
+                        : tr('Usalama & Weka Nenosiri', 'Security & Set Login Password')}
+                    </h2>
+                    <p className="truncate text-xs text-slate-500">
+                      {tr(
+                        'Sasisha nenosiri lako la kuingia au tuma kiungo cha kurejesha nenosiri',
+                        'Update your login password or request a password reset link'
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <ChevronDown
+                  className={`h-5 w-5 shrink-0 text-slate-500 transition-transform duration-200 ${
+                    openAccordions.security_password ? 'rotate-180 text-[#0E2640]' : ''
+                  }`}
+                  aria-hidden="true"
+                />
+              </button>
+
+              {openAccordions.security_password && (
+                <div className="border-t border-slate-100 p-4 sm:p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <p className="text-xs leading-relaxed text-slate-600">
+                      {hasPasswordProvider
+                        ? tr(
+                            'Imarisha usalama wa akaunti yako kwa kuweka nenosiri jipya lenye angalau herufi 6.',
+                            'Update your login password anytime using at least 6 characters.'
+                          )
+                        : tr(
+                            'Akaunti yako iliingia kupitia Google. Weka nenosiri hapa ili uweze kuingia pia kwa Barua Pepe na Nenosiri.',
+                            'You signed in with Google. Set a password here so you can also sign in using Email & Password.'
+                          )}
+                    </p>
+
+                    {hasPasswordProvider && userEmail && (
+                      <button
+                        type="button"
+                        disabled={passwordBusy}
+                        onClick={() => void handleSendPasswordResetEmail()}
+                        className="text-xs font-semibold text-[#1D4E89] hover:underline disabled:opacity-60"
+                      >
+                        {tr('Umesahau nenosiri la sasa? Tuma kwa Email', 'Forgot current password? Send reset email')}
+                      </button>
+                    )}
+                  </div>
+
+                  <form onSubmit={handlePasswordSubmit} className="mt-4 space-y-4">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                      {hasPasswordProvider && (
+                        <div>
+                          <label
+                            htmlFor="profile-current-password"
+                            className="block text-xs font-semibold text-slate-700"
+                          >
+                            {tr('Nenosiri la Sasa', 'Current Password')}
+                          </label>
+                          <div className="relative mt-1.5">
+                            <input
+                              id="profile-current-password"
+                              type={showCurrentPw ? 'text' : 'password'}
+                              required
+                              autoComplete="current-password"
+                              disabled={passwordBusy}
+                              value={currentPassword}
+                              onChange={(e) => setCurrentPassword(e.target.value)}
+                              placeholder={tr('Weka nenosiri la sasa', 'Enter current password')}
+                              className="min-h-[44px] w-full rounded-lg border border-slate-300 bg-white pr-10 pl-3.5 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none disabled:bg-slate-100"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowCurrentPw((p) => !p)}
+                              aria-label={
+                                showCurrentPw
+                                  ? tr('Ficha nenosiri', 'Hide password')
+                                  : tr('Onyesha nenosiri', 'Show password')
+                              }
+                              className="absolute top-1/2 right-1 flex min-h-[36px] min-w-[36px] -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:text-slate-800"
+                            >
+                              {showCurrentPw ? (
+                                <EyeOff className="h-4 w-4" aria-hidden="true" />
+                              ) : (
+                                <Eye className="h-4 w-4" aria-hidden="true" />
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      <div>
+                        <label
+                          htmlFor="profile-new-password"
+                          className="block text-xs font-semibold text-slate-700"
+                        >
+                          {tr('Nenosiri Jipya', 'New Password')}
+                        </label>
+                        <div className="relative mt-1.5">
+                          <input
+                            id="profile-new-password"
+                            type={showNewPw ? 'text' : 'password'}
+                            required
+                            minLength={6}
+                            autoComplete="new-password"
+                            disabled={passwordBusy}
+                            value={newPassword}
+                            onChange={(e) => setNewPassword(e.target.value)}
+                            placeholder={tr('Angalau herufi 6', 'At least 6 characters')}
+                            className="min-h-[44px] w-full rounded-lg border border-slate-300 bg-white pr-10 pl-3.5 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none disabled:bg-slate-100"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowNewPw((p) => !p)}
+                            aria-label={
+                              showNewPw
+                                ? tr('Ficha nenosiri', 'Hide password')
+                                : tr('Onyesha nenosiri', 'Show password')
+                            }
+                            className="absolute top-1/2 right-1 flex min-h-[36px] min-w-[36px] -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:text-slate-800"
+                          >
+                            {showNewPw ? (
+                              <EyeOff className="h-4 w-4" aria-hidden="true" />
+                            ) : (
+                              <Eye className="h-4 w-4" aria-hidden="true" />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="profile-confirm-password"
+                          className="block text-xs font-semibold text-slate-700"
+                        >
+                          {tr('Thibitisha Nenosiri Jipya', 'Confirm New Password')}
+                        </label>
+                        <input
+                          id="profile-confirm-password"
+                          type={showNewPw ? 'text' : 'password'}
+                          required
+                          minLength={6}
+                          autoComplete="new-password"
+                          disabled={passwordBusy}
+                          value={confirmPassword}
+                          onChange={(e) => setConfirmPassword(e.target.value)}
+                          placeholder={tr('Rudia nenosiri jipya', 'Repeat new password')}
+                          className="mt-1.5 min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3.5 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none disabled:bg-slate-100"
+                        />
+                      </div>
+                    </div>
+
+                    {passwordError && (
+                      <p className="text-xs font-medium text-red-700">{passwordError}</p>
+                    )}
+                    {passwordSuccess && (
+                      <p className="text-xs font-medium text-emerald-800">{passwordSuccess}</p>
+                    )}
+
+                    <div className="flex justify-end">
+                      <button
+                        type="submit"
+                        disabled={passwordBusy}
+                        className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-[#0E2640] px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-[#163A5F] disabled:opacity-60 sm:text-sm"
+                      >
+                        {passwordBusy ? (
+                          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                        ) : (
+                          <Lock className="h-4 w-4 text-amber-400" aria-hidden="true" />
+                        )}
+                        <span>
+                          {passwordBusy
+                            ? tr('Inasasisha Nenosiri...', 'Updating Password...')
+                            : hasPasswordProvider
+                              ? tr('Badilisha Nenosiri', 'Update Password')
+                              : tr('Weka Nenosiri', 'Set Password')}
+                        </span>
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* Accordion 6: Language & Phone Notifications */}
+          {(userUid || isNotificationSupported()) && (
+            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <button
+                type="button"
+                aria-expanded={Boolean(openAccordions.preferences_alerts)}
+                onClick={() => toggleAccordion('preferences_alerts')}
+                className="flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-50 sm:px-5"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-[#D97706] ring-1 ring-amber-200">
+                    <BellRing className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0">
+                    <h2 className="truncate font-display text-sm font-bold text-slate-900 sm:text-base">
+                      {tr('Lugha & Arifa za Simu', 'Language & Phone Notifications')}
+                    </h2>
+                    <p className="truncate text-xs text-slate-500">
+                      {tr(
+                        `Lugha: ${lang === 'sw' ? 'Kiswahili' : 'English'} · Mipangilio ya arifa za simu`,
+                        `Language: ${lang === 'sw' ? 'Swahili' : 'English'} · App alert settings`
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <ChevronDown
+                  className={`h-5 w-5 shrink-0 text-slate-500 transition-transform duration-200 ${
+                    openAccordions.preferences_alerts ? 'rotate-180 text-[#0E2640]' : ''
+                  }`}
+                  aria-hidden="true"
+                />
+              </button>
+
+              {openAccordions.preferences_alerts && (
+                <div className="space-y-4 border-t border-slate-100 p-4 sm:p-5">
+                  <div className="flex flex-col justify-between gap-3 rounded-lg border border-slate-200 bg-[#F8FAFC] p-3.5 sm:flex-row sm:items-center">
+                    <div className="flex items-center gap-2.5">
+                      <Globe className="h-4 w-4 shrink-0 text-[#1D4E89]" aria-hidden="true" />
+                      <div>
+                        <p className="text-xs font-bold text-slate-900">
+                          {tr('Lugha ya Akaunti Yako', 'Your Account Language')}
+                        </p>
+                        <p className="text-[11px] text-slate-600">
+                          {tr(
+                            'Chagua lugha unayopendelea kutumia ndani ya Malosha Forums.',
+                            'Choose your preferred display language across Malosha Forums.'
+                          )}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div
+                      role="group"
+                      aria-label={tr('Badilisha lugha', 'Switch language')}
+                      className="inline-flex shrink-0 rounded-lg border border-slate-300 bg-white p-1"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setLang('sw')}
+                        className={`min-h-[38px] rounded-md px-3.5 py-1 text-xs font-semibold transition-colors ${
+                          lang === 'sw'
+                            ? 'bg-[#1D4E89] text-white'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Kiswahili
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLang('en')}
+                        className={`min-h-[38px] rounded-md px-3.5 py-1 text-xs font-semibold transition-colors ${
+                          lang === 'en'
+                            ? 'bg-[#1D4E89] text-white'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        English
+                      </button>
+                    </div>
+                  </div>
+
+                  {isNotificationSupported() && (
+                    <div className="flex flex-col justify-between gap-3 rounded-lg border border-slate-200 bg-[#F8FAFC] p-3.5 sm:flex-row sm:items-center">
+                      <div className="flex items-start gap-2.5">
+                        <BellRing className="mt-0.5 h-4 w-4 shrink-0 text-[#D97706]" aria-hidden="true" />
+                        <div>
+                          <p className="text-xs font-bold text-slate-900">
+                            {tr('Arifa za Simu (App Notifications)', 'Phone Notifications (PWA Alerts)')}
+                          </p>
+                          <p className="text-[11px] text-slate-600">
+                            {notifPerm === 'granted' && phoneAlertsOn
+                              ? tr(
+                                  'Imewashwa — utapokea ujumbe wa taarifa mpya kwenye simu yako.',
+                                  'Active — you will receive new post alerts on your device.'
+                                )
+                              : notifPerm === 'denied'
+                                ? tr(
+                                    'Imezuiwa na kivinjari/simu. Ruhusu Notifications kupitia Settings ya kifaa.',
+                                    'Blocked by device/browser. Enable Notifications in device Settings.'
+                                  )
+                                : tr(
+                                    'Washa ili upate taarifa papo hapo simu yako ikiwa imeweka app ya Malosha.',
+                                    'Enable to get instant alerts when Malosha is installed on your phone.'
+                                  )}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex shrink-0 items-center gap-2">
+                        {notifPerm === 'granted' && phoneAlertsOn && (
+                          <button
+                            type="button"
+                            onClick={() => void handleSendTestAlert()}
+                            className="min-h-[38px] rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                          >
+                            {tr('Jaribu Arifa', 'Test Alert')}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => void handleTogglePhoneAlerts()}
+                          className={`min-h-[38px] rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors ${
+                            notifPerm === 'granted' && phoneAlertsOn
+                              ? 'border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                              : 'bg-[#0E2640] text-white hover:bg-[#163A5F]'
+                          }`}
+                        >
+                          {notifPerm === 'granted'
+                            ? phoneAlertsOn
+                              ? tr('Zimewashwa · Zima', 'Enabled · Mute')
+                              : tr('Zimezimwa · Washa', 'Muted · Enable')
+                            : tr('Washa Arifa za Simu', 'Enable Phone Alerts')}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* Accordion 7: User's Safety Reports */}
+          {userUid && !isAdmin && myReports.length > 0 && (
+            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <button
+                type="button"
+                aria-expanded={Boolean(openAccordions.my_reports)}
+                onClick={() => toggleAccordion('my_reports')}
+                className="flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-50 sm:px-5"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-700 ring-1 ring-rose-200">
+                    <AlertTriangle className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0">
+                    <h2 className="truncate font-display text-sm font-bold text-slate-900 sm:text-base tabular-nums">
+                      {tr(`Ripoti Zako za Usalama (${myReports.length})`, `Your Safety Reports (${myReports.length})`)}
+                    </h2>
+                    <p className="truncate text-xs text-slate-500">
+                      {tr('Fuatilia hali ya ukaguzi wa ripoti ulizotuma', 'Track review status of your submitted reports')}
+                    </p>
+                  </div>
+                </div>
+                <ChevronDown
+                  className={`h-5 w-5 shrink-0 text-slate-500 transition-transform duration-200 ${
+                    openAccordions.my_reports ? 'rotate-180 text-[#0E2640]' : ''
+                  }`}
+                  aria-hidden="true"
+                />
+              </button>
+
+              {openAccordions.my_reports && (
+                <div className="border-t border-slate-100 p-4 sm:p-5">
+                  <div className="divide-y divide-slate-200 rounded-lg border border-slate-200">
+                    {myReports.map((rep) => (
+                      <div
+                        key={rep.id}
+                        className="flex items-center justify-between gap-4 px-4 py-3 text-xs"
+                      >
+                        <div>
+                          <p className="font-medium text-slate-800">
+                            {getReportReasonLabel(rep.reason)}
+                          </p>
+                          <p className="mt-0.5 text-slate-500">
+                            {rep.targetType === 'topic'
+                              ? tr('Mada', 'Post')
+                              : tr('Jibu', 'Comment')}{' '}
+                            · {formatTime(rep.createdAt)}
+                          </p>
+                        </div>
+                        <span
+                          className={`font-medium ${
+                            rep.status === 'reviewed'
+                              ? 'text-emerald-800'
+                              : rep.status === 'dismissed'
+                                ? 'text-slate-500'
+                                : 'text-amber-800'
+                          }`}
+                        >
+                          {rep.status === 'reviewed'
+                            ? tr('Imekaguliwa', 'Reviewed')
+                            : rep.status === 'dismissed'
+                              ? tr('Imepuuzwa', 'Dismissed')
+                              : tr('Inasubiri Ukaguzi', 'Pending Review')}
                         </span>
                       </div>
                     ))}
                   </div>
                 </div>
-              );
-            })()}
+              )}
+            </section>
+          )}
 
-            {/* Profile & Member ID Photo Uploader */}
-            {userProfile && (
-              <div className="mt-5 flex flex-col justify-between gap-4 rounded-xl border border-slate-200 bg-[#F8FAFC] p-4 sm:flex-row sm:items-center">
-                <div className="flex items-center gap-3.5">
-                  <Avatar
-                    name={userProfile.displayName}
-                    photoURL={userProfile.photoURL}
-                    size="lg"
-                    uid={userUid}
-                    showOnlineIndicator
-                  />
-                  <div className="min-w-0">
-                    <p className="text-sm font-bold text-slate-900">
-                      {tr('Picha ya Wasifu na Kitambulisho', 'Profile & ID Card Photo')}
-                    </p>
-                    <p className="mt-0.5 text-xs leading-relaxed text-slate-600">
-                      {tr(
-                        'Ukibadilisha picha hapa, picha ya akaunti yako na Kitambulisho chako cha Mwanachama hubadilika papo hapo.',
-                        'Updating your photo here immediately updates both your account avatar and Member ID Card.'
-                      )}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2 shrink-0">
-                  <button
-                    type="button"
-                    disabled={uploadingPhoto || isSuspended}
-                    onClick={() => photoInputRef.current?.click()}
-                    className="inline-flex min-h-[42px] items-center gap-1.5 rounded-lg bg-[#0E2640] px-3.5 py-2 text-xs font-bold text-white transition-colors hover:bg-[#163A5F] disabled:opacity-60"
-                  >
-                    {uploadingPhoto ? (
-                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                    ) : (
-                      <Camera className="h-4 w-4 text-amber-400" aria-hidden="true" />
-                    )}
-                    <span>
-                      {uploadingPhoto
-                        ? tr('Inapakia Picha...', 'Uploading...')
-                        : tr('Badilisha Picha', 'Change Photo')}
-                    </span>
-                  </button>
-
-                  {userProfile.photoURL && (
-                    <button
-                      type="button"
-                      disabled={uploadingPhoto || isSuspended}
-                      onClick={() => void handleRemoveProfilePhoto()}
-                      className="inline-flex min-h-[42px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 disabled:opacity-60"
-                    >
-                      <Trash2 className="h-3.5 w-3.5 text-red-600" aria-hidden="true" />
-                      <span>{tr('Ondoa', 'Remove')}</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-
-            <form onSubmit={handleSubmit} className="mt-5 space-y-4">
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div>
-                <label
-                  htmlFor="profile-name"
-                  className="block text-xs font-semibold text-slate-700"
-                >
-                  {tr('Jina Linaloonekana Hadharani', 'Public Display Name')}
-                </label>
-                <input
-                  id="profile-name"
-                  type="text"
-                  required
-                  minLength={1}
-                  maxLength={80}
-                  disabled={saving || isSuspended}
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  className="mt-1.5 min-h-[40px] w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
-                />
-              </div>
-
-              <div>
-                <span className="block text-xs font-semibold text-slate-700">
-                  {tr(
-                    'Barua Pepe (Binafsi — Haionekani Hadharani)',
-                    'Email Address (Private — Never Shown Publicly)'
-                  )}
-                </span>
-                <p className="mt-1.5 min-h-[40px] rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2 text-sm text-slate-600">
-                  {userEmail || tr('Imefichwa', 'Hidden')}
-                </p>
-              </div>
-            </div>
-
-            <div>
-              <label htmlFor="profile-phone" className="block text-xs font-semibold text-slate-700">
-                {tr(
-                  'Namba ya Simu (Binafsi — Haionekani Hadharani)',
-                  'Phone Number (Private — Never Shown Publicly)'
-                )}
-              </label>
-              <input
-                id="profile-phone"
-                type="tel"
-                maxLength={30}
-                disabled={saving || isSuspended}
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder={tr('Mfano: +255 712 345 678', 'e.g. +255 712 345 678')}
-                className="mt-1.5 min-h-[40px] w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none disabled:bg-slate-100 disabled:text-slate-500 sm:max-w-sm"
-              />
-            </div>
-
-            <div>
-              <label htmlFor="profile-bio" className="block text-xs font-semibold text-slate-700">
-                {tr('Utambulisho Mfupi (Hiari)', 'Short Bio (Optional)')}
-              </label>
-              <textarea
-                id="profile-bio"
-                rows={3}
-                maxLength={300}
-                disabled={saving || isSuspended}
-                value={bio}
-                onChange={(e) => setBio(e.target.value)}
-                placeholder={tr(
-                  'Mfano: Mhandisi wa programu anayependa usalama wa mitandao...',
-                  'Example: Software engineer passionate about digital communities...'
-                )}
-                className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white p-3 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
-              />
-            </div>
-
-            {error && <p className="text-xs font-medium text-red-700">{error}</p>}
-            {savedNotice && <p className="text-xs font-medium text-emerald-800">{savedNotice}</p>}
-
-            <div className="flex justify-end">
+          {/* Accordion 8 (Owner): Anti-Fake Member ID Checker */}
+          {userUid && isAdmin && (
+            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
               <button
-                type="submit"
-                disabled={saving || isSuspended}
-                className="min-h-[40px] rounded-lg bg-[#1D4E89] px-4 py-2 text-sm font-semibold text-white hover:bg-[#163A5F] disabled:opacity-60"
+                type="button"
+                aria-expanded={Boolean(openAccordions.admin_id_verifier)}
+                onClick={() => toggleAccordion('admin_id_verifier')}
+                className="flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-50 sm:px-5"
               >
-                {saving
-                  ? tr('Inahifadhi...', 'Saving...')
-                  : tr('Hifadhi Wasifu', 'Save Profile')}
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-sky-50 text-[#0E2640] ring-1 ring-sky-200">
+                    <ShieldCheck className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0">
+                    <h2 className="truncate font-display text-sm font-bold text-slate-900 sm:text-base">
+                      {tr('Hakiki Kitambulisho cha Mwanachama (Mmiliki)', 'Verify Member ID Card (Owner)')}
+                    </h2>
+                    <p className="truncate text-xs text-slate-500">
+                      {tr(
+                        'Kagua namba ya kitambulisho na serial kuzuia vitambulisho bandia',
+                        'Verify card numbers and security serials against registry'
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <ChevronDown
+                  className={`h-5 w-5 shrink-0 text-slate-500 transition-transform duration-200 ${
+                    openAccordions.admin_id_verifier ? 'rotate-180 text-[#0E2640]' : ''
+                  }`}
+                  aria-hidden="true"
+                />
               </button>
-            </div>
-          </form>
 
-          {/* Complete Registration Details Summary */}
-          {userProfile && (
-            <div className="mt-7 border-t border-slate-200 pt-6">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <h3 className="font-display text-base font-bold text-slate-900 sm:text-lg">
-                    {tr('Taarifa Zote za Usajili Wako', 'Your Complete Registration Details')}
-                  </h3>
-                  <p className="text-xs text-slate-600">
+              {openAccordions.admin_id_verifier && (
+                <div className="border-t border-slate-100 p-4 sm:p-5">
+                  <MemberIdVerifier />
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* Accordion 9 (Owner): Member Moderation & Platform Controls */}
+          {userUid && isAdmin && (
+            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <button
+                type="button"
+                aria-expanded={Boolean(openAccordions.admin_moderation)}
+                onClick={() => toggleAccordion('admin_moderation')}
+                className="flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-50 sm:px-5"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200">
+                    <Users className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0">
+                    <h2 className="truncate font-display text-sm font-bold text-slate-900 sm:text-base">
+                      {tr('Usimamizi wa Wanachama & Ripoti (Mmiliki)', 'Member Management & Reports (Owner)')}
+                    </h2>
+                    <p className="truncate text-xs text-slate-500">
+                      {tr(
+                        'Toa beji za uthibitisho, funga/fungua akaunti, na kagua ripoti',
+                        'Grant verification badges, manage accounts, and review reports'
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <ChevronDown
+                  className={`h-5 w-5 shrink-0 text-slate-500 transition-transform duration-200 ${
+                    openAccordions.admin_moderation ? 'rotate-180 text-[#0E2640]' : ''
+                  }`}
+                  aria-hidden="true"
+                />
+              </button>
+
+              {openAccordions.admin_moderation && (
+                <div className="border-t border-slate-100 p-4 sm:p-5">
+                  <ModerationView
+                    embedded
+                    reports={myReports}
+                    currentUserUid={userUid}
+                    onUpdateStatus={onUpdateReportStatus}
+                    onOpenTopic={onOpenTopic}
+                    onOpenVideo={onOpenVideo}
+                    onToast={onToast}
+                  />
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* Accordion 10: Verification Badge Tiers Legend */}
+          <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <button
+              type="button"
+              aria-expanded={Boolean(openAccordions.badges_legend)}
+              onClick={() => toggleAccordion('badges_legend')}
+              className="flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-50 sm:px-5"
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700 ring-1 ring-amber-200">
+                  <Sparkles className="h-5 w-5" aria-hidden="true" />
+                </span>
+                <div className="min-w-0">
+                  <h2 className="truncate font-display text-sm font-bold text-slate-900 sm:text-base">
+                    {tr('Alama (Beji) za Uthibitisho wa Akaunti', 'Account Verification Badges')}
+                  </h2>
+                  <p className="truncate text-xs text-slate-500">
                     {tr(
-                      'Muhtasari wa kumbukumbu zote zilizosajiliwa kwenye akaunti yako ya Malosha Forums.',
-                      'Full record of your registered account details on Malosha Forums.'
+                      'Rangi saba za alama za uaminifu kwa mmiliki, taifa, taasisi na wabunifu',
+                      'Seven official badge colors for verified community roles'
                     )}
                   </p>
                 </div>
-                {!userEmailVerified && userEmail && (
-                  <button
-                    type="button"
-                    disabled={sendingVerify}
-                    onClick={() => void handleSendOwnerVerification()}
-                    className="min-h-[36px] rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-60"
-                  >
-                    {sendingVerify
-                      ? tr('Inatuma...', 'Sending...')
-                      : tr('Thibitisha Email Yako', 'Verify Email')}
-                  </button>
-                )}
               </div>
+              <ChevronDown
+                className={`h-5 w-5 shrink-0 text-slate-500 transition-transform duration-200 ${
+                  openAccordions.badges_legend ? 'rotate-180 text-[#0E2640]' : ''
+                }`}
+                aria-hidden="true"
+              />
+            </button>
 
-              <dl className="mt-4 grid grid-cols-1 divide-y divide-slate-200 border-y border-slate-200 text-xs sm:grid-cols-2 sm:gap-x-8 sm:divide-y-0">
-                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
-                  <dt className="font-medium text-slate-500">
-                    {tr('Jina Kamili la Usajili', 'Registered Name')}
-                  </dt>
-                  <dd className="truncate font-semibold text-slate-900">
-                    {userProfile.displayName}
-                  </dd>
-                </div>
-
-                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
-                  <dt className="font-medium text-slate-500">
-                    {tr('Barua Pepe (Email)', 'Email Address')}
-                  </dt>
-                  <dd className="truncate font-semibold text-slate-900">
-                    {userEmail || tr('Haijawekwa', 'Not set')}
-                  </dd>
-                </div>
-
-                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
-                  <dt className="font-medium text-slate-500">
-                    {tr('Uthibitisho wa Email', 'Email Verification')}
-                  </dt>
-                  <dd
-                    className={`font-semibold ${
-                      userEmailVerified ? 'text-emerald-700' : 'text-amber-700'
-                    }`}
-                  >
-                    {userEmailVerified
-                      ? tr('Imethibitishwa', 'Verified')
-                      : tr('Haijathibitishwa', 'Not verified')}
-                  </dd>
-                </div>
-
-                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
-                  <dt className="font-medium text-slate-500">
-                    {tr('Namba ya Simu', 'Phone Number')}
-                  </dt>
-                  <dd className="font-semibold text-slate-900 tabular-nums">
-                    {userPhone || tr('Haijawekwa', 'Not set')}
-                  </dd>
-                </div>
-
-                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
-                  <dt className="font-medium text-slate-500">
-                    {tr('Namba ya Kitambulisho', 'Member ID No.')}
-                  </dt>
-                  <dd className="font-mono font-bold text-[#0E2640] tabular-nums">
-                    {memberCode}
-                  </dd>
-                </div>
-
-                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
-                  <dt className="font-medium text-slate-500">
-                    {tr('Namba ya Usalama (Serial)', 'Security Serial')}
-                  </dt>
-                  <dd className="font-mono font-bold text-[#0E2640] tabular-nums">
-                    {controlSerial}
-                  </dd>
-                </div>
-
-                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
-                  <dt className="font-medium text-slate-500">
-                    {tr('Njia ya Kuingia', 'Sign-In Method')}
-                  </dt>
-                  <dd className="font-semibold text-slate-900">
-                    {[
-                      hasGoogleProvider ? 'Google' : null,
-                      hasPasswordProvider ? tr('Barua Pepe & Nenosiri', 'Email & Password') : null,
-                    ]
-                      .filter(Boolean)
-                      .join(' · ') || tr('Akaunti ya Malosha', 'Malosha Account')}
-                  </dd>
-                </div>
-
-                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
-                  <dt className="font-medium text-slate-500">
-                    {tr('Wadhifa & Beji', 'Role & Badge')}
-                  </dt>
-                  <dd className="font-semibold text-slate-900">
-                    {isAdmin
-                      ? tr('Mmiliki wa Mfumo', 'Platform Owner')
-                      : userProfile.role === 'moderator'
-                        ? tr('Msimamizi', 'Moderator')
-                        : tr('Mwanachama', 'Member')}{' '}
-                    · {getBadgeLabel(userProfile.verificationBadge)}
-                  </dd>
-                </div>
-
-                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
-                  <dt className="font-medium text-slate-500">
-                    {tr('Tarehe ya Kusajiliwa', 'Registered On')}
-                  </dt>
-                  <dd className="font-semibold text-slate-900 tabular-nums">
-                    {formatFullDate(userProfile.createdAt, userCreationTime)}
-                  </dd>
-                </div>
-
-                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
-                  <dt className="font-medium text-slate-500">
-                    {tr('Mara ya Mwisho Kuingia', 'Last Sign-In')}
-                  </dt>
-                  <dd className="font-semibold text-slate-900 tabular-nums">
-                    {formatFullDate(null, userLastSignInTime)}
-                  </dd>
-                </div>
-
-                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
-                  <dt className="font-medium text-slate-500">
-                    {tr('Hali ya Akaunti', 'Account Status')}
-                  </dt>
-                  <dd
-                    className={`font-semibold ${
-                      isSuspended && !isAdmin ? 'text-red-700' : 'text-emerald-700'
-                    }`}
-                  >
-                    {isSuspended && !isAdmin
-                      ? tr('Imefungwa', 'Closed')
-                      : tr('Hai / Active', 'Active')}
-                  </dd>
-                </div>
-
-                <div className="flex items-center justify-between gap-3 border-b border-slate-100 py-3">
-                  <dt className="font-medium text-slate-500">
-                    {tr('Namba ya Akaunti (UID)', 'Account UID')}
-                  </dt>
-                  <dd className="flex items-center gap-1.5 min-w-0">
-                    <span className="max-w-[140px] truncate font-mono text-[11px] font-semibold text-slate-700">
-                      {userUid}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => void handleCopyUid()}
-                      className="inline-flex min-h-[28px] items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-100"
-                    >
-                      {copiedUid ? (
-                        <Check className="h-3 w-3 text-emerald-600" aria-hidden="true" />
-                      ) : (
-                        <Copy className="h-3 w-3 text-slate-500" aria-hidden="true" />
-                      )}
-                      <span>{copiedUid ? tr('Imenakiliwa', 'Copied') : tr('Nakili', 'Copy')}</span>
-                    </button>
-                  </dd>
-                </div>
-              </dl>
-            </div>
-          )}
-
-          {/* Change or Set Login Password */}
-          <div className="mt-7 border-t border-slate-200 pt-6">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="flex items-start gap-2.5">
-                <KeyRound className="mt-0.5 h-5 w-5 shrink-0 text-[#1D4E89]" aria-hidden="true" />
-                <div>
-                  <h3 className="font-display text-base font-bold text-slate-900 sm:text-lg">
-                    {hasPasswordProvider
-                      ? tr('Badilisha Nenosiri la Kuingia', 'Change Login Password')
-                      : tr('Weka Nenosiri la Kuingia (Email & Password)', 'Set Login Password')}
-                  </h3>
-                  <p className="mt-0.5 text-xs leading-relaxed text-slate-600">
-                    {hasPasswordProvider
-                      ? tr(
-                          'Imarisha usalama wa akaunti yako kwa kuweka nenosiri jipya lenye angalau herufi 6.',
-                          'Update your login password anytime using at least 6 characters.'
-                        )
-                      : tr(
-                          'Akaunti yako iliingia kupitia Google. Weka nenosiri hapa ili uweze kuingia pia kwa Barua Pepe na Nenosiri.',
-                          'You signed in with Google. Set a password here so you can also sign in using Email & Password.'
-                        )}
-                  </p>
-                </div>
-              </div>
-
-              {hasPasswordProvider && userEmail && (
-                <button
-                  type="button"
-                  disabled={passwordBusy}
-                  onClick={() => void handleSendPasswordResetEmail()}
-                  className="text-xs font-semibold text-[#1D4E89] hover:underline disabled:opacity-60"
-                >
-                  {tr('Umesahau nenosiri la sasa? Tuma kwa Email', 'Forgot current password? Send reset email')}
-                </button>
-              )}
-            </div>
-
-            <form onSubmit={handlePasswordSubmit} className="mt-4 space-y-4">
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                {hasPasswordProvider && (
-                  <div>
-                    <label
-                      htmlFor="profile-current-password"
-                      className="block text-xs font-semibold text-slate-700"
-                    >
-                      {tr('Nenosiri la Sasa', 'Current Password')}
-                    </label>
-                    <div className="relative mt-1.5">
-                      <input
-                        id="profile-current-password"
-                        type={showCurrentPw ? 'text' : 'password'}
-                        required
-                        autoComplete="current-password"
-                        disabled={passwordBusy}
-                        value={currentPassword}
-                        onChange={(e) => setCurrentPassword(e.target.value)}
-                        placeholder={tr('Weka nenosiri la sasa', 'Enter current password')}
-                        className="min-h-[42px] w-full rounded-lg border border-slate-300 bg-white pr-10 pl-3.5 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none disabled:bg-slate-100"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowCurrentPw((p) => !p)}
-                        aria-label={
-                          showCurrentPw
-                            ? tr('Ficha nenosiri', 'Hide password')
-                            : tr('Onyesha nenosiri', 'Show password')
-                        }
-                        className="absolute top-1/2 right-1 flex min-h-[36px] min-w-[36px] -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:text-slate-800"
-                      >
-                        {showCurrentPw ? (
-                          <EyeOff className="h-4 w-4" aria-hidden="true" />
-                        ) : (
-                          <Eye className="h-4 w-4" aria-hidden="true" />
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                <div>
-                  <label
-                    htmlFor="profile-new-password"
-                    className="block text-xs font-semibold text-slate-700"
-                  >
-                    {tr('Nenosiri Jipya', 'New Password')}
-                  </label>
-                  <div className="relative mt-1.5">
-                    <input
-                      id="profile-new-password"
-                      type={showNewPw ? 'text' : 'password'}
-                      required
-                      minLength={6}
-                      autoComplete="new-password"
-                      disabled={passwordBusy}
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
-                      placeholder={tr('Angalau herufi 6', 'At least 6 characters')}
-                      className="min-h-[42px] w-full rounded-lg border border-slate-300 bg-white pr-10 pl-3.5 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none disabled:bg-slate-100"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowNewPw((p) => !p)}
-                      aria-label={
-                        showNewPw
-                          ? tr('Ficha nenosiri', 'Hide password')
-                          : tr('Onyesha nenosiri', 'Show password')
-                      }
-                      className="absolute top-1/2 right-1 flex min-h-[36px] min-w-[36px] -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:text-slate-800"
-                    >
-                      {showNewPw ? (
-                        <EyeOff className="h-4 w-4" aria-hidden="true" />
-                      ) : (
-                        <Eye className="h-4 w-4" aria-hidden="true" />
-                      )}
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="profile-confirm-password"
-                    className="block text-xs font-semibold text-slate-700"
-                  >
-                    {tr('Thibitisha Nenosiri Jipya', 'Confirm New Password')}
-                  </label>
-                  <input
-                    id="profile-confirm-password"
-                    type={showNewPw ? 'text' : 'password'}
-                    required
-                    minLength={6}
-                    autoComplete="new-password"
-                    disabled={passwordBusy}
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder={tr('Rudia nenosiri jipya', 'Repeat new password')}
-                    className="mt-1.5 min-h-[42px] w-full rounded-lg border border-slate-300 bg-white px-3.5 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none disabled:bg-slate-100"
-                  />
-                </div>
-              </div>
-
-              {passwordError && (
-                <p className="text-xs font-medium text-red-700">{passwordError}</p>
-              )}
-              {passwordSuccess && (
-                <p className="text-xs font-medium text-emerald-800">{passwordSuccess}</p>
-              )}
-
-              <div className="flex justify-end">
-                <button
-                  type="submit"
-                  disabled={passwordBusy}
-                  className="inline-flex min-h-[42px] items-center gap-2 rounded-lg bg-[#0E2640] px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-[#163A5F] disabled:opacity-60 sm:text-sm"
-                >
-                  {passwordBusy ? (
-                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                  ) : (
-                    <Lock className="h-4 w-4 text-amber-400" aria-hidden="true" />
+            {openAccordions.badges_legend && (
+              <div className="border-t border-slate-100 p-4 sm:p-5">
+                <p className="text-xs leading-relaxed text-slate-600">
+                  {tr(
+                    'Ili kuongeza uaminifu kwenye mijadala, matangazo ya ajira, na taarifa rasmi, Malosha Forums linatumia rangi saba tofauti za alama za uthibitisho:',
+                    'To build trust across discussions, job listings, and official announcements, Malosha Forums uses seven distinct verification badge colors:'
                   )}
-                  <span>
-                    {passwordBusy
-                      ? tr('Inasasisha Nenosiri...', 'Updating Password...')
-                      : hasPasswordProvider
-                        ? tr('Badilisha Nenosiri', 'Update Password')
-                        : tr('Weka Nenosiri', 'Set Password')}
-                  </span>
-                </button>
+                </p>
+
+                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {BADGE_LEGEND_ORDER.map((tier) => {
+                    const meta = VERIFICATION_BADGE_META[tier];
+                    return (
+                      <div
+                        key={tier}
+                        className={`flex items-start gap-3 rounded-lg border p-3.5 ${meta.borderClass} ${meta.softBgClass}`}
+                      >
+                        <div className="shrink-0 pt-0.5">
+                          <VerificationBadge badge={tier} size="md" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className={`text-xs font-bold ${meta.textClass}`}>
+                            {getBadgeLabel(tier)}
+                          </p>
+                          <p className="mt-0.5 text-xs leading-snug text-slate-700">
+                            {getBadgeDescription(tier)}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </form>
-          </div>
+            )}
+          </section>
 
-          {userProfile && (
-            <MemberIdCard
-              profile={userProfile}
-              isAdmin={isAdmin}
-              onToast={onToast}
-            />
-          )}
-          </>
-        )}
+          {/* Accordion 11: Safety Pillars & 13 Social Media Community Rules */}
+          <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <button
+              type="button"
+              aria-expanded={Boolean(openAccordions.safety_rules)}
+              onClick={() => toggleAccordion('safety_rules')}
+              className="flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-50 sm:px-5"
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-[#1D4E89] ring-1 ring-slate-200">
+                  <Lock className="h-5 w-5" aria-hidden="true" />
+                </span>
+                <div className="min-w-0">
+                  <h2 className="truncate font-display text-sm font-bold text-slate-900 sm:text-base">
+                    {tr('Usalama wa Akaunti & Sheria 13 za Jukwaa', 'Account Safety & 13 Platform Rules')}
+                  </h2>
+                  <p className="truncate text-xs text-slate-500">
+                    {tr(
+                      'Sheria 13 rasmi za mitandao ya kijamii na ulinzi wa akaunti yako',
+                      '13 official social media safety rules & enforcement notice policy'
+                    )}
+                  </p>
+                </div>
+              </div>
+              <ChevronDown
+                className={`h-5 w-5 shrink-0 text-slate-500 transition-transform duration-200 ${
+                  openAccordions.safety_rules ? 'rotate-180 text-[#0E2640]' : ''
+                }`}
+                aria-hidden="true"
+              />
+            </button>
 
-        {userUid && !isAdmin && myReports.length > 0 && (
-          <div className="mt-8 border-t border-slate-200 pt-6">
-            <h3 className="text-sm font-semibold text-slate-900 tabular-nums">
-              {tr('Ripoti Zako za Usalama', 'Your Safety Reports')} ({myReports.length})
-            </h3>
-            <div className="mt-3 divide-y divide-slate-200 rounded-lg border border-slate-200">
-              {myReports.map((rep) => (
-                <div
-                  key={rep.id}
-                  className="flex items-center justify-between gap-4 px-4 py-3 text-xs"
-                >
-                  <div>
-                    <p className="font-medium text-slate-800">
-                      {getReportReasonLabel(rep.reason)}
-                    </p>
-                    <p className="mt-0.5 text-slate-500">
-                      {rep.targetType === 'topic'
-                        ? tr('Mada', 'Post')
-                        : tr('Jibu', 'Comment')}{' '}
-                      · {formatTime(rep.createdAt)}
+            {openAccordions.safety_rules && (
+              <div className="space-y-5 border-t border-slate-100 p-4 sm:p-5">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+                    <UserCheck className="h-5 w-5 text-[#1D4E89]" aria-hidden="true" />
+                    <h3 className="mt-2.5 font-display text-base font-semibold text-slate-900">
+                      {tr('1. Akaunti Zilizothibitishwa', '1. Verified Accounts')}
+                    </h3>
+                    <p className="mt-1.5 text-xs leading-relaxed text-slate-600">
+                      {tr(
+                        'Kila chapisho na jibu huthibitishwa na akaunti halali (Google au Barua Pepe) ili kuzuia akaunti bandia na ujumbe wa taka.',
+                        'Every post and reply is backed by valid account authentication (Google or Email) to deter fake accounts and spam.'
+                      )}
                     </p>
                   </div>
-                  <span
-                    className={`font-medium ${
-                      rep.status === 'reviewed'
-                        ? 'text-emerald-800'
-                        : rep.status === 'dismissed'
-                          ? 'text-slate-500'
-                          : 'text-amber-800'
-                    }`}
-                  >
-                    {rep.status === 'reviewed'
-                      ? tr('Imekaguliwa', 'Reviewed')
-                      : rep.status === 'dismissed'
-                        ? tr('Imepuuzwa', 'Dismissed')
-                        : tr('Inasubiri Ukaguzi', 'Pending Review')}
-                  </span>
+
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+                    <Lock className="h-5 w-5 text-[#1D4E89]" aria-hidden="true" />
+                    <h3 className="mt-2.5 font-display text-base font-semibold text-slate-900">
+                      {tr('2. Faragha ya Taarifa Binafsi', '2. Personal Privacy')}
+                    </h3>
+                    <p className="mt-1.5 text-xs leading-relaxed text-slate-600">
+                      {tr(
+                        'Barua pepe na namba yako ya simu huhifadhiwa kwenye mkusanyiko maalum wa siri unaoweza kusomwa na wewe pekee.',
+                        'Your email address and phone number are stored in a private collection accessible only to you.'
+                      )}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+                    <ShieldCheck className="h-5 w-5 text-[#1D4E89]" aria-hidden="true" />
+                    <h3 className="mt-2.5 font-display text-base font-semibold text-slate-900">
+                      {tr('3. Udhibiti & Arifa za Sheria', '3. Rule Enforcement & Alerts')}
+                    </h3>
+                    <p className="mt-1.5 text-xs leading-relaxed text-slate-600">
+                      {tr(
+                        'Akaunti ikifungwa au video ikifungiwa kwa kukiuka mojawapo ya sheria hizi 13, mhusika hupokea ujumbe rasmi ukibainisha sheria aliyovunja.',
+                        'Whenever an account is suspended or a video is blocked, the owner receives a clear in-account notice citing the exact rule broken.'
+                      )}
+                    </p>
+                  </div>
                 </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </section>
 
-      {/* Owner Anti-Fake ID Checker & Moderation Controls */}
-      {userUid && isAdmin && (
-        <>
-          <MemberIdVerifier />
-          <ModerationView
-            embedded
-            reports={myReports}
-            currentUserUid={userUid}
-            onUpdateStatus={onUpdateReportStatus}
-            onOpenTopic={onOpenTopic}
-            onToast={onToast}
-          />
-        </>
-      )}
-
-      {/* Verification Badge Tiers Legend */}
-      <section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
-        <h2 className="font-display text-xl font-semibold text-slate-900">
-          {tr('Alama (Beji) za Uthibitisho wa Akaunti', 'Account Verification Badges')}
-        </h2>
-        <p className="mt-1.5 text-xs leading-relaxed text-slate-600">
-          {tr(
-            'Ili kuongeza uaminifu kwenye mijadala, matangazo ya ajira, na taarifa rasmi, Malosha Forums linatumia rangi saba tofauti za alama za uthibitisho:',
-            'To build trust across discussions, job listings, and official announcements, Malosha Forums uses seven distinct verification badge colors:'
-          )}
-        </p>
-
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {BADGE_LEGEND_ORDER.map((tier) => {
-            const meta = VERIFICATION_BADGE_META[tier];
-            return (
-              <div
-                key={tier}
-                className={`flex items-start gap-3 rounded-lg border p-3.5 ${meta.borderClass} ${meta.softBgClass}`}
-              >
-                <div className="pt-0.5 shrink-0">
-                  <VerificationBadge badge={tier} size="md" />
-                </div>
-                <div className="min-w-0">
-                  <p className={`text-xs font-bold ${meta.textClass}`}>
-                    {getBadgeLabel(tier)}
+                <div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="font-display text-base font-semibold text-slate-900">
+                      {tr(
+                        'Sheria 13 Zinazoongoza Mitandao ya Kijamii (Malosha Forums)',
+                        '13 Standard Social Media Rules (Malosha Forums)'
+                      )}
+                    </h3>
+                    <span className="rounded-md bg-[#0E2640] px-2 py-0.5 text-[11px] font-bold text-white">
+                      {tr('Kanuni 13 Rasmi', '13 Official Rules')}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-600">
+                    {tr(
+                      'Zingatia kanuni hizi ili kulinda akaunti yako na kubaki kwenye vigezo vya kulipwa. Ukiuka wowote hufungia video au kufunga akaunti kwa kutaja namba ya kanuni:',
+                      'Follow these 13 community standards to protect your account and payout eligibility:'
+                    )}
                   </p>
-                  <p className="mt-0.5 text-xs leading-snug text-slate-700">
-                    {getBadgeDescription(tier)}
-                  </p>
+
+                  <div className="mt-3 grid grid-cols-1 gap-2.5 md:grid-cols-2">
+                    {COMMUNITY_SAFETY_RULES.map((rule) => (
+                      <div
+                        key={rule.number}
+                        className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3.5"
+                      >
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#0E2640] font-mono text-xs font-extrabold text-white">
+                          {rule.number}
+                        </span>
+                        <div className="min-w-0">
+                          <h4 className="text-xs font-bold text-slate-900 sm:text-[13px]">
+                            {tr(rule.titleSw, rule.titleEn)}
+                          </h4>
+                          <p className="mt-0.5 text-[11px] leading-relaxed text-slate-600">
+                            {tr(rule.summarySw, rule.summaryEn)}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
-            );
-          })}
+            )}
+          </section>
         </div>
-      </section>
-
-      {/* Three Safety Pillars */}
-      <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
-        <div className="rounded-xl border border-slate-200 bg-white p-5">
-          <UserCheck className="h-5 w-5 text-[#1D4E89]" aria-hidden="true" />
-          <h2 className="mt-3 font-display text-lg font-semibold text-slate-900">
-            {tr('1. Akaunti Zilizothibitishwa', '1. Verified Accounts')}
-          </h2>
-          <p className="mt-2 text-xs leading-relaxed text-slate-600">
-            {tr(
-              'Kila chapisho na jibu huthibitishwa na akaunti halali (Google au Barua Pepe) ili kuzuia akaunti bandia na ujumbe wa taka.',
-              'Every post and reply is backed by valid account authentication (Google or Email) to deter fake accounts and spam.'
-            )}
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-slate-200 bg-white p-5">
-          <Lock className="h-5 w-5 text-[#1D4E89]" aria-hidden="true" />
-          <h2 className="mt-3 font-display text-lg font-semibold text-slate-900">
-            {tr('2. Faragha ya Taarifa Binafsi', '2. Personal Privacy')}
-          </h2>
-          <p className="mt-2 text-xs leading-relaxed text-slate-600">
-            {tr(
-              'Barua pepe na namba yako ya simu huhifadhiwa kwenye mkusanyiko maalum wa siri unaoweza kusomwa na wewe pekee.',
-              'Your email address and phone number are stored in a private collection accessible only to you.'
-            )}
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-slate-200 bg-white p-5">
-          <ShieldCheck className="h-5 w-5 text-[#1D4E89]" aria-hidden="true" />
-          <h2 className="mt-3 font-display text-lg font-semibold text-slate-900">
-            {tr('3. Udhibiti na Uwajibikaji', '3. Moderation & Accountability')}
-          </h2>
-          <p className="mt-2 text-xs leading-relaxed text-slate-600">
-            {tr(
-              'Mada zinaweza kufungwa na waanzishaji wake, na ripoti za maudhui yasiyofaa hukaguliwa haraka na wasimamizi.',
-              'Authors can lock discussions, and flagged content reports are promptly reviewed by platform admins.'
-            )}
-          </p>
-        </div>
-      </div>
-
-      {/* Community Rules List */}
-      <section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
-        <h2 className="font-display text-xl font-semibold text-slate-900">
-          {tr('Maadili ya Kushiriki Mijadala', 'Community Guidelines')}
-        </h2>
-        <ul className="mt-4 list-disc space-y-2.5 pl-5 text-sm leading-relaxed text-slate-700">
-          <li>
-            {tr(
-              'Jadili hoja kwa staha; epuka matusi, kejeli, au mashambulizi binafsi.',
-              'Discuss topics respectfully; avoid insults, harassment, or personal attacks.'
-            )}
-          </li>
-          <li>
-            {tr(
-              'Usichapishe taarifa za siri za watu wengine (namba za simu, anwani, au nyaraka).',
-              'Never share private personal data of others (phone numbers, addresses, or documents).'
-            )}
-          </li>
-          <li>
-            {tr(
-              'Hakikisha kichwa cha mada kinaeleza wazi jambo unalolileta mezani.',
-              'Ensure your post title clearly describes the subject or opportunity you are sharing.'
-            )}
-          </li>
-          <li>
-            {tr(
-              'Tumia kitufe cha “Kubali Jibu” kusaidia wengine kupata suluhisho haraka.',
-              'Use the "Accept Answer" button to help readers find verified solutions quickly.'
-            )}
-          </li>
-          <li>
-            {tr(
-              'Ukiona maudhui yenye hatari au matangazo ya taka, tumia kitufe cha “Ripoti”.',
-              'If you spot harmful content or spam, use the "Report" button.'
-            )}
-          </li>
-        </ul>
-      </section>
-        </>
       )}
     </div>
   );

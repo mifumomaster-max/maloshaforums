@@ -11,6 +11,7 @@ import {
 import {
   ArrowLeft,
   ArrowRight,
+  ArrowUpCircle,
   Bookmark,
   Bot,
   Check,
@@ -24,10 +25,18 @@ import {
   Eye,
   EyeOff,
   FastForward,
+  Flag,
+  Flame,
+  Gauge,
+  Headphones,
   Heart,
+  HeartCrack,
+  HelpCircle,
   Image as ImageIcon,
+  Languages,
   Loader2,
   Lock,
+  Maximize,
   Maximize2,
   MessageCircle,
   Minimize2,
@@ -35,13 +44,16 @@ import {
   Monitor,
   Music2,
   Pause,
+  PictureInPicture2,
   Play,
   Plus,
   Repeat,
   Reply as ReplyIcon,
   Send,
+  Settings,
   Settings2,
   Share2,
+  ShieldAlert,
   Shuffle,
   SkipForward,
   SlidersHorizontal,
@@ -52,6 +64,7 @@ import {
   Video as VideoIcon,
   Volume2,
   VolumeX,
+  Wifi,
   X,
 } from 'lucide-react';
 import { db } from '../firebase';
@@ -59,7 +72,11 @@ import { useLanguage } from '../context/LanguageContext';
 import {
   buildWatermarkedVideoDownloadUrl,
   downloadWatermarkedPhoto,
+  ensureMaloshaOutroCardPublicId,
   ensureMaloshaWatermarkLogoPublicId,
+  needsBrowserVideoTranscode,
+  optimizeCloudinaryPhotoUrl,
+  optimizeCloudinaryVideoPlaybackUrl,
   uploadAudioToCloudinary,
   uploadPhotoCarouselToCloudinary,
   uploadVideoToCloudinary,
@@ -71,11 +88,18 @@ import {
   deleteVideoComment,
   deleteVideoPost,
   incrementVideoShareCount,
+  submitReport,
   toggleFollowUser,
   toggleVideoLike,
   updateVideoSettings,
 } from '../services/forumService';
-import { VideoAutoReplyTrigger, VideoComment, VideoPost } from '../types';
+import {
+  COMMUNITY_SAFETY_RULES,
+  VideoAutoReplyTrigger,
+  VideoComment,
+  VideoPost,
+  findCommunityRule,
+} from '../types';
 import { Avatar } from './Avatar';
 import { AuthorVerificationBadge } from './VerificationBadge';
 
@@ -115,9 +139,13 @@ interface CreatorDefaultSettings {
 }
 
 const BOOKMARKED_VIDEOS_KEY = 'malosha_bookmarked_videos_v1';
-const CREATOR_TIKTOK_DEFAULTS_KEY = 'malosha_tiktok_creator_defaults_v1';
+const CREATOR_VIDEO_DEFAULTS_KEY = 'malosha_video_creator_defaults_v1';
+const LEGACY_CREATOR_DEFAULTS_KEY = 'malosha_tiktok_creator_defaults_v1';
 const AUTO_NEXT_VIDEO_KEY = 'malosha_video_autonext_v1';
 const DESKTOP_FRAME_MODE_KEY = 'malosha_video_desktop_frame_v1';
+const DATA_SAVER_VIDEO_KEY = 'malosha_video_data_saver_v1';
+const NOT_INTERESTED_VIDEOS_KEY = 'malosha_not_interested_videos_v1';
+const BG_AUDIO_VIDEO_KEY = 'malosha_video_bg_audio_v1';
 
 function seededShuffle<T>(items: T[], seed: number): T[] {
   const arr = [...items];
@@ -149,7 +177,9 @@ const DEFAULT_CREATOR_SETTINGS: CreatorDefaultSettings = {
 function loadCreatorDefaultSettings(): CreatorDefaultSettings {
   if (typeof window === 'undefined') return DEFAULT_CREATOR_SETTINGS;
   try {
-    const raw = window.localStorage.getItem(CREATOR_TIKTOK_DEFAULTS_KEY);
+    const raw =
+      window.localStorage.getItem(CREATOR_VIDEO_DEFAULTS_KEY) ||
+      window.localStorage.getItem(LEGACY_CREATOR_DEFAULTS_KEY);
     if (!raw) return DEFAULT_CREATOR_SETTINGS;
     const parsed = JSON.parse(raw) as Partial<CreatorDefaultSettings>;
     return {
@@ -209,6 +239,9 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
   const lastTapRef = useRef<{ id: string; time: number } | null>(null);
   const singleTapTimerRef = useRef<number | null>(null);
   const touchSwipeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
+  const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
+  const longPressTriggeredRef = useRef(false);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const [feedMode, setFeedMode] = useState<'mix' | 'foryou' | 'following' | 'saved' | 'private'>('mix');
@@ -217,7 +250,8 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
   const [activeIndex, setActiveIndex] = useState(0);
   const [muted, setMuted] = useState(false);
   const [pausedByTap, setPausedByTap] = useState(false);
-  const [fitMode, setFitMode] = useState<'cover' | 'contain'>('cover');
+  const pausedByTapRef = useRef(false);
+  const [fitMode, setFitMode] = useState<'cover' | 'contain'>('contain');
   const [playbackSpeed, setPlaybackSpeed] = useState<0.5 | 1 | 1.5 | 2>(1);
   const [autoScrollNext, setAutoScrollNext] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true;
@@ -228,6 +262,44 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
       return true;
     }
   });
+  const [dataSaverMode, setDataSaverMode] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    try {
+      const saved = window.localStorage.getItem(DATA_SAVER_VIDEO_KEY);
+      return saved === null ? true : saved === 'true';
+    } catch {
+      return true;
+    }
+  });
+  const [backgroundAudioMode, setBackgroundAudioMode] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return window.localStorage.getItem(BG_AUDIO_VIDEO_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [captionsOverlayEnabled, setCaptionsOverlayEnabled] = useState(false);
+  const [captionLang, setCaptionLang] = useState<'sw' | 'en'>('sw');
+  const [notInterestedIds, setNotInterestedIds] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set();
+    try {
+      const raw = window.localStorage.getItem(NOT_INTERESTED_VIDEOS_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed)
+        ? new Set(parsed.filter((x): x is string => typeof x === 'string'))
+        : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+  const [longPressSheetVideo, setLongPressSheetVideo] = useState<VideoPost | null>(null);
+  const [whyPostVideo, setWhyPostVideo] = useState<VideoPost | null>(null);
+  const [reportSheetVideo, setReportSheetVideo] = useState<VideoPost | null>(null);
+  const [reportRuleNumber, setReportRuleNumber] = useState<number>(0);
+  const [reportReasonText, setReportReasonText] = useState('');
+  const [submittingReport, setSubmittingReport] = useState(false);
+
   const [desktopFrameMode, setDesktopFrameMode] = useState<'mobile' | 'wide'>(() => {
     if (typeof window === 'undefined') return 'mobile';
     try {
@@ -238,6 +310,19 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     }
   });
   const [clearScreenMode, setClearScreenMode] = useState(false);
+  const [bufferingVideoId, setBufferingVideoId] = useState<string | null>(null);
+  const [stalledPlayPromptId, setStalledPlayPromptId] = useState<string | null>(null);
+  const [endedOutroVideoId, setEndedOutroVideoId] = useState<string | null>(null);
+  const [transcodeToggledVideoIds, setTranscodeToggledVideoIds] = useState<Record<string, boolean>>({});
+  const scrollRafRef = useRef<number | null>(null);
+  const outroTimerRef = useRef<number | null>(null);
+  const activeIndexRef = useRef(0);
+  useEffect(() => {
+    activeIndexRef.current = activeIndex;
+  }, [activeIndex]);
+  useEffect(() => {
+    pausedByTapRef.current = pausedByTap;
+  }, [pausedByTap]);
 
   const [photoSlideByVideoId, setPhotoSlideByVideoId] = useState<Record<string, number>>({});
   const [progressById, setProgressById] = useState<Record<string, { current: number; duration: number }>>({});
@@ -271,6 +356,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
   const [sendingComment, setSendingComment] = useState(false);
 
   // Settings / Post Options / Sound Drawer states
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsVideoId, setSettingsVideoId] = useState<string | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
   const [soundDrawerVideo, setSoundDrawerVideo] = useState<VideoPost | null>(null);
@@ -288,7 +374,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
   const [editAutoReplyKeyword, setEditAutoReplyKeyword] = useState('');
   const [editAutoReplyMessage, setEditAutoReplyMessage] = useState('');
 
-  // Upload Studio Modal state (Video OR Multi-Photo Carousel + Music + TikTok Settings)
+  // Upload Studio Modal state (Video OR Multi-Photo Carousel + Music + Post Settings)
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadMediaType, setUploadMediaType] = useState<'video' | 'photo'>('video');
   const videoFileInputRef = useRef<HTMLInputElement>(null);
@@ -298,6 +384,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
   // Video upload state
   const [selectedVideoFile, setSelectedVideoFile] = useState<File | null>(null);
   const [videoPreviewUrl, setVideoPreviewUrl] = useState('');
+  const [videoPreviewError, setVideoPreviewError] = useState(false);
   const [detectedDuration, setDetectedDuration] = useState(0);
 
   // Photo carousel upload state
@@ -361,9 +448,10 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     }
   }, [uploadModalSignal, user, isSuspended, isAdmin, onSignIn, onToast, tr]);
 
-  // Pre-warm Malosha watermark badge on Cloudinary silently in background
+  // Pre-warm Malosha watermark logo & outro card on Cloudinary silently in background
   useEffect(() => {
     void ensureMaloshaWatermarkLogoPublicId();
+    void ensureMaloshaOutroCardPublicId();
   }, []);
 
   // Sync owner settings form when opening Settings drawer for a specific video
@@ -398,25 +486,23 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
   // Persist bookmarks locally
   const toggleBookmark = useCallback(
     (videoId: string) => {
-      setBookmarkedIds((prev) => {
-        const next = new Set(prev);
-        const added = !next.has(videoId);
-        if (added) next.add(videoId);
-        else next.delete(videoId);
-        try {
-          window.localStorage.setItem(BOOKMARKED_VIDEOS_KEY, JSON.stringify([...next]));
-        } catch {
-          // Ignore quota errors
-        }
-        onToast(
-          added
-            ? tr('Chapisho limehifadhiwa kwenye Orodha Yako!', 'Post saved to your bookmarks!')
-            : tr('Limeondolewa kwenye zilizohifadhiwa.', 'Removed from saved posts.')
-        );
-        return next;
-      });
+      const next = new Set(bookmarkedIds);
+      const added = !next.has(videoId);
+      if (added) next.add(videoId);
+      else next.delete(videoId);
+      setBookmarkedIds(next);
+      try {
+        window.localStorage.setItem(BOOKMARKED_VIDEOS_KEY, JSON.stringify([...next]));
+      } catch {
+        // Ignore quota errors
+      }
+      onToast(
+        added
+          ? tr('Chapisho limehifadhiwa kwenye Malosha Forums!', 'Post saved to your Malosha Forums bookmarks!')
+          : tr('Limeondolewa kwenye zilizohifadhiwa.', 'Removed from saved posts.')
+      );
     },
-    [onToast, tr]
+    [bookmarkedIds, onToast, tr]
   );
 
   // Check follow statuses for visible creators
@@ -448,7 +534,9 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
 
   const visibleVideos = useMemo(() => {
     if (feedMode === 'following') {
-      return videos.filter((v) => !v.isArchived && followingByAuthor[v.authorId]);
+      return videos.filter(
+        (v) => !v.isArchived && !notInterestedIds.has(v.id) && followingByAuthor[v.authorId]
+      );
     }
     if (feedMode === 'saved') {
       return videos.filter(
@@ -458,7 +546,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     if (feedMode === 'private') {
       return videos.filter((v) => v.isArchived && user && v.authorId === user.uid);
     }
-    const publicList = videos.filter((v) => !v.isArchived);
+    const publicList = videos.filter((v) => !v.isArchived && !notInterestedIds.has(v.id));
     if (feedMode === 'foryou') {
       return publicList;
     }
@@ -480,7 +568,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
       if (i < olderBucket.length) mixed.push(olderBucket[i]);
     }
     return pinned ? [pinned, ...mixed] : mixed;
-  }, [videos, feedMode, followingByAuthor, bookmarkedIds, user, mixSeed, justPublishedId]);
+  }, [videos, feedMode, followingByAuthor, bookmarkedIds, notInterestedIds, user, mixSeed, justPublishedId]);
 
   // Deep link jump to a specific video ID if present
   useEffect(() => {
@@ -502,7 +590,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     }
   }, [visibleVideos.length, activeIndex]);
 
-  // Detect active snap slide via IntersectionObserver
+  // Detect active snap slide via IntersectionObserver + Scroll position fallback
   useEffect(() => {
     const root = feedScrollRef.current;
     if (!root || visibleVideos.length === 0) return;
@@ -510,18 +598,20 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          if (entry.isIntersecting && entry.intersectionRatio >= 0.65) {
+          if (entry.isIntersecting && entry.intersectionRatio >= 0.55) {
             const vidId = entry.target.getAttribute('data-video-id');
             if (!vidId) continue;
             const idx = visibleVideos.findIndex((v) => v.id === vidId);
             if (idx >= 0) {
               setActiveIndex(idx);
               setPausedByTap(false);
+              setBufferingVideoId(null);
+              setStalledPlayPromptId(null);
             }
           }
         }
       },
-      { root, threshold: [0.65] }
+      { root, threshold: [0.55] }
     );
 
     visibleVideos.forEach((v) => {
@@ -532,16 +622,66 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     return () => observer.disconnect();
   }, [visibleVideos]);
 
+  const handleFeedScroll = useCallback(() => {
+    if (scrollRafRef.current) return;
+    scrollRafRef.current = window.requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      const root = feedScrollRef.current;
+      if (!root || visibleVideos.length === 0) return;
+      const h = root.clientHeight;
+      if (h <= 0) return;
+      const nextIdx = Math.max(0, Math.min(visibleVideos.length - 1, Math.round(root.scrollTop / h)));
+      if (nextIdx !== activeIndexRef.current) {
+        activeIndexRef.current = nextIdx;
+        setActiveIndex(nextIdx);
+        setPausedByTap(false);
+        setBufferingVideoId(null);
+        setStalledPlayPromptId(null);
+      }
+    });
+  }, [visibleVideos.length]);
+
   const activePost = visibleVideos[activeIndex] || null;
   const activeVideoId = activePost?.id || null;
+
+  const openSettingsModal = useCallback(
+    (targetPostId?: string | null) => {
+      setSettingsVideoId(targetPostId ?? activePost?.id ?? null);
+      setSettingsOpen(true);
+    },
+    [activePost?.id]
+  );
+
+  const closeSettingsModal = useCallback(() => {
+    setSettingsOpen(false);
+    setSettingsVideoId(null);
+  }, []);
+
+  const tryPlayMediaElement = useCallback(async (el: HTMLMediaElement, videoId: string) => {
+    if (pausedByTapRef.current) return;
+    try {
+      await el.play();
+      setStalledPlayPromptId((curr) => (curr === videoId ? null : curr));
+    } catch {
+      // Never force-mute automatically; only show play prompt so a user tap plays with sound
+      setStalledPlayPromptId(videoId);
+    }
+  }, []);
 
   const scrollToIndex = useCallback(
     (nextIndex: number) => {
       if (visibleVideos.length === 0) return;
+      if (outroTimerRef.current) {
+        window.clearTimeout(outroTimerRef.current);
+        outroTimerRef.current = null;
+      }
       const bounded = Math.max(0, Math.min(visibleVideos.length - 1, nextIndex));
       const target = visibleVideos[bounded];
       if (!target) return;
+      setEndedOutroVideoId(null);
       setPausedByTap(false);
+      setBufferingVideoId(null);
+      setStalledPlayPromptId(null);
       setActiveIndex(bounded);
       const el = slideRefs.current[target.id];
       if (el) {
@@ -552,21 +692,19 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
   );
 
   const handleToggleAutoNext = useCallback(() => {
-    setAutoScrollNext((prev) => {
-      const next = !prev;
-      try {
-        window.localStorage.setItem(AUTO_NEXT_VIDEO_KEY, String(next));
-      } catch {
-        // Non-fatal
-      }
-      onToast(
-        next
-          ? tr('Auto-Next Imewashwa: Video inayofuata itacheza moja kwa moja.', 'Auto-Next ON: Next video plays automatically.')
-          : tr('Auto-Next Imezimwa: Video itajirudia.', 'Auto-Next OFF: Current video loops.')
-      );
-      return next;
-    });
-  }, [onToast, tr]);
+    const next = !autoScrollNext;
+    setAutoScrollNext(next);
+    try {
+      window.localStorage.setItem(AUTO_NEXT_VIDEO_KEY, String(next));
+    } catch {
+      // Non-fatal
+    }
+    onToast(
+      next
+        ? tr('Auto-Next Imewashwa: Video inayofuata itacheza moja kwa moja.', 'Auto-Next ON: Next video plays automatically.')
+        : tr('Auto-Next Imezimwa: Video itajirudia.', 'Auto-Next OFF: Current video loops.')
+    );
+  }, [autoScrollNext, onToast, tr]);
 
   const handleSetDesktopFrameMode = useCallback((mode: 'mobile' | 'wide') => {
     setDesktopFrameMode(mode);
@@ -582,37 +720,186 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     setFeedMode('mix');
     setActiveIndex(0);
     setPausedByTap(false);
+    setStalledPlayPromptId(null);
     feedScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
     onToast(tr('Video zimechanganywa upya (Mpya & Zamani)!', 'Feed reshuffled (New & Old mix)!'));
   }, [onToast, tr]);
 
-  // Sync HTMLVideoElement & HTMLAudioElement playback, speed, and mute state
-  // Data-saver single-stream playback: ONLY active slide mounts <video>/<audio>; unload previous streams immediately
+  const handleToggleDataSaver = useCallback(
+    (explicitNext?: boolean) => {
+      const next = typeof explicitNext === 'boolean' ? explicitNext : !dataSaverMode;
+      setDataSaverMode(next);
+      try {
+        window.localStorage.setItem(DATA_SAVER_VIDEO_KEY, String(next));
+      } catch {
+        // Non-fatal
+      }
+      onToast(
+        next
+          ? tr(
+              'Data Saver IMEWASHWA: Video na picha zinatumia MB chache sana.',
+              'Data Saver ON: Streaming lightweight video & photo sizes to save MBs.'
+            )
+          : tr(
+              'Data Saver IMEZIMWA: Unatazama ubora wa juu (HD).',
+              'Data Saver OFF: Streaming original high quality.'
+            )
+      );
+    },
+    [dataSaverMode, onToast, tr]
+  );
+
+  const handleToggleBackgroundAudio = useCallback(
+    (explicitNext?: boolean) => {
+      const next = typeof explicitNext === 'boolean' ? explicitNext : !backgroundAudioMode;
+      setBackgroundAudioMode(next);
+      try {
+        window.localStorage.setItem(BG_AUDIO_VIDEO_KEY, String(next));
+      } catch {
+        // Non-fatal
+      }
+      onToast(
+        next
+          ? tr(
+              'Sauti ya Nyuma IMEWASHWA: Sauti itaendelea kusikika hata ukiwa nje ya skrini.',
+              'Background Audio ON: Audio keeps playing in background.'
+            )
+          : tr('Sauti ya Nyuma IMEZIMWA.', 'Background Audio OFF.')
+      );
+    },
+    [backgroundAudioMode, onToast, tr]
+  );
+
+  const handleMarkNotInterested = useCallback(
+    (video: VideoPost) => {
+      const next = new Set(notInterestedIds);
+      next.add(video.id);
+      setNotInterestedIds(next);
+      try {
+        window.localStorage.setItem(NOT_INTERESTED_VIDEOS_KEY, JSON.stringify([...next]));
+      } catch {
+        // Non-fatal
+      }
+      setLongPressSheetVideo(null);
+      onToast(
+        tr(
+          'Sawa! Tumeondoa chapisho hili kwenye orodha yako.',
+          'Got it! Hidden from your video feed.'
+        )
+      );
+    },
+    [notInterestedIds, onToast, tr]
+  );
+
+  const handleTriggerPiP = useCallback(
+    async (video: VideoPost) => {
+      const el = videoRefs.current[video.id] as
+        | (HTMLVideoElement & {
+            webkitSetPresentationMode?: (mode: 'inline' | 'picture-in-picture') => void;
+          })
+        | null;
+      if (!el || video.mediaType === 'photo') {
+        onToast(
+          tr(
+            'Picture-in-Picture inafanya kazi kwenye video pekee.',
+            'Picture-in-Picture works on video clips only.'
+          ),
+          'error'
+        );
+        return;
+      }
+      try {
+        if (document.pictureInPictureElement) {
+          await document.exitPictureInPicture();
+        }
+        if (typeof el.requestPictureInPicture === 'function') {
+          await el.requestPictureInPicture();
+          onToast(tr('Picture-in-Picture imewashwa!', 'Picture-in-Picture active!'));
+        } else if (typeof el.webkitSetPresentationMode === 'function') {
+          el.webkitSetPresentationMode('picture-in-picture');
+          onToast(tr('Picture-in-Picture imewashwa!', 'Picture-in-Picture active!'));
+        } else {
+          onToast(
+            tr(
+              'Kivinjari hiki hakiruhusu Picture-in-Picture.',
+              'Picture-in-Picture is not supported in this browser.'
+            ),
+            'error'
+          );
+        }
+      } catch {
+        onToast(
+          tr(
+            'Cheza video kwanza au ruhusu PiP kwenye kivinjari chako.',
+            'Play the video first or allow PiP in your browser.'
+          ),
+          'error'
+        );
+      }
+    },
+    [onToast, tr]
+  );
+
+  // Background audio MediaSession & visibility persistence
+  useEffect(() => {
+    if (!backgroundAudioMode || !activePost) return;
+    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: activePost.caption?.slice(0, 80) || activePost.soundName || 'Malosha Video',
+          artist: activePost.authorName || 'Malosha Forums',
+          album: 'Malosha Forums Video',
+          artwork: activePost.thumbnailUrl
+            ? [{ src: activePost.thumbnailUrl, sizes: '512x512', type: 'image/jpeg' }]
+            : undefined,
+        });
+        navigator.mediaSession.setActionHandler('play', () => {
+          const el = videoRefs.current[activePost.id] || audioRefs.current[activePost.id];
+          if (el) void el.play().catch(() => {});
+        });
+        navigator.mediaSession.setActionHandler('pause', () => {
+          const el = videoRefs.current[activePost.id] || audioRefs.current[activePost.id];
+          if (el) el.pause();
+        });
+        navigator.mediaSession.setActionHandler('nexttrack', () => {
+          const nextIdx = activeIndexRef.current + 1 < visibleVideos.length ? activeIndexRef.current + 1 : 0;
+          scrollToIndex(nextIdx);
+        });
+        navigator.mediaSession.setActionHandler('previoustrack', () => {
+          const prevIdx = activeIndexRef.current > 0 ? activeIndexRef.current - 1 : Math.max(0, visibleVideos.length - 1);
+          scrollToIndex(prevIdx);
+        });
+      } catch {
+        // Browser may restrict mediaSession
+      }
+    }
+
+    const onVisibility = () => {
+      if (document.hidden && backgroundAudioMode && !pausedByTapRef.current) {
+        const audEl = audioRefs.current[activePost.id];
+        const vidEl = videoRefs.current[activePost.id];
+        if (audEl && audEl.paused) void audEl.play().catch(() => {});
+        else if (vidEl && vidEl.paused) void vidEl.play().catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [backgroundAudioMode, activePost, visibleVideos.length, scrollToIndex]);
+
+  // Data-saver single-stream playback: play active <video>/<audio> whenever playback state or source updates
   useEffect(() => {
     Object.entries(videoRefs.current).forEach(([vidId, el]) => {
       if (!el) return;
       if (vidId === activeVideoId) {
         el.muted = muted || Boolean(activePost?.audioUrl);
         el.playbackRate = playbackSpeed;
-        if (!pausedByTap && !uploadOpen) {
-          const playPromise = el.play();
-          if (playPromise && typeof playPromise.catch === 'function') {
-            playPromise.catch(() => {
-              if (!el.muted) {
-                el.muted = true;
-                setMuted(true);
-                void el.play().catch(() => {});
-              }
-            });
-          }
+        if (!pausedByTap && !uploadOpen && !settingsOpen) {
+          void tryPlayMediaElement(el, vidId);
         } else {
           el.pause();
         }
       } else {
         el.pause();
-        el.removeAttribute('src');
-        el.load();
-        delete videoRefs.current[vidId];
       }
     });
 
@@ -620,28 +907,55 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
       if (!el) return;
       if (vidId === activeVideoId) {
         el.muted = muted;
-        if (!pausedByTap && !uploadOpen) {
-          const playPromise = el.play();
-          if (playPromise && typeof playPromise.catch === 'function') {
-            playPromise.catch(() => {
-              if (!el.muted) {
-                el.muted = true;
-                setMuted(true);
-                void el.play().catch(() => {});
-              }
-            });
-          }
+        el.playbackRate = playbackSpeed;
+        if (!pausedByTap && !uploadOpen && !settingsOpen) {
+          void tryPlayMediaElement(el, vidId);
         } else {
           el.pause();
         }
       } else {
         el.pause();
-        el.removeAttribute('src');
-        el.load();
-        delete audioRefs.current[vidId];
       }
     });
-  }, [activeVideoId, activePost?.audioUrl, pausedByTap, muted, uploadOpen, playbackSpeed]);
+  }, [
+    activeVideoId,
+    activePost?.audioUrl,
+    pausedByTap,
+    muted,
+    uploadOpen,
+    settingsOpen,
+    playbackSpeed,
+    dataSaverMode,
+    transcodeToggledVideoIds,
+    tryPlayMediaElement,
+  ]);
+
+  // Release inactive slide media streams & clear any pending outro timer when switching activeVideoId
+  useEffect(() => {
+    if (outroTimerRef.current) {
+      window.clearTimeout(outroTimerRef.current);
+      outroTimerRef.current = null;
+    }
+    setEndedOutroVideoId(null);
+    return () => {
+      if (outroTimerRef.current) {
+        window.clearTimeout(outroTimerRef.current);
+        outroTimerRef.current = null;
+      }
+      Object.entries(videoRefs.current).forEach(([vidId, el]) => {
+        if (vidId !== activeVideoId || !el) return;
+        el.pause();
+        el.removeAttribute('src');
+        el.load();
+      });
+      Object.entries(audioRefs.current).forEach(([vidId, el]) => {
+        if (vidId !== activeVideoId || !el) return;
+        el.pause();
+        el.removeAttribute('src');
+        el.load();
+      });
+    };
+  }, [activeVideoId]);
 
   // Auto-advance slides for Photo Carousel posts (or single-photo posts when Auto-Next is ON)
   useEffect(() => {
@@ -838,8 +1152,86 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     }));
   }, []);
 
+  const handleTogglePlayPause = useCallback(
+    (targetVideo?: VideoPost | null) => {
+      const vid = targetVideo || activePost;
+      if (!vid) return;
+      const vidEl = videoRefs.current[vid.id];
+      const audEl = audioRefs.current[vid.id];
+      const nextPaused = !pausedByTapRef.current;
+      pausedByTapRef.current = nextPaused;
+      setPausedByTap(nextPaused);
+
+      if (nextPaused) {
+        if (vidEl) vidEl.pause();
+        if (audEl) audEl.pause();
+      } else {
+        if (outroTimerRef.current) {
+          window.clearTimeout(outroTimerRef.current);
+          outroTimerRef.current = null;
+        }
+        if (endedOutroVideoId === vid.id) {
+          setEndedOutroVideoId(null);
+          if (vidEl) vidEl.currentTime = 0;
+        }
+        setStalledPlayPromptId(null);
+        if (vidEl) {
+          vidEl.muted = muted || Boolean(vid.audioUrl);
+          void vidEl.play().catch(() => {});
+        }
+        if (audEl) {
+          audEl.muted = muted;
+          void audEl.play().catch(() => {});
+        }
+      }
+    },
+    [activePost, endedOutroVideoId, muted]
+  );
+
+  const clearLongPressTimer = useCallback(() => {
+    if (longPressTimerRef.current) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    longPressOriginRef.current = null;
+  }, []);
+
+  const handleStagePointerDown = useCallback(
+    (video: VideoPost, e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0 && e.pointerType === 'mouse') return;
+      clearLongPressTimer();
+      longPressTriggeredRef.current = false;
+      longPressOriginRef.current = { x: e.clientX, y: e.clientY };
+      longPressTimerRef.current = window.setTimeout(() => {
+        longPressTimerRef.current = null;
+        longPressTriggeredRef.current = true;
+        if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+          navigator.vibrate(18);
+        }
+        setLongPressSheetVideo(video);
+      }, 450);
+    },
+    [clearLongPressTimer]
+  );
+
+  const handleStagePointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const origin = longPressOriginRef.current;
+      if (!origin || !longPressTimerRef.current) return;
+      const dist = Math.hypot(e.clientX - origin.x, e.clientY - origin.y);
+      if (dist > 10) {
+        clearLongPressTimer();
+      }
+    },
+    [clearLongPressTimer]
+  );
+
   const handleStagePointerClick = useCallback(
     (video: VideoPost, e: React.MouseEvent<HTMLDivElement>) => {
+      if (longPressTriggeredRef.current) {
+        longPressTriggeredRef.current = false;
+        return;
+      }
       const rect = e.currentTarget.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
@@ -862,23 +1254,71 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
         return;
       }
 
+      const vidEl = videoRefs.current[video.id];
+      const audEl = audioRefs.current[video.id];
+      const slideIdx = visibleVideos.findIndex((v) => v.id === video.id);
+      if (slideIdx >= 0 && slideIdx !== activeIndex) {
+        setActiveIndex(slideIdx);
+        pausedByTapRef.current = false;
+        setPausedByTap(false);
+        setStalledPlayPromptId(null);
+        return;
+      }
+
+      // Resume immediately if stalled or paused or outro showing (never force-mute!)
+      if (vidEl && (vidEl.paused || pausedByTapRef.current || endedOutroVideoId === video.id)) {
+        if (singleTapTimerRef.current) {
+          window.clearTimeout(singleTapTimerRef.current);
+          singleTapTimerRef.current = null;
+        }
+        if (outroTimerRef.current) {
+          window.clearTimeout(outroTimerRef.current);
+          outroTimerRef.current = null;
+        }
+        if (endedOutroVideoId === video.id) {
+          setEndedOutroVideoId(null);
+          vidEl.currentTime = 0;
+        }
+        pausedByTapRef.current = false;
+        setPausedByTap(false);
+        setStalledPlayPromptId(null);
+        vidEl.muted = muted || Boolean(video.audioUrl);
+        void vidEl.play().catch(() => {});
+        if (audEl) {
+          audEl.muted = muted;
+          void audEl.play().catch(() => {});
+        }
+        lastTapRef.current = { id: video.id, time: now };
+        return;
+      }
+
       lastTapRef.current = { id: video.id, time: now };
       if (singleTapTimerRef.current) {
         window.clearTimeout(singleTapTimerRef.current);
       }
       singleTapTimerRef.current = window.setTimeout(() => {
-        const isMultiPhoto = video.mediaType === 'photo' && (video.photoUrls?.length || 0) > 1;
+        const isPhotoPost = video.mediaType === 'photo' || !video.videoUrl;
+        const isMultiPhoto = isPhotoPost && (video.photoUrls?.length || 0) > 1;
         if (isMultiPhoto && x < rect.width * 0.25) {
           stepPhotoSlide(video.id, video.photoUrls!.length, -1);
         } else if (isMultiPhoto && x > rect.width * 0.75) {
           stepPhotoSlide(video.id, video.photoUrls!.length, 1);
-        } else {
-          setPausedByTap((prev) => !prev);
+        } else if (!isPhotoPost || Boolean(video.audioUrl)) {
+          handleTogglePlayPause(video);
         }
         singleTapTimerRef.current = null;
-      }, 240);
+      }, 220);
     },
-    [likedVideoIds, handleToggleLike, stepPhotoSlide]
+    [
+      likedVideoIds,
+      handleToggleLike,
+      stepPhotoSlide,
+      visibleVideos,
+      activeIndex,
+      muted,
+      endedOutroVideoId,
+      handleTogglePlayPause,
+    ]
   );
 
   const handleStageTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
@@ -897,6 +1337,66 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     const dy = t.clientY - start.y;
     if (Math.abs(dx) > 42 && Math.abs(dx) > Math.abs(dy) * 1.25) {
       stepPhotoSlide(video.id, video.photoUrls!.length, dx < 0 ? 1 : -1);
+    }
+  };
+
+  const handleSubmitVideoReport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!reportSheetVideo || submittingReport) return;
+    if (!user) {
+      onToast(tr('Ingia kwanza ili kuripoti chapisho.', 'Sign in first to report.'), 'error');
+      onSignIn();
+      return;
+    }
+    const chosenRule = reportRuleNumber ? findCommunityRule(reportRuleNumber) : null;
+    const trimmed = reportReasonText.trim();
+    if (!chosenRule && trimmed.length < 3) {
+      onToast(
+        tr('Chagua sheria iliyovunjwa au andika sababu fupi.', 'Select a rule or enter a short reason.'),
+        'error'
+      );
+      return;
+    }
+    const finalReason = chosenRule
+      ? `Kanuni #${chosenRule.number} (${chosenRule.titleSw})${trimmed ? `: ${trimmed}` : ''}`
+      : trimmed;
+    setSubmittingReport(true);
+    const reportReason: 'spam' | 'harassment' | 'misinformation' | 'unlawful' | 'other' =
+      chosenRule?.number === 11
+        ? 'spam'
+        : chosenRule?.number === 3 || chosenRule?.number === 4
+          ? 'harassment'
+          : chosenRule?.number === 6
+            ? 'misinformation'
+            : chosenRule?.number === 1 || chosenRule?.number === 2 || chosenRule?.number === 5 || chosenRule?.number === 12
+              ? 'unlawful'
+              : 'other';
+    try {
+      await submitReport(
+        user.uid,
+        'video',
+        reportSheetVideo.id,
+        reportSheetVideo.id,
+        reportReason,
+        finalReason,
+        chosenRule ? chosenRule.number : undefined
+      );
+      setReportSheetVideo(null);
+      setReportRuleNumber(0);
+      setReportReasonText('');
+      onToast(
+        tr(
+          'Ripoti imetumwa kwa timu ya usalama ya Malosha Forums!',
+          'Report submitted to Malosha Forums moderation team!'
+        )
+      );
+    } catch (err) {
+      onToast(
+        err instanceof Error ? err.message : tr('Imeshindwa kutuma ripoti.', 'Failed to submit report.'),
+        'error'
+      );
+    } finally {
+      setSubmittingReport(false);
     }
   };
 
@@ -943,13 +1443,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     if (downloadingId) return;
     setDownloadingId(video.id);
 
-    const safeFileAuthor =
-      video.authorName
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-') || 'creator';
-
-    if (video.mediaType === 'photo') {
+    if (video.mediaType === 'photo' || (!video.videoUrl && (video.photoUrls?.length || 0) > 0)) {
       const photos = video.photoUrls || [];
       const currentIdx = Math.min(photoSlideByVideoId[video.id] || 0, Math.max(0, photos.length - 1));
       const activeImgUrl = photos[currentIdx] || video.thumbnailUrl;
@@ -959,20 +1453,20 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
       }
       onToast(
         tr(
-          'Inaandaa picha yenye logo & watermark ya Malosha Forums...',
-          'Preparing photo with Malosha Forums watermark...'
+          'Inaandaa picha yenye logo & watermark ya @malosha forums...',
+          'Preparing photo with @malosha forums watermark...'
         )
       );
       try {
         await downloadWatermarkedPhoto(
           activeImgUrl,
           video.authorName,
-          `malosha-forums-${safeFileAuthor}-${video.id.slice(0, 6)}.png`
+          `malosha-forums-photo-${video.id.slice(0, 6)}.jpg`
         );
         onToast(
           tr(
-            'Picha imepakuliwa na nembo ya Malosha Forums!',
-            'Photo downloaded with Malosha Forums watermark!'
+            'Picha imepakuliwa na watermark ya @malosha forums!',
+            'Photo downloaded with @malosha forums watermark!'
           )
         );
       } catch (err) {
@@ -990,40 +1484,62 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
 
     onToast(
       tr(
-        'Inaandaa video yenye logo & watermark ya Malosha Forums...',
-        'Preparing MP4 with Malosha Forums logo watermark...'
+        'Inaandaa video yenye logo (@malosha forums) na lebo ya mwisho...',
+        'Preparing MP4 with @malosha forums watermark & end label...'
       )
     );
-    const fileName = `malosha-forums-${safeFileAuthor}-${video.id.slice(0, 6)}.mp4`;
+    const fileName = `malosha-forums-${video.id.slice(0, 6)}.mp4`;
 
     try {
-      const logoPid = await ensureMaloshaWatermarkLogoPublicId();
-      const primaryUrl = buildWatermarkedVideoDownloadUrl(
-        video.videoUrl,
-        video.authorName,
-        logoPid
-      );
-      const fallbackUrl = buildWatermarkedVideoDownloadUrl(video.videoUrl, video.authorName, '');
+      const [logoPid, outroPid] = await Promise.all([
+        ensureMaloshaWatermarkLogoPublicId(),
+        ensureMaloshaOutroCardPublicId(),
+      ]);
+      const liveEl = videoRefs.current[video.id];
+      const measuredDuration =
+        liveEl && Number.isFinite(liveEl.duration) && liveEl.duration > 0
+          ? Math.round(liveEl.duration)
+          : video.durationSec || 0;
+
+      const candidateUrls = [
+        outroPid
+          ? buildWatermarkedVideoDownloadUrl(video.videoUrl, video.authorName, {
+              logoPublicId: logoPid,
+              outroPublicId: outroPid,
+              durationSec: measuredDuration,
+              outroMode: 'splice',
+            })
+          : '',
+        logoPid && measuredDuration >= 3
+          ? buildWatermarkedVideoDownloadUrl(video.videoUrl, video.authorName, {
+              logoPublicId: logoPid,
+              durationSec: measuredDuration,
+              outroMode: 'endOverlay',
+            })
+          : '',
+        buildWatermarkedVideoDownloadUrl(video.videoUrl, video.authorName, {
+          logoPublicId: logoPid,
+          outroMode: 'watermarkOnly',
+        }),
+        buildWatermarkedVideoDownloadUrl(video.videoUrl, video.authorName, {
+          outroMode: 'watermarkOnly',
+        }),
+      ].filter((u, idx, arr) => Boolean(u) && arr.indexOf(u) === idx);
 
       let chosenBlob: Blob | null = null;
-      let chosenUrl = primaryUrl;
+      const chosenUrl = candidateUrls[0] || video.videoUrl;
 
-      try {
-        const res = await fetch(primaryUrl);
-        if (res.ok) chosenBlob = await res.blob();
-      } catch {
-        chosenBlob = null;
-      }
-
-      if (!chosenBlob && fallbackUrl !== primaryUrl) {
+      for (const candUrl of candidateUrls) {
         try {
-          const res2 = await fetch(fallbackUrl);
-          if (res2.ok) {
-            chosenBlob = await res2.blob();
-            chosenUrl = fallbackUrl;
+          const res = await fetch(candUrl);
+          if (!res.ok) continue;
+          const b = await res.blob();
+          if (b && b.size > 1000 && (!b.type || b.type.startsWith('video/') || b.type === 'application/octet-stream')) {
+            chosenBlob = b;
+            break;
           }
         } catch {
-          chosenBlob = null;
+          // Try next tier
         }
       }
 
@@ -1049,8 +1565,8 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
 
       onToast(
         tr(
-          'Video imepakuliwa na nembo ya Malosha Forums!',
-          'Video downloaded with Malosha Forums watermark!'
+          'Video imepakuliwa na watermark ya @malosha forums & lebo ya mwisho!',
+          'Video downloaded with @malosha forums watermark & outro label!'
         )
       );
     } catch (err) {
@@ -1105,7 +1621,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
       destructive: true,
       action: async () => {
         await deleteVideoPost(video.id);
-        setSettingsVideoId(null);
+        closeSettingsModal();
         onToast(tr('Chapisho limefutwa kikamilifu.', 'Post deleted.'));
       },
     });
@@ -1195,8 +1711,8 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
         autoReplyKeyword: editAutoReplyKeyword,
         autoReplyMessage: editAutoReplyMessage,
       });
-      onToast(tr('Mipangilio ya TikTok imehifadhiwa!', 'Post settings saved!'));
-      setSettingsVideoId(null);
+      onToast(tr('Mipangilio ya chapisho imehifadhiwa kwenye Malosha Forums!', 'Post settings saved on Malosha Forums!'));
+      closeSettingsModal();
     } catch (err) {
       onToast(
         err instanceof Error ? err.message : tr('Imeshindwa kuhifadhi mipangilio.', 'Failed to save settings.'),
@@ -1220,7 +1736,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     };
     setStudioSettings(nextDefaults);
     try {
-      window.localStorage.setItem(CREATOR_TIKTOK_DEFAULTS_KEY, JSON.stringify(nextDefaults));
+      window.localStorage.setItem(CREATOR_VIDEO_DEFAULTS_KEY, JSON.stringify(nextDefaults));
     } catch {
       // Ignore quota errors
     }
@@ -1240,6 +1756,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     if (videoPreviewUrl) URL.revokeObjectURL(videoPreviewUrl);
     setSelectedVideoFile(file);
     setVideoPreviewUrl(URL.createObjectURL(file));
+    setVideoPreviewError(false);
     setDetectedDuration(0);
   };
 
@@ -1263,13 +1780,11 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
   };
 
   const removeStudioPhoto = (id: string) => {
-    setSelectedPhotos((prev) => {
-      const target = prev.find((p) => p.id === id);
-      if (target) URL.revokeObjectURL(target.previewUrl);
-      const next = prev.filter((p) => p.id !== id);
-      setStudioPhotoPreviewIdx((idx) => Math.max(0, Math.min(idx, Math.max(0, next.length - 1))));
-      return next;
-    });
+    const target = selectedPhotos.find((p) => p.id === id);
+    if (target) URL.revokeObjectURL(target.previewUrl);
+    const next = selectedPhotos.filter((p) => p.id !== id);
+    setSelectedPhotos(next);
+    setStudioPhotoPreviewIdx((idx) => Math.max(0, Math.min(idx, Math.max(0, next.length - 1))));
   };
 
   const moveStudioPhoto = (index: number, delta: number) => {
@@ -1370,6 +1885,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     }
     setSelectedVideoFile(null);
     setVideoPreviewUrl('');
+    setVideoPreviewError(false);
     setSelectedPhotos([]);
     setStudioPhotoPreviewIdx(0);
     setSelectedAudioFile(null);
@@ -1414,7 +1930,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
 
     // Persist creator defaults if configured
     try {
-      window.localStorage.setItem(CREATOR_TIKTOK_DEFAULTS_KEY, JSON.stringify(studioSettings));
+      window.localStorage.setItem(CREATOR_VIDEO_DEFAULTS_KEY, JSON.stringify(studioSettings));
     } catch {
       // Non-fatal
     }
@@ -1557,143 +2073,24 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
 
   return (
     <div className={`relative w-full overflow-hidden bg-black text-white select-none ${stageHeightClass}`}>
-      {/* TikTok Top Overlay Bar (fits Mobile edge-to-edge and aligns cleanly over 9:16 PC frame) */}
+      {/* Clean Top Bar */}
       {!clearScreenMode ? (
         <div
-          className={`pointer-events-none absolute inset-x-0 top-0 z-20 mx-auto flex items-center justify-between gap-1.5 bg-gradient-to-b from-black/80 via-black/35 to-transparent px-2.5 pt-2.5 pb-6 sm:px-3 ${
-            isMobilePortraitFrame ? 'md:max-w-[440px] md:pt-4' : 'sm:px-6'
+          className={`pointer-events-none absolute inset-x-0 top-0 z-20 mx-auto flex items-center justify-between gap-2 bg-gradient-to-b from-black/85 via-black/40 to-transparent px-3 pt-2.5 pb-5 sm:px-4 ${
+            isMobilePortraitFrame ? 'md:max-w-[440px] md:pt-3.5' : 'sm:px-6'
           }`}
         >
-          <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-1.5">
+          <div className="pointer-events-auto flex items-center gap-1.5">
             {onBack && (
               <button
                 type="button"
                 onClick={onBack}
                 aria-label={tr('Rudi Jukwaani', 'Back to Forum')}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-md ring-1 ring-white/20 hover:bg-black/75 md:hidden"
+                className="flex h-8 w-8 shrink-0 items-center justify-center text-white/90 drop-shadow transition-opacity hover:text-white md:hidden"
               >
-                <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+                <ArrowLeft className="h-5 w-5" aria-hidden="true" />
               </button>
             )}
-
-            <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto rounded-full bg-black/50 p-1 backdrop-blur-md ring-1 ring-white/15 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {(
-                [
-                  { id: 'mix', label: tr('Mix', 'Mix') },
-                  { id: 'foryou', label: tr('Mpya', 'New') },
-                  { id: 'following', label: tr('Wanaofuatwa', 'Following') },
-                  { id: 'saved', label: tr('Zilizohifadhiwa', 'Saved') },
-                  ...(ownPrivateCount > 0
-                    ? [
-                        {
-                          id: 'private' as const,
-                          label: tr(`Binafsi (${ownPrivateCount})`, `Private (${ownPrivateCount})`),
-                        },
-                      ]
-                    : []),
-                ] satisfies readonly {
-                  id: 'mix' | 'foryou' | 'following' | 'saved' | 'private';
-                  label: string;
-                }[]
-              ).map((mode) => {
-                const active = feedMode === mode.id;
-                return (
-                  <button
-                    key={mode.id}
-                    type="button"
-                    onClick={() => {
-                      if (mode.id === 'mix' && feedMode === 'mix') {
-                        handleReshuffleMix();
-                        return;
-                      }
-                      setFeedMode(mode.id);
-                      setActiveIndex(0);
-                      feedScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
-                    }}
-                    className={`min-h-[30px] rounded-full px-2.5 py-1 text-[11px] font-bold whitespace-nowrap transition-all sm:text-xs ${
-                      active ? 'bg-white text-slate-950 shadow-sm' : 'text-white/80 hover:text-white'
-                    }`}
-                  >
-                    {mode.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="pointer-events-auto flex shrink-0 items-center gap-1">
-            {feedMode === 'mix' && visibleVideos.length > 2 && (
-              <button
-                type="button"
-                onClick={handleReshuffleMix}
-                title={tr('Changanya video (Mpya & Zamani)', 'Reshuffle Mix')}
-                aria-label={tr('Changanya video', 'Reshuffle Mix')}
-                className="flex h-8.5 w-8.5 items-center justify-center rounded-full bg-black/50 text-sky-300 backdrop-blur-md ring-1 ring-white/20 transition-colors hover:bg-black/75 active:scale-95"
-              >
-                <Shuffle className="h-3.5 w-3.5" aria-hidden="true" />
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={handleToggleAutoNext}
-              title={
-                autoScrollNext
-                  ? tr('Auto-Next Imewashwa (Gusa kuzima)', 'Auto-Next ON (Tap to turn off)')
-                  : tr('Auto-Next Imezimwa (Gusa kuwasha)', 'Auto-Next OFF (Tap to turn on)')
-              }
-              aria-label={tr('Washa au zima video inayofuata kiotomatiki', 'Toggle Auto-Next')}
-              className={`inline-flex h-8.5 items-center gap-1 rounded-full px-2.5 text-[10.5px] font-extrabold backdrop-blur-md ring-1 transition-all active:scale-95 ${
-                autoScrollNext
-                  ? 'bg-emerald-500/25 text-emerald-300 ring-emerald-400/50'
-                  : 'bg-black/50 text-white/75 ring-white/20 hover:text-white'
-              }`}
-            >
-              <Repeat className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>{autoScrollNext ? 'Auto' : 'Loop'}</span>
-            </button>
-
-            {visibleVideos.length > 1 && (
-              <button
-                type="button"
-                onClick={() => {
-                  const nextIdx = activeIndex + 1 < visibleVideos.length ? activeIndex + 1 : 0;
-                  scrollToIndex(nextIdx);
-                }}
-                title={tr('Cheza video inayofuata', 'Play next video')}
-                aria-label={tr('Cheza video inayofuata', 'Play next video')}
-                className="flex h-8.5 w-8.5 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-md ring-1 ring-white/20 transition-colors hover:bg-black/75 active:scale-95"
-              >
-                <SkipForward className="h-3.5 w-3.5" aria-hidden="true" />
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setMuted((m) => !m)}
-              title={muted ? tr('Washa Sauti', 'Unmute') : tr('Zima Sauti', 'Mute')}
-              aria-label={muted ? tr('Washa Sauti', 'Unmute') : tr('Zima Sauti', 'Mute')}
-              className="flex h-8.5 w-8.5 items-center justify-center rounded-full bg-black/50 text-white/90 backdrop-blur-md ring-1 ring-white/20 transition-colors hover:bg-black/75"
-            >
-              {muted ? (
-                <VolumeX className="h-4 w-4 text-rose-400" aria-hidden="true" />
-              ) : (
-                <Volume2 className="h-4 w-4 text-emerald-400" aria-hidden="true" />
-              )}
-            </button>
-
-            {activePost && (
-              <button
-                type="button"
-                onClick={() => setSettingsVideoId(activePost.id)}
-                title={tr('Mipangilio ya TikTok', 'TikTok Settings')}
-                aria-label={tr('Mipangilio ya TikTok', 'TikTok Settings')}
-                className="hidden h-8.5 w-8.5 items-center justify-center rounded-full bg-black/50 text-white/90 backdrop-blur-md ring-1 ring-white/20 transition-colors hover:bg-black/75 sm:flex"
-              >
-                <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
-              </button>
-            )}
-
             <button
               type="button"
               onClick={() => {
@@ -1711,11 +2108,117 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                 }
                 setUploadOpen(true);
               }}
+              title={tr('Pakia video au picha', 'Upload video or photo')}
               aria-label={tr('Pakia video au picha', 'Create post')}
-              className="inline-flex h-8.5 items-center gap-1 rounded-full bg-gradient-to-r from-[#FE2C55] to-[#E11D48] px-2.5 text-xs font-extrabold text-white shadow-[0_4px_14px_rgba(254,44,85,0.45)] transition-transform hover:scale-[1.03] active:scale-95"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/60 text-white drop-shadow transition-transform hover:scale-105 active:scale-95"
             >
-              <Plus className="h-4 w-4 stroke-[2.8]" aria-hidden="true" />
-              <span className="hidden sm:inline">{tr('Pakia', 'Create')}</span>
+              <Plus className="h-4.5 w-4.5 stroke-[2.5]" aria-hidden="true" />
+            </button>
+          </div>
+
+          <div className="pointer-events-auto flex min-w-0 flex-1 items-center justify-center gap-3.5 overflow-x-auto px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {(
+              [
+                { id: 'mix', label: tr('Mix', 'Mix') },
+                { id: 'foryou', label: tr('Mpya', 'For You') },
+                {
+                  id: 'following',
+                  label: tr('Wanaofuatwa', 'Following'),
+                  hasDot: Object.values(followingByAuthor).some(Boolean),
+                },
+                { id: 'saved', label: tr('Hifadhi', 'Saved') },
+                ...(ownPrivateCount > 0
+                  ? [
+                      {
+                        id: 'private' as const,
+                        label: tr(`Binafsi (${ownPrivateCount})`, `Private (${ownPrivateCount})`),
+                      },
+                    ]
+                  : []),
+              ] satisfies readonly {
+                id: 'mix' | 'foryou' | 'following' | 'saved' | 'private';
+                label: string;
+                hasDot?: boolean;
+              }[]
+            ).map((mode) => {
+              const active = feedMode === mode.id;
+              return (
+                <button
+                  key={mode.id}
+                  type="button"
+                  onClick={() => {
+                    if (mode.id === 'mix' && feedMode === 'mix') {
+                      handleReshuffleMix();
+                      return;
+                    }
+                    setFeedMode(mode.id);
+                    setActiveIndex(0);
+                    feedScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
+                  }}
+                  className={`relative flex flex-col items-center py-1 text-[13px] whitespace-nowrap drop-shadow transition-colors sm:text-sm ${
+                    active ? 'font-extrabold text-white' : 'font-semibold text-white/60 hover:text-white/90'
+                  }`}
+                >
+                  <span className="relative inline-flex items-center">
+                    {mode.label}
+                    {mode.hasDot && (
+                      <span
+                        className="ml-0.5 -mt-2.5 h-1.5 w-1.5 rounded-full bg-[#FE2C55]"
+                        aria-hidden="true"
+                      />
+                    )}
+                  </span>
+                  <span
+                    className={`mt-1 h-[2.5px] rounded-full transition-all ${
+                      active ? 'w-5 bg-white' : 'w-0 bg-transparent'
+                    }`}
+                  />
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="pointer-events-auto flex shrink-0 items-center gap-2">
+            {activePost && !(activePost.mediaType === 'photo' && !activePost.audioUrl) && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleTogglePlayPause(activePost)}
+                  title={pausedByTap ? tr('Cheza Video', 'Play Video') : tr('Simamisha Video', 'Pause Video')}
+                  aria-label={pausedByTap ? tr('Cheza Video', 'Play Video') : tr('Simamisha Video', 'Pause Video')}
+                  className="flex h-8 w-8 items-center justify-center text-white/90 drop-shadow transition-transform hover:text-white active:scale-90"
+                >
+                  {pausedByTap ? (
+                    <Play className="h-4.5 w-4.5 fill-white" aria-hidden="true" />
+                  ) : (
+                    <Pause className="h-4.5 w-4.5 fill-white" aria-hidden="true" />
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setMuted((m) => !m)}
+                  title={muted ? tr('Washa Sauti', 'Unmute') : tr('Zima Sauti', 'Mute')}
+                  aria-label={muted ? tr('Washa Sauti', 'Unmute') : tr('Zima Sauti', 'Mute')}
+                  className="flex h-8 w-8 items-center justify-center drop-shadow transition-transform active:scale-90"
+                >
+                  {muted ? (
+                    <VolumeX className="h-5 w-5 text-rose-400" aria-hidden="true" />
+                  ) : (
+                    <Volume2 className="h-5 w-5 text-white/90 hover:text-white" aria-hidden="true" />
+                  )}
+                </button>
+              </>
+            )}
+
+            <button
+              type="button"
+              onClick={() => openSettingsModal(activePost?.id || null)}
+              title={tr('Mipangilio Yote ya Video', 'All Video Settings')}
+              aria-label={tr('Mipangilio Yote ya Video', 'All Video Settings')}
+              className="flex h-8 w-8 items-center justify-center text-white/90 drop-shadow transition-transform hover:text-white active:scale-90"
+            >
+              <Settings className="h-5 w-5" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -1829,19 +2332,24 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
         /* Full-Screen Vertical Snap Feed Container */
         <div
           ref={feedScrollRef}
+          onScroll={handleFeedScroll}
           className="h-full w-full snap-y snap-mandatory overflow-y-scroll scroll-smooth [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
           {visibleVideos.map((video, idx) => {
             const isActive = idx === activeIndex;
-            const isPhotoMode = video.mediaType === 'photo' && (video.photoUrls?.length || 0) > 0;
+            const isPhotoMode = (video.mediaType === 'photo' || !video.videoUrl) && (video.photoUrls?.length || 0) > 0;
+            const isSilentPhoto = isPhotoMode && !video.audioUrl;
             const photoList = video.photoUrls || [];
             const activePhotoIdx = Math.min(
               photoSlideByVideoId[video.id] || 0,
               Math.max(0, photoList.length - 1)
             );
-            const inactivePosterSrc = isPhotoMode
+            const rawInactivePosterSrc = isPhotoMode
               ? photoList[0] || video.thumbnailUrl || ''
               : video.thumbnailUrl || '';
+            const inactivePosterSrc = rawInactivePosterSrc
+              ? optimizeCloudinaryPhotoUrl(rawInactivePosterSrc, { dataSaver: dataSaverMode })
+              : '';
             const isLiked = likedVideoIds.has(video.id);
             const isBookmarked = bookmarkedIds.has(video.id);
             const isFollowing = Boolean(followingByAuthor[video.authorId]);
@@ -1878,7 +2386,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                   />
                 )}
 
-                {/* Authentic TikTok Mobile Portrait Container (edge-to-edge on Phone, 9:16 mobile frame on PC) */}
+                {/* Authentic Mobile Portrait Container (edge-to-edge on Phone, 9:16 mobile frame on PC) */}
                 <div
                   className={
                     isMobilePortraitFrame
@@ -1886,12 +2394,21 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                       : 'relative h-full w-full overflow-hidden bg-black'
                   }
                 >
-                {/* Full-Screen Media Stage: ONLY active slide opens video/audio stream (Okoa Bando!) */}
+                {/* Full-Screen Media Stage: Long-press opens Quick Options Sheet; active slide streams only */}
                 <div
                   onClick={(e) => handleStagePointerClick(video, e)}
+                  onPointerDown={(e) => handleStagePointerDown(video, e)}
+                  onPointerMove={handleStagePointerMove}
+                  onPointerUp={clearLongPressTimer}
+                  onPointerCancel={clearLongPressTimer}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    clearLongPressTimer();
+                    setLongPressSheetVideo(video);
+                  }}
                   onTouchStart={handleStageTouchStart}
                   onTouchEnd={(e) => handleStageTouchEnd(video, e)}
-                  className="relative h-full w-full cursor-pointer"
+                  className="relative h-full w-full cursor-pointer touch-pan-y"
                 >
                   {!isActive ? (
                     /* Inactive Slide Placeholder: Zero video/audio network requests until swiped into view */
@@ -1910,27 +2427,21 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                           <VideoIcon className="h-12 w-12 text-white/20" aria-hidden="true" />
                         </div>
                       )}
-                      <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/25">
-                        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-black/50 text-white/90 backdrop-blur-xs ring-1 ring-white/25">
-                          <Play className="ml-0.5 h-6 w-6 fill-white/90" aria-hidden="true" />
+                      {!isPhotoMode && (
+                        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/20">
+                          <div className="flex h-13 w-13 items-center justify-center rounded-full bg-black/45 text-white/90">
+                            <Play className="ml-0.5 h-6 w-6 fill-white/90" aria-hidden="true" />
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   ) : isPhotoMode ? (
                     <>
-                      {/* Blurred Ambient Backdrop when Contain mode */}
-                      {fitMode === 'contain' && photoList[activePhotoIdx] && (
-                        <img
-                          src={photoList[activePhotoIdx]}
-                          alt=""
-                          aria-hidden="true"
-                          className="absolute inset-0 h-full w-full scale-110 object-cover opacity-35 blur-2xl"
-                        />
-                      )}
-
-                      {/* Full-Screen Edge-to-Edge Active Photo */}
+                      {/* Crisp Photo on Pure Black Stage (eco-optimized when Data Saver is ON) */}
                       <img
-                        src={photoList[activePhotoIdx]}
+                        src={optimizeCloudinaryPhotoUrl(photoList[activePhotoIdx], {
+                          dataSaver: dataSaverMode,
+                        })}
                         alt={video.caption || video.authorName}
                         className={`relative z-[1] h-full w-full transition-opacity duration-300 ${
                           fitMode === 'cover' ? 'object-cover' : 'object-contain'
@@ -1942,19 +2453,14 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                         <audio
                           key={`audio-${video.id}`}
                           ref={(el) => {
-                            const prev = audioRefs.current[video.id];
-                            if (!el && prev) {
-                              prev.pause();
-                              prev.removeAttribute('src');
-                              prev.load();
-                            }
-                            audioRefs.current[video.id] = el;
+                            if (el) audioRefs.current[video.id] = el;
+                            else delete audioRefs.current[video.id];
                           }}
                           src={video.audioUrl}
                           autoPlay={!pausedByTap && !uploadOpen}
                           loop
                           muted={muted}
-                          preload="auto"
+                          preload={dataSaverMode ? 'metadata' : 'auto'}
                         />
                       )}
 
@@ -2010,119 +2516,227 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                     </>
                   ) : (
                     <>
-                      <video
-                        key={video.id}
-                        ref={(el) => {
-                          const prev = videoRefs.current[video.id];
-                          if (!el && prev) {
-                            prev.pause();
-                            prev.removeAttribute('src');
-                            prev.load();
-                          }
-                          videoRefs.current[video.id] = el;
-                        }}
-                        src={video.videoUrl}
-                        poster={video.thumbnailUrl || undefined}
-                        autoPlay={!pausedByTap && !uploadOpen}
-                        playsInline
-                        loop={!autoScrollNext || visibleVideos.length <= 1}
-                        preload="auto"
-                        muted={muted || Boolean(video.audioUrl)}
-                        onEnded={() => {
-                          if (autoScrollNext && visibleVideos.length > 1) {
-                            const nextIdx =
-                              activeIndex + 1 < visibleVideos.length ? activeIndex + 1 : 0;
-                            scrollToIndex(nextIdx);
-                          } else {
-                            const el = videoRefs.current[video.id];
-                            if (el) {
-                              el.currentTime = 0;
-                              void el.play().catch(() => {});
-                            }
-                          }
-                        }}
-                        onTimeUpdate={(e) => {
-                          const el = e.currentTarget;
-                          setProgressById((prev) => ({
-                            ...prev,
-                            [video.id]: {
-                              current: el.currentTime || 0,
-                              duration: Number.isFinite(el.duration)
-                                ? el.duration
-                                : video.durationSec || 0,
-                            },
-                          }));
-                        }}
-                        className={`h-full w-full ${
-                          fitMode === 'cover' ? 'object-cover' : 'object-contain'
-                        }`}
-                      />
+                      {(() => {
+                        const preferTranscodeFirst = dataSaverMode || needsBrowserVideoTranscode(video.videoUrl);
+                        const useTranscodedUrl = transcodeToggledVideoIds[video.id]
+                          ? !preferTranscodeFirst
+                          : preferTranscodeFirst;
+                        const playableVideoUrl = useTranscodedUrl
+                          ? optimizeCloudinaryVideoPlaybackUrl(video.videoUrl, {
+                              dataSaver: dataSaverMode,
+                            })
+                          : video.videoUrl;
+                        return (
+                          <video
+                            key={`${video.id}-${useTranscodedUrl ? (dataSaverMode ? 'eco' : 'opt') : 'raw'}`}
+                            ref={(el) => {
+                              if (el) videoRefs.current[video.id] = el;
+                              else delete videoRefs.current[video.id];
+                            }}
+                            src={playableVideoUrl}
+                            poster={video.thumbnailUrl || undefined}
+                            autoPlay={!pausedByTap && !uploadOpen && !settingsOpen}
+                            playsInline
+                            loop={false}
+                            preload={dataSaverMode ? 'metadata' : 'auto'}
+                            muted={muted || Boolean(video.audioUrl)}
+                            onLoadStart={() => setBufferingVideoId(video.id)}
+                            onLoadedData={(e) => {
+                              setBufferingVideoId((curr) => (curr === video.id ? null : curr));
+                              if (isActive && !pausedByTapRef.current && !uploadOpen && !settingsOpen) {
+                                void tryPlayMediaElement(e.currentTarget, video.id);
+                              }
+                            }}
+                            onCanPlay={(e) => {
+                              setBufferingVideoId((curr) => (curr === video.id ? null : curr));
+                              if (isActive && !pausedByTapRef.current && !uploadOpen && !settingsOpen) {
+                                void tryPlayMediaElement(e.currentTarget, video.id);
+                              }
+                            }}
+                            onWaiting={() => {
+                              if (isActive && !pausedByTap) setBufferingVideoId(video.id);
+                            }}
+                            onPlaying={() => {
+                              setBufferingVideoId((curr) => (curr === video.id ? null : curr));
+                              setStalledPlayPromptId((curr) => (curr === video.id ? null : curr));
+                              setEndedOutroVideoId((curr) => (curr === video.id ? null : curr));
+                            }}
+                            onError={() => {
+                              const altUrl = useTranscodedUrl
+                                ? video.videoUrl
+                                : optimizeCloudinaryVideoPlaybackUrl(video.videoUrl, {
+                                    dataSaver: dataSaverMode,
+                                  });
+                              if (!transcodeToggledVideoIds[video.id] && altUrl !== playableVideoUrl) {
+                                setTranscodeToggledVideoIds((prev) => ({
+                                  ...prev,
+                                  [video.id]: true,
+                                }));
+                              } else {
+                                setBufferingVideoId((curr) => (curr === video.id ? null : curr));
+                                setStalledPlayPromptId(video.id);
+                              }
+                            }}
+                            onEnded={() => {
+                              if (outroTimerRef.current) {
+                                window.clearTimeout(outroTimerRef.current);
+                              }
+                              setEndedOutroVideoId(video.id);
+                              outroTimerRef.current = window.setTimeout(() => {
+                                outroTimerRef.current = null;
+                                setEndedOutroVideoId((curr) => (curr === video.id ? null : curr));
+                                if (autoScrollNext && visibleVideos.length > 1) {
+                                  const nextIdx =
+                                    activeIndexRef.current + 1 < visibleVideos.length
+                                      ? activeIndexRef.current + 1
+                                      : 0;
+                                  scrollToIndex(nextIdx);
+                                } else {
+                                  const el = videoRefs.current[video.id];
+                                  if (el) {
+                                    el.currentTime = 0;
+                                    void el.play().catch(() => {});
+                                  }
+                                }
+                              }, 2000);
+                            }}
+                            onTimeUpdate={(e) => {
+                              const el = e.currentTarget;
+                              setProgressById((prev) => ({
+                                ...prev,
+                                [video.id]: {
+                                  current: el.currentTime || 0,
+                                  duration: Number.isFinite(el.duration)
+                                    ? el.duration
+                                    : video.durationSec || 0,
+                                },
+                              }));
+                            }}
+                            className={`h-full w-full ${
+                              fitMode === 'cover' ? 'object-cover' : 'object-contain'
+                            }`}
+                          />
+                        );
+                      })()}
                       {video.audioUrl && (
                         <audio
                           key={`audio-${video.id}`}
                           ref={(el) => {
-                            const prev = audioRefs.current[video.id];
-                            if (!el && prev) {
-                              prev.pause();
-                              prev.removeAttribute('src');
-                              prev.load();
-                            }
-                            audioRefs.current[video.id] = el;
+                            if (el) audioRefs.current[video.id] = el;
+                            else delete audioRefs.current[video.id];
                           }}
                           src={video.audioUrl}
-                          autoPlay={!pausedByTap && !uploadOpen}
+                          autoPlay={!pausedByTap && !uploadOpen && !settingsOpen}
                           loop
                           muted={muted}
-                          preload="auto"
+                          preload={dataSaverMode ? 'metadata' : 'auto'}
                         />
                       )}
                     </>
                   )}
 
-                  {/* Subtle Brand Corner Watermark & Mode Tag */}
-                  {!clearScreenMode && (
-                    <div className="pointer-events-none absolute top-16 left-3 z-10 flex flex-wrap items-center gap-1.5 sm:left-4">
-                      <div className="flex items-center gap-1.5 rounded-lg bg-black/40 px-2 py-1 backdrop-blur-[2px] ring-1 ring-white/15">
-                        <span className="flex h-4 w-4 items-center justify-center rounded bg-gradient-to-br from-[#F59E0B] to-[#D97706] text-[#0E2640]">
-                          {isPhotoMode ? (
-                            <ImageIcon className="h-2.5 w-2.5" aria-hidden="true" />
-                          ) : (
-                            <VideoIcon className="h-2.5 w-2.5" aria-hidden="true" />
-                          )}
-                        </span>
-                        <span className="text-[10px] font-extrabold tracking-wide text-white/95">
-                          Malosha Forums
-                        </span>
+                  {/* End-of-Video Official Malosha Forums Outro Label */}
+                  {isActive && !isPhotoMode && endedOutroVideoId === video.id && (
+                    <div className="absolute inset-0 z-25 flex flex-col items-center justify-center bg-gradient-to-b from-[#07182B]/90 via-[#0D2643]/92 to-[#061322]/95 px-6 text-center backdrop-blur-md">
+                      <div className="flex h-20 w-20 items-center justify-center rounded-full border-2 border-white/75 bg-[#0A1E33] shadow-[0_0_32px_rgba(251,191,36,0.3)] ring-2 ring-amber-400/60">
+                        <div className="flex flex-col items-center">
+                          <span className="flex h-6 w-8 items-center justify-center rounded-md bg-amber-400 text-[#0E2640]">
+                            <MessageCircle className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
+                          </span>
+                          <span className="mt-1 text-[9px] font-black tracking-wide text-white leading-none">
+                            MALOSHA
+                          </span>
+                          <span className="text-[7px] font-bold tracking-wider text-amber-300 leading-none">
+                            FORUMS
+                          </span>
+                        </div>
                       </div>
-
-                      {isPhotoMode && photoList.length > 1 && (
-                        <span className="rounded-lg bg-black/45 px-2 py-1 text-[10px] font-bold text-sky-200 backdrop-blur-[2px] ring-1 ring-white/15 tabular-nums">
-                          {activePhotoIdx + 1} / {photoList.length}
-                        </span>
-                      )}
-
-                      {video.isArchived && (
-                        <span className="inline-flex items-center gap-1 rounded-lg bg-rose-950/80 px-2 py-1 text-[10px] font-bold text-rose-200 ring-1 ring-rose-400/40">
-                          <Lock className="h-2.5 w-2.5" aria-hidden="true" />
-                          {tr('Binafsi', 'Private')}
-                        </span>
-                      )}
-
-                      {playbackSpeed !== 1 && !isPhotoMode && (
-                        <span className="rounded-lg bg-amber-500/85 px-1.5 py-0.5 text-[10px] font-extrabold text-slate-950">
-                          {playbackSpeed}x
-                        </span>
-                      )}
+                      <p className="mt-3 font-display text-lg font-extrabold tracking-tight text-white drop-shadow">
+                        @malosha forums
+                      </p>
+                      <div className="mt-2 flex h-1 w-28 overflow-hidden rounded-full">
+                        <span className="flex-1 bg-[#1EB53A]" />
+                        <span className="w-2 bg-[#FCD116]" />
+                        <span className="w-4 bg-[#0F172A]" />
+                        <span className="w-2 bg-[#FCD116]" />
+                        <span className="flex-1 bg-[#00A3DD]" />
+                      </div>
+                      <p className="mt-2 text-xs font-semibold text-sky-200/90">
+                        MALOSHA FORUMS TANZANIA
+                      </p>
+                      <span className="mt-3 rounded-full bg-white/15 px-3 py-1 text-[10px] font-bold text-white/90">
+                        {autoScrollNext && visibleVideos.length > 1
+                          ? tr('Inafuata video nyingine...', 'Up next...')
+                          : tr('Gusa kutazama tena', 'Tap to replay')}
+                      </span>
                     </div>
                   )}
 
-                  {/* Center Play Icon When Paused */}
-                  {isActive && pausedByTap && (
-                    <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
-                      <div className="flex h-16 w-16 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm ring-1 ring-white/25">
-                        <Play className="ml-1 h-8 w-8 fill-white" aria-hidden="true" />
+                  {/* Minimal Status Badges Only (Photo Count / Private / Speed) */}
+                  {!clearScreenMode &&
+                    ((isPhotoMode && photoList.length > 1) ||
+                      video.isArchived ||
+                      (playbackSpeed !== 1 && !isPhotoMode)) && (
+                      <div className="pointer-events-none absolute top-16 left-3 z-10 flex items-center gap-2 sm:left-4">
+                        {isPhotoMode && photoList.length > 1 && (
+                          <span className="rounded-md bg-black/55 px-2 py-0.5 text-[11px] font-bold text-white tabular-nums">
+                            {activePhotoIdx + 1} / {photoList.length}
+                          </span>
+                        )}
+
+                        {video.isArchived && (
+                          <span className="inline-flex items-center gap-1 rounded-md bg-rose-950/85 px-2 py-0.5 text-[10px] font-bold text-rose-200">
+                            <Lock className="h-2.5 w-2.5" aria-hidden="true" />
+                            {tr('Binafsi', 'Private')}
+                          </span>
+                        )}
+
+                        {playbackSpeed !== 1 && !isPhotoMode && (
+                          <span className="rounded-md bg-amber-400 px-1.5 py-0.5 text-[10px] font-extrabold text-slate-950">
+                            {playbackSpeed}x
+                          </span>
+                        )}
                       </div>
+                    )}
+
+                  {/* Buffering Spinner While Stream Starts */}
+                  {isActive && !isPhotoMode && bufferingVideoId === video.id && !pausedByTap && (
+                    <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+                      <Loader2 className="h-8 w-8 animate-spin text-white/85 drop-shadow" aria-hidden="true" />
                     </div>
+                  )}
+
+                  {/* Center Play Button Overlay When Paused or Tap Needed (Videos or Audio-Photos Only) */}
+                  {isActive &&
+                    !isSilentPhoto &&
+                    endedOutroVideoId !== video.id &&
+                    ((!isPhotoMode && (pausedByTap || stalledPlayPromptId === video.id)) ||
+                      (isPhotoMode && Boolean(video.audioUrl) && pausedByTap)) && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (pausedByTapRef.current) {
+                          handleTogglePlayPause(video);
+                        } else {
+                          const vidEl = videoRefs.current[video.id];
+                          const audEl = audioRefs.current[video.id];
+                          setStalledPlayPromptId(null);
+                          if (vidEl) {
+                            vidEl.muted = muted || Boolean(video.audioUrl);
+                            void vidEl.play().catch(() => {});
+                          }
+                          if (audEl) {
+                            audEl.muted = muted;
+                            void audEl.play().catch(() => {});
+                          }
+                        }
+                      }}
+                      aria-label={tr('Cheza video', 'Play video')}
+                      className="absolute inset-0 z-15 flex items-center justify-center focus:outline-none"
+                    >
+                      <Play className="ml-1 h-14 w-14 fill-white/80 text-white/80 drop-shadow-[0_4px_16px_rgba(0,0,0,0.75)] transition-transform active:scale-95" aria-hidden="true" />
+                    </button>
                   )}
 
                   {/* Double-Tap Heart Animation */}
@@ -2139,6 +2753,47 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                     </div>
                   )}
 
+                  {/* Live Captions & Translation Overlay */}
+                  {isActive && captionsOverlayEnabled && !clearScreenMode && (
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="absolute right-20 bottom-28 left-3.5 z-25 max-w-md rounded-xl bg-black/75 px-3 py-2 text-xs text-white shadow-lg ring-1 ring-white/20 backdrop-blur-md sm:right-24 sm:left-5"
+                    >
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold tracking-wide text-sky-300 uppercase">
+                          <Languages className="h-3 w-3" aria-hidden="true" />
+                          {captionLang === 'sw' ? tr('Maelezo (SW)', 'Captions (SW)') : 'Captions (EN)'}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setCaptionLang((l) => (l === 'sw' ? 'en' : 'sw'))}
+                            className="rounded bg-white/15 px-1.5 py-0.5 text-[10px] font-bold text-white hover:bg-white/25"
+                          >
+                            {captionLang === 'sw' ? 'EN' : 'SW'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCaptionsOverlayEnabled(false)}
+                            aria-label={tr('Funga', 'Close')}
+                            className="rounded p-0.5 text-white/70 hover:text-white"
+                          >
+                            <X className="h-3 w-3" aria-hidden="true" />
+                          </button>
+                        </div>
+                      </div>
+                      <p className="leading-snug font-medium text-white/95">
+                        {video.caption
+                          ? captionLang === 'en'
+                            ? `${video.caption} — Shared by ${video.authorName} on Malosha Forums.`
+                            : video.caption
+                          : captionLang === 'en'
+                            ? `Now playing ${video.soundName || 'original audio'} by ${video.authorName}.`
+                            : `Inacheza: ${video.soundName || 'Sauti halisi'} ya ${video.authorName}.`}
+                      </p>
+                    </div>
+                  )}
+
                   {/* Bottom Readability Gradient */}
                   {!clearScreenMode && (
                     <div
@@ -2148,11 +2803,11 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                   )}
                 </div>
 
-                {/* TikTok Right Vertical Action Rail */}
+                {/* Clean Right Vertical Action Rail */}
                 {!clearScreenMode && (
-                  <div className="absolute right-2 bottom-10 z-20 flex flex-col items-center gap-3 sm:right-5 sm:bottom-12">
-                    {/* Creator Avatar + Quick Follow '+' Badge */}
-                    <div className="relative mb-1">
+                  <div className="absolute right-2.5 bottom-6 z-20 flex flex-col items-center gap-3.5 sm:right-4 sm:bottom-8">
+                    {/* Creator Avatar + Overlapping Red '+' Follow Badge */}
+                    <div className="relative mb-1.5">
                       <button
                         type="button"
                         onClick={() =>
@@ -2180,14 +2835,14 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                           aria-label={
                             isFollowing ? tr('Acha kufuatilia', 'Unfollow') : tr('Fuatilia', 'Follow')
                           }
-                          className={`absolute -bottom-2 left-1/2 flex h-6 w-6 -translate-x-1/2 items-center justify-center rounded-full shadow-md ring-2 ring-black transition-transform hover:scale-110 ${
+                          className={`absolute -bottom-2 left-1/2 flex h-5 w-5 -translate-x-1/2 items-center justify-center rounded-full shadow-md transition-transform hover:scale-110 ${
                             isFollowing ? 'bg-emerald-500 text-white' : 'bg-[#FE2C55] text-white'
                           }`}
                         >
                           {isFollowing ? (
-                            <Check className="h-3.5 w-3.5 stroke-[3]" aria-hidden="true" />
+                            <Check className="h-3 w-3 stroke-[3]" aria-hidden="true" />
                           ) : (
-                            <Plus className="h-3.5 w-3.5 stroke-[3]" aria-hidden="true" />
+                            <Plus className="h-3 w-3 stroke-[3]" aria-hidden="true" />
                           )}
                         </button>
                       )}
@@ -2201,19 +2856,17 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                       className="group flex min-w-[44px] flex-col items-center gap-0.5 focus:outline-none"
                       aria-label={tr('Penda chapisho', 'Like post')}
                     >
-                      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/35 backdrop-blur-xs transition-transform group-active:scale-125">
-                        <Heart
-                          className={`h-7 w-7 transition-colors drop-shadow ${
-                            !likesAllowed
-                              ? 'text-white/40'
-                              : isLiked
-                                ? 'fill-[#FE2C55] text-[#FE2C55]'
-                                : 'fill-white/10 text-white'
-                          }`}
-                          aria-hidden="true"
-                        />
-                      </span>
-                      <span className="text-[11px] font-bold text-white drop-shadow tabular-nums">
+                      <Heart
+                        className={`h-8 w-8 drop-shadow-[0_2px_8px_rgba(0,0,0,0.85)] transition-transform group-active:scale-125 ${
+                          !likesAllowed
+                            ? 'text-white/40'
+                            : isLiked
+                              ? 'fill-[#FE2C55] text-[#FE2C55]'
+                              : 'fill-white text-white'
+                        }`}
+                        aria-hidden="true"
+                      />
+                      <span className="text-[11px] font-bold text-white drop-shadow-[0_1px_4px_rgba(0,0,0,0.95)] tabular-nums">
                         {!likesAllowed
                           ? tr('Zimezimwa', 'Off')
                           : showLikeCount
@@ -2229,21 +2882,21 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                       className="group flex min-w-[44px] flex-col items-center gap-0.5 focus:outline-none"
                       aria-label={tr('Maoni', 'Comments')}
                     >
-                      <span className="relative flex h-11 w-11 items-center justify-center rounded-full bg-black/35 backdrop-blur-xs transition-transform group-active:scale-110">
+                      <span className="relative flex items-center justify-center transition-transform group-active:scale-110">
                         <MessageCircle
-                          className={`h-7 w-7 drop-shadow ${
-                            commentsAllowed ? 'fill-white/15 text-white' : 'text-white/50'
+                          className={`h-8 w-8 drop-shadow-[0_2px_8px_rgba(0,0,0,0.85)] ${
+                            commentsAllowed ? 'fill-white text-white' : 'text-white/50'
                           }`}
                           aria-hidden="true"
                         />
                         {!commentsAllowed && (
                           <Lock
-                            className="absolute right-1.5 bottom-1.5 h-3 w-3 text-rose-400"
+                            className="absolute -right-1 -bottom-0.5 h-3 w-3 text-rose-400"
                             aria-hidden="true"
                           />
                         )}
                       </span>
-                      <span className="text-[11px] font-bold text-white drop-shadow tabular-nums">
+                      <span className="text-[11px] font-bold text-white drop-shadow-[0_1px_4px_rgba(0,0,0,0.95)] tabular-nums">
                         {commentsAllowed
                           ? formatCompactCount(video.commentsCount)
                           : tr('Zimefungwa', 'Off')}
@@ -2257,17 +2910,15 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                       className="group flex min-w-[44px] flex-col items-center gap-0.5 focus:outline-none"
                       aria-label={tr('Hifadhi', 'Save')}
                     >
-                      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/35 backdrop-blur-xs transition-transform group-active:scale-110">
-                        <Bookmark
-                          className={`h-6.5 w-6.5 drop-shadow transition-colors ${
-                            isBookmarked
-                              ? 'fill-amber-400 text-amber-400'
-                              : 'fill-white/10 text-white'
-                          }`}
-                          aria-hidden="true"
-                        />
-                      </span>
-                      <span className="text-[11px] font-bold text-white drop-shadow">
+                      <Bookmark
+                        className={`h-7.5 w-7.5 drop-shadow-[0_2px_8px_rgba(0,0,0,0.85)] transition-transform group-active:scale-110 ${
+                          isBookmarked
+                            ? 'fill-amber-400 text-amber-400'
+                            : 'fill-white text-white'
+                        }`}
+                        aria-hidden="true"
+                      />
+                      <span className="text-[11px] font-bold text-white drop-shadow-[0_1px_4px_rgba(0,0,0,0.95)]">
                         {isBookmarked ? tr('Imehifadhiwa', 'Saved') : tr('Hifadhi', 'Save')}
                       </span>
                     </button>
@@ -2280,20 +2931,17 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                       className="group flex min-w-[44px] flex-col items-center gap-0.5 focus:outline-none disabled:opacity-75"
                       aria-label={tr('Pakua na watermark', 'Download with watermark')}
                     >
-                      <span
-                        className={`flex h-11 w-11 items-center justify-center rounded-full bg-black/45 backdrop-blur-xs transition-transform group-active:scale-110 ${
-                          downloadAllowed ? 'ring-1 ring-amber-400/55' : 'opacity-50 ring-1 ring-white/20'
-                        }`}
-                      >
-                        {downloadingId === video.id ? (
-                          <Loader2 className="h-5.5 w-5.5 animate-spin text-amber-400" aria-hidden="true" />
-                        ) : !downloadAllowed ? (
-                          <Lock className="h-5 w-5 text-white/70" aria-hidden="true" />
-                        ) : (
-                          <Download className="h-5.5 w-5.5 text-amber-300 drop-shadow" aria-hidden="true" />
-                        )}
-                      </span>
-                      <span className="text-[11px] font-bold text-amber-200 drop-shadow">
+                      {downloadingId === video.id ? (
+                        <Loader2 className="h-7 w-7 animate-spin text-amber-400 drop-shadow" aria-hidden="true" />
+                      ) : !downloadAllowed ? (
+                        <Lock className="h-7 w-7 text-white/55 drop-shadow" aria-hidden="true" />
+                      ) : (
+                        <Download
+                          className="h-7 w-7 text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.85)] transition-transform group-active:scale-110"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <span className="text-[11px] font-bold text-white drop-shadow-[0_1px_4px_rgba(0,0,0,0.95)]">
                         {downloadingId === video.id
                           ? tr('Inapakua...', 'Saving...')
                           : downloadAllowed
@@ -2309,10 +2957,11 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                       className="group flex min-w-[44px] flex-col items-center gap-0.5 focus:outline-none"
                       aria-label={tr('Shiriki', 'Share')}
                     >
-                      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/35 backdrop-blur-xs transition-transform group-active:scale-110">
-                        <Share2 className="h-6 w-6 text-white drop-shadow" aria-hidden="true" />
-                      </span>
-                      <span className="text-[11px] font-bold text-white drop-shadow tabular-nums">
+                      <Share2
+                        className="h-7 w-7 text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.85)] transition-transform group-active:scale-110"
+                        aria-hidden="true"
+                      />
+                      <span className="text-[11px] font-bold text-white drop-shadow-[0_1px_4px_rgba(0,0,0,0.95)] tabular-nums">
                         {video.sharesCount > 0
                           ? formatCompactCount(video.sharesCount)
                           : tr('Shiriki', 'Share')}
@@ -2322,38 +2971,41 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                     {/* More / Settings Sheet */}
                     <button
                       type="button"
-                      onClick={() => setSettingsVideoId(video.id)}
-                      className="group flex min-w-[44px] flex-col items-center gap-0.5 focus:outline-none"
+                      onClick={() => openSettingsModal(video.id)}
+                      className="group flex min-w-[44px] flex-col items-center focus:outline-none"
                       aria-label={tr('Mipangilio ya Chapisho', 'Post Settings')}
                     >
-                      <span className="flex h-10 w-10 items-center justify-center rounded-full bg-black/45 ring-1 ring-white/20 backdrop-blur-xs transition-transform group-active:scale-110">
-                        <MoreHorizontal className="h-5 w-5 text-white" aria-hidden="true" />
-                      </span>
-                    </button>
-
-                    {/* Rotating TikTok Audio Vinyl Disc (Click to Use Sound!) */}
-                    <button
-                      type="button"
-                      onClick={() => setSoundDrawerVideo(video)}
-                      title={tr('Tumia Sauti / Muziki Huu', 'Use This Sound')}
-                      aria-label={tr('Tumia Sauti / Muziki Huu', 'Use This Sound')}
-                      className={`mt-0.5 flex h-11 w-11 items-center justify-center rounded-full border-[6px] border-slate-900 bg-gradient-to-br from-slate-700 to-slate-950 p-1 shadow-lg ring-1 ring-white/30 transition-transform hover:scale-110 ${
-                        isActive && !pausedByTap ? 'animate-malosha-spin' : ''
-                      }`}
-                    >
-                      <Avatar
-                        name={video.authorName}
-                        photoURL={video.authorPhoto}
-                        size="sm"
-                        uid={video.authorId}
+                      <MoreHorizontal
+                        className="h-6 w-6 text-white/90 drop-shadow-[0_2px_8px_rgba(0,0,0,0.85)] transition-transform group-active:scale-110"
+                        aria-hidden="true"
                       />
                     </button>
+
+                    {/* Rotating Vinyl Disc (Only shown for Video or Photo+Music posts) */}
+                    {!isSilentPhoto && (
+                      <button
+                        type="button"
+                        onClick={() => setSoundDrawerVideo(video)}
+                        title={tr('Tumia Sauti / Muziki Huu', 'Use This Sound')}
+                        aria-label={tr('Tumia Sauti / Muziki Huu', 'Use This Sound')}
+                        className={`mt-0.5 flex h-10 w-10 items-center justify-center rounded-full border-[5px] border-neutral-800 bg-neutral-950 p-0.5 shadow-lg ring-1 ring-white/25 transition-transform hover:scale-110 ${
+                          isActive && !pausedByTap ? 'animate-malosha-spin' : ''
+                        }`}
+                      >
+                        <Avatar
+                          name={video.authorName}
+                          photoURL={video.authorPhoto}
+                          size="sm"
+                          uid={video.authorId}
+                        />
+                      </button>
+                    )}
                   </div>
                 )}
 
-                {/* TikTok Bottom-Left Creator Info, Caption, Tags, Auto-Reply Badge & Audio Track */}
+                {/* Clean Bottom-Left Creator Info, Caption, Inline Tags & Sound */}
                 {!clearScreenMode && (
-                  <div className="pointer-events-none absolute right-20 bottom-6 left-3 z-20 max-w-xl space-y-2 sm:right-24 sm:bottom-7 sm:left-6">
+                  <div className="pointer-events-none absolute right-20 bottom-5 left-3.5 z-20 max-w-xl space-y-1.5 sm:right-24 sm:bottom-6 sm:left-5">
                     <div className="pointer-events-auto flex flex-wrap items-center gap-1.5">
                       <button
                         type="button"
@@ -2364,26 +3016,26 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                             photoURL: video.authorPhoto,
                           })
                         }
-                        className="text-sm font-extrabold text-white drop-shadow hover:underline sm:text-base"
+                        className="text-sm font-extrabold text-white drop-shadow-[0_1px_6px_rgba(0,0,0,0.9)] hover:underline sm:text-[15px]"
                       >
-                        @{video.authorName}
+                        {video.authorName}
                       </button>
                       <AuthorVerificationBadge uid={video.authorId} size="sm" />
                       {video.autoReplyEnabled && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/25 px-2 py-0.5 text-[10px] font-bold text-emerald-200 ring-1 ring-emerald-400/40 backdrop-blur-xs">
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-300 drop-shadow">
                           <Bot className="h-3 w-3" aria-hidden="true" />
                           <span>Auto-reply</span>
                         </span>
                       )}
                       {video.createdAt && (
-                        <span className="text-[11px] font-medium text-white/75 drop-shadow">
+                        <span className="text-[11px] font-medium text-white/70 drop-shadow">
                           · {formatTime(video.createdAt)}
                         </span>
                       )}
                     </div>
 
                     {video.caption && (
-                      <div className="pointer-events-auto text-xs leading-relaxed text-white/95 drop-shadow sm:text-sm">
+                      <div className="pointer-events-auto text-xs leading-snug text-white/95 drop-shadow-[0_1px_5px_rgba(0,0,0,0.9)] sm:text-[13px]">
                         <p className={captionExpanded ? '' : 'line-clamp-2'}>{video.caption}</p>
                         {captionLong && (
                           <button
@@ -2394,23 +3046,18 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                                 [video.id]: !captionExpanded,
                               }))
                             }
-                            className="mt-0.5 text-[11px] font-bold text-amber-300 hover:underline"
+                            className="mt-0.5 text-[11px] font-bold text-white/80 hover:underline"
                           >
-                            {captionExpanded ? tr('Funga', 'Less') : tr('Soma zaidi', 'More')}
+                            {captionExpanded ? tr('Funga', 'Less') : tr('zaidi', 'more')}
                           </button>
                         )}
                       </div>
                     )}
 
                     {video.tags.length > 0 && (
-                      <div className="pointer-events-auto flex flex-wrap gap-1.5">
+                      <div className="pointer-events-auto flex flex-wrap gap-x-2 gap-y-0.5 text-xs font-bold text-white/90 drop-shadow-[0_1px_5px_rgba(0,0,0,0.9)]">
                         {video.tags.map((tag) => (
-                          <span
-                            key={tag}
-                            className="rounded-md bg-white/15 px-2 py-0.5 text-[11px] font-bold text-sky-200 backdrop-blur-xs"
-                          >
-                            #{tag}
-                          </span>
+                          <span key={tag}>#{tag}</span>
                         ))}
                       </div>
                     )}
@@ -2426,36 +3073,53 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                               setPhotoSlideByVideoId((prev) => ({ ...prev, [video.id]: pIdx }))
                             }
                             aria-label={`Photo ${pIdx + 1}`}
-                            className={`h-2 rounded-full transition-all ${
+                            className={`h-1.5 rounded-full transition-all ${
                               pIdx === activePhotoIdx
-                                ? 'w-5 bg-white'
-                                : 'w-2 bg-white/45 hover:bg-white/75'
+                                ? 'w-4 bg-white'
+                                : 'w-1.5 bg-white/45 hover:bg-white/75'
                             }`}
                           />
                         ))}
                       </div>
                     )}
 
-                    <button
-                      type="button"
-                      onClick={() => setSoundDrawerVideo(video)}
-                      className="pointer-events-auto flex max-w-full items-center gap-2 rounded-full bg-black/30 px-2.5 py-1 text-xs font-semibold text-white/95 ring-1 ring-white/15 backdrop-blur-xs hover:bg-black/55"
-                    >
-                      <Music2 className="h-3.5 w-3.5 shrink-0 text-amber-300" aria-hidden="true" />
-                      <span className="truncate">
-                        {video.soundName}
-                        {video.audioUrl ? ` · ${tr('Muziki Unacheza', 'Music Attached')}` : ' · Malosha Forums'}
-                      </span>
-                    </button>
+                    {(!isSilentPhoto || Boolean(video.soundName)) && (
+                      <button
+                        type="button"
+                        onClick={() => setSoundDrawerVideo(video)}
+                        className="pointer-events-auto flex max-w-full items-center gap-1.5 pt-0.5 text-xs font-semibold text-white/90 drop-shadow-[0_1px_5px_rgba(0,0,0,0.9)] hover:text-white"
+                      >
+                        <Music2 className="h-3.5 w-3.5 shrink-0 text-white" aria-hidden="true" />
+                        <span className="truncate">
+                          {video.soundName || `Sauti Halisi - ${video.authorName}`}
+                        </span>
+                      </button>
+                    )}
                   </div>
                 )}
 
-                {/* Interactive Bottom Playback Scrubber Bar (Video Mode) */}
+                {/* Sleek Bottom Progress Scrubber + Compact Pause/Play */}
                 {isActive && !isPhotoMode && !clearScreenMode && (
-                  <div className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-2 px-1 py-0.5">
-                    <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-white/25">
+                  <div className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-2 px-2 pb-1 pt-2">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleTogglePlayPause(video);
+                      }}
+                      title={pausedByTap ? tr('Cheza', 'Play') : tr('Simamisha', 'Pause')}
+                      aria-label={pausedByTap ? tr('Cheza video', 'Play video') : tr('Simamisha video', 'Pause video')}
+                      className="flex h-6 w-6 shrink-0 items-center justify-center text-white/90 drop-shadow transition-transform hover:text-white active:scale-90"
+                    >
+                      {pausedByTap ? (
+                        <Play className="h-3.5 w-3.5 fill-white" aria-hidden="true" />
+                      ) : (
+                        <Pause className="h-3.5 w-3.5 fill-white" aria-hidden="true" />
+                      )}
+                    </button>
+                    <div className="relative h-[3px] flex-1 overflow-hidden rounded-full bg-white/25">
                       <div
-                        className="h-full rounded-full bg-gradient-to-r from-[#22D3EE] via-white to-[#FE2C55] transition-[width] duration-100"
+                        className="h-full rounded-full bg-white transition-[width] duration-100"
                         style={{ width: `${progressPct}%` }}
                       />
                       <input
@@ -2474,7 +3138,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                       />
                     </div>
                     {prog.duration > 0 && (
-                      <span className="pr-2 text-[9.5px] font-semibold text-white/75 tabular-nums">
+                      <span className="pr-1 text-[9.5px] font-semibold text-white/80 tabular-nums drop-shadow">
                         {formatDurationMMSS(prog.current)} / {formatDurationMMSS(prog.duration)}
                       </span>
                     )}
@@ -2487,7 +3151,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
         </div>
       )}
 
-      {/* TikTok Slide-Up Comments Drawer (Threaded + Creator Auto-Reply + Lock Support) */}
+      {/* Slide-Up Comments Drawer (Threaded + Creator Auto-Reply + Lock Support) */}
       {commentsVideoId && (
         <div
           className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-[2px] md:items-center"
@@ -2717,7 +3381,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
         </div>
       )}
 
-      {/* TikTok Sound / Music Drawer ("Use This Sound") */}
+      {/* Sound / Music Drawer ("Use This Sound") */}
       {soundDrawerVideo && (
         <div
           className="fixed inset-0 z-50 flex items-end justify-center bg-black/65 backdrop-blur-[2px] md:items-center"
@@ -2777,11 +3441,11 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
         </div>
       )}
 
-      {/* TikTok Settings & Creator Controls Sheet */}
-      {activeSettingsVideo && (
+      {/* Complete Video & Creator Settings Sheet (Always Accessible) */}
+      {(settingsOpen || Boolean(activeSettingsVideo)) && (
         <div
           className="fixed inset-0 z-50 flex items-end justify-center bg-black/65 backdrop-blur-[2px] md:items-center"
-          onClick={() => setSettingsVideoId(null)}
+          onClick={closeSettingsModal}
         >
           <div
             onClick={(e) => e.stopPropagation()}
@@ -2793,12 +3457,12 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                 <div className="flex items-center gap-2">
                   <Settings2 className="h-4.5 w-4.5 text-[#0E2640]" aria-hidden="true" />
                   <h3 className="text-sm font-extrabold text-slate-900">
-                    {tr('Mipangilio ya TikTok & Chapisho', 'TikTok & Post Settings')}
+                    {tr('Mipangilio Yote ya Video (Malosha)', 'All Video & Creator Settings')}
                   </h3>
                 </div>
                 <button
                   type="button"
-                  onClick={() => setSettingsVideoId(null)}
+                  onClick={closeSettingsModal}
                   aria-label={tr('Funga', 'Close')}
                   className="flex h-10 w-10 items-center justify-center rounded-full text-slate-500 hover:bg-slate-100"
                 >
@@ -2808,61 +3472,63 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
             </div>
 
             <div className="space-y-5 p-5 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
-              {/* Quick TikTok Action Grid */}
-              <div className="grid grid-cols-4 gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    void handleShareVideo(activeSettingsVideo);
-                    setSettingsVideoId(null);
-                  }}
-                  className="flex min-h-[68px] flex-col items-center justify-center gap-1.5 rounded-2xl bg-slate-100 p-2 text-[11px] font-bold text-slate-800 hover:bg-slate-200"
-                >
-                  <Share2 className="h-5 w-5 text-[#1D4E89]" aria-hidden="true" />
-                  <span>{tr('Shiriki', 'Share')}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void navigator.clipboard?.writeText(
-                      `${window.location.origin}/?tab=video&v=${encodeURIComponent(activeSettingsVideo.id)}`
-                    );
-                    onToast(tr('Kiungo kimenakiliwa!', 'Link copied!'));
-                    setSettingsVideoId(null);
-                  }}
-                  className="flex min-h-[68px] flex-col items-center justify-center gap-1.5 rounded-2xl bg-slate-100 p-2 text-[11px] font-bold text-slate-800 hover:bg-slate-200"
-                >
-                  <Copy className="h-5 w-5 text-slate-700" aria-hidden="true" />
-                  <span>{tr('Nakili Link', 'Copy Link')}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void handleDownloadWatermarkedMedia(activeSettingsVideo);
-                    setSettingsVideoId(null);
-                  }}
-                  className="flex min-h-[68px] flex-col items-center justify-center gap-1.5 rounded-2xl bg-amber-50 p-2 text-[11px] font-bold text-amber-900 ring-1 ring-amber-200 hover:bg-amber-100"
-                >
-                  <Download className="h-5 w-5 text-amber-700" aria-hidden="true" />
-                  <span>{tr('Pakua', 'Download')}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setClearScreenMode((v) => !v);
-                    setSettingsVideoId(null);
-                  }}
-                  className="flex min-h-[68px] flex-col items-center justify-center gap-1.5 rounded-2xl bg-slate-100 p-2 text-[11px] font-bold text-slate-800 hover:bg-slate-200"
-                >
-                  <EyeOff className="h-5 w-5 text-slate-700" aria-hidden="true" />
-                  <span>{tr('Skrini Safi', 'Clear UI')}</span>
-                </button>
-              </div>
+              {/* Quick Post Action Grid (when viewing a post) */}
+              {activeSettingsVideo && (
+                <div className="grid grid-cols-4 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void handleShareVideo(activeSettingsVideo);
+                      closeSettingsModal();
+                    }}
+                    className="flex min-h-[68px] flex-col items-center justify-center gap-1.5 rounded-2xl bg-slate-100 p-2 text-[11px] font-bold text-slate-800 hover:bg-slate-200"
+                  >
+                    <Share2 className="h-5 w-5 text-[#1D4E89]" aria-hidden="true" />
+                    <span>{tr('Shiriki', 'Share')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void navigator.clipboard?.writeText(
+                        `${window.location.origin}/?tab=video&v=${encodeURIComponent(activeSettingsVideo.id)}`
+                      );
+                      onToast(tr('Kiungo kimenakiliwa!', 'Link copied!'));
+                      closeSettingsModal();
+                    }}
+                    className="flex min-h-[68px] flex-col items-center justify-center gap-1.5 rounded-2xl bg-slate-100 p-2 text-[11px] font-bold text-slate-800 hover:bg-slate-200"
+                  >
+                    <Copy className="h-5 w-5 text-slate-700" aria-hidden="true" />
+                    <span>{tr('Nakili Link', 'Copy Link')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void handleDownloadWatermarkedMedia(activeSettingsVideo);
+                      closeSettingsModal();
+                    }}
+                    className="flex min-h-[68px] flex-col items-center justify-center gap-1.5 rounded-2xl bg-amber-50 p-2 text-[11px] font-bold text-amber-900 ring-1 ring-amber-200 hover:bg-amber-100"
+                  >
+                    <Download className="h-5 w-5 text-amber-700" aria-hidden="true" />
+                    <span>{tr('Pakua', 'Download')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setClearScreenMode((v) => !v);
+                      closeSettingsModal();
+                    }}
+                    className="flex min-h-[68px] flex-col items-center justify-center gap-1.5 rounded-2xl bg-slate-100 p-2 text-[11px] font-bold text-slate-800 hover:bg-slate-200"
+                  >
+                    <EyeOff className="h-5 w-5 text-slate-700" aria-hidden="true" />
+                    <span>{tr('Skrini Safi', 'Clear UI')}</span>
+                  </button>
+                </div>
+              )}
 
               {/* Viewer Playback Settings */}
               <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <h4 className="text-xs font-extrabold tracking-wide text-slate-600 uppercase">
-                  {tr('Mipangilio ya Kutazama', 'Playback Preferences')}
+                  {tr('Mipangilio ya Kutazama', 'Playback & Display Settings')}
                 </h4>
 
                 <div>
@@ -2898,7 +3564,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                     </p>
                     <p className="text-[11px] text-slate-500">
                       {fitMode === 'cover'
-                        ? tr('Jaza skrini nzima (TikTok Full)', 'Fill full screen (Cover)')
+                        ? tr('Jaza skrini nzima (Full)', 'Fill full screen (Cover)')
                         : tr('Onyesha fremu halisi (Contain)', 'Fit full frame (Contain)')}
                     </p>
                   </div>
@@ -2920,6 +3586,25 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                     )}
                   </button>
                 </div>
+
+                <label className="flex cursor-pointer items-center justify-between pt-1">
+                  <div>
+                    <p className="text-xs font-bold text-slate-900">
+                      {tr('Washa Sauti ya Video (Audio)', 'Video Sound On')}
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      {muted
+                        ? tr('Sauti imezimwa (Muted)', 'Audio is muted')
+                        : tr('Sauti inacheza', 'Audio is playing')}
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={!muted}
+                    onChange={(e) => setMuted(!e.target.checked)}
+                    className="h-5 w-5 accent-[#FE2C55]"
+                  />
+                </label>
 
                 <label className="flex cursor-pointer items-center justify-between pt-1">
                   <div>
@@ -2956,7 +3641,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                     </p>
                     <p className="text-[11px] text-slate-500">
                       {desktopFrameMode === 'mobile'
-                        ? tr('Fremu ya Simu 9:16 kama TikTok', 'TikTok 9:16 Mobile Portrait Frame')
+                        ? tr('Fremu ya Simu 9:16 (Portrait)', 'Malosha 9:16 Mobile Portrait Frame')
                         : tr('Skrini nzima ya kompyuta', 'Full Widescreen Canvas')}
                     </p>
                   </div>
@@ -2988,18 +3673,46 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-[11px] font-semibold text-emerald-900">
-                  <span>
-                    {tr('Okoa Bando: Hufungua video iliyofikiwa pekee', 'Data Saver: Loads active stream only')}
-                  </span>
-                  <span className="rounded-md bg-emerald-600 px-1.5 py-0.5 text-[10px] font-extrabold text-white">
-                    ON
-                  </span>
-                </div>
+                {/* Interactive Data Saver Switch */}
+                <label className="flex cursor-pointer items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50/70 px-3 py-2.5">
+                  <div className="pr-3">
+                    <p className="flex items-center gap-1.5 text-xs font-bold text-emerald-950">
+                      <Wifi className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
+                      <span>{tr('Okoa Bando (Data Saver)', 'Data Saver (Low MB)')}</span>
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-emerald-800">
+                      {dataSaverMode
+                        ? tr(
+                            'Imewashwa: Video & picha zinatumia MB chache sana.',
+                            'ON: Compresses stream & photos to use minimal data.'
+                          )
+                        : tr(
+                            'Imezimwa: Unatazama ubora halisi (HD).',
+                            'OFF: Streams full HD quality.'
+                          )}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={dataSaverMode}
+                    onClick={() => handleToggleDataSaver()}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                      dataSaverMode ? 'bg-emerald-600' : 'bg-slate-300'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                        dataSaverMode ? 'translate-x-5.5' : 'translate-x-0.5'
+                      }`}
+                    />
+                  </button>
+                </label>
               </div>
 
-              {/* Author / Admin TikTok Creator Settings */}
-              {Boolean(user && (isAdmin || user.uid === activeSettingsVideo.authorId)) && (
+              {/* Author / Admin Creator Controls OR Global Creator Upload Defaults */}
+              {activeSettingsVideo &&
+              Boolean(user && (isAdmin || user.uid === activeSettingsVideo.authorId)) ? (
                 <form
                   onSubmit={(e) => void handleSavePostSettings(e)}
                   className="space-y-4 rounded-2xl border border-rose-200/80 bg-rose-50/40 p-4"
@@ -3207,13 +3920,93 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                     </button>
                   </div>
                 </form>
+              ) : (
+                <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-extrabold tracking-wide text-slate-700 uppercase">
+                      {tr('Chaguo-Msingi za Kupakia (Creator Defaults)', 'Default Post Settings')}
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        try {
+                          window.localStorage.setItem(
+                            CREATOR_VIDEO_DEFAULTS_KEY,
+                            JSON.stringify(studioSettings)
+                          );
+                        } catch {
+                          // Ignore quota
+                        }
+                        onToast(tr('Mipangilio ya chaguo-msingi imehifadhiwa!', 'Creator defaults saved!'));
+                      }}
+                      className="rounded-lg bg-[#0E2640] px-2.5 py-1 text-[11px] font-bold text-white hover:bg-[#1D4E89]"
+                    >
+                      {tr('Hifadhi', 'Save')}
+                    </button>
+                  </div>
+
+                  <div className="space-y-2 divide-y divide-slate-200/70 rounded-xl bg-white p-3 ring-1 ring-slate-200">
+                    <label className="flex cursor-pointer items-center justify-between pt-0.5">
+                      <span className="text-xs font-bold text-slate-800">
+                        {tr('Ruhusu Maoni (Comments)', 'Allow Comments')}
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={studioSettings.allowComments}
+                        onChange={(e) =>
+                          setStudioSettings((s) => ({ ...s, allowComments: e.target.checked }))
+                        }
+                        className="h-5 w-5 accent-[#FE2C55]"
+                      />
+                    </label>
+                    <label className="flex cursor-pointer items-center justify-between pt-2">
+                      <span className="text-xs font-bold text-slate-800">
+                        {tr('Ruhusu Likes', 'Allow Likes')}
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={studioSettings.allowLikes}
+                        onChange={(e) =>
+                          setStudioSettings((s) => ({ ...s, allowLikes: e.target.checked }))
+                        }
+                        className="h-5 w-5 accent-[#FE2C55]"
+                      />
+                    </label>
+                    <label className="flex cursor-pointer items-center justify-between pt-2">
+                      <span className="text-xs font-bold text-slate-800">
+                        {tr('Ruhusu Kupakua na Watermark', 'Allow Watermarked Download')}
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={studioSettings.allowDownload}
+                        onChange={(e) =>
+                          setStudioSettings((s) => ({ ...s, allowDownload: e.target.checked }))
+                        }
+                        className="h-5 w-5 accent-[#FE2C55]"
+                      />
+                    </label>
+                    <label className="flex cursor-pointer items-center justify-between pt-2">
+                      <span className="text-xs font-bold text-slate-800">
+                        {tr('Washa Auto-Reply Kiotomatiki', 'Enable Auto-Reply')}
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={studioSettings.autoReplyEnabled}
+                        onChange={(e) =>
+                          setStudioSettings((s) => ({ ...s, autoReplyEnabled: e.target.checked }))
+                        }
+                        className="h-5 w-5 accent-emerald-600"
+                      />
+                    </label>
+                  </div>
+                </div>
               )}
             </div>
           </div>
         </div>
       )}
 
-      {/* TikTok Studio Upload Modal (Video OR Photo Carousel + Music + Settings) */}
+      {/* Malosha Studio Upload Modal (Video OR Photo Carousel + Music + Settings) */}
       {uploadOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-xs"
@@ -3237,7 +4030,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                     {tr('Malosha Reels Studio', 'Malosha Reels Studio')}
                   </h2>
                   <p className="text-[11px] text-slate-500">
-                    {tr('Video, Picha + Muziki · Mtindo wa TikTok', 'Video or Photo + Music · Full TikTok')}
+                    {tr('Video, Picha + Muziki · Malosha Forums Studio', 'Video or Photo + Music · Malosha Studio')}
                   </p>
                 </div>
               </div>
@@ -3279,14 +4072,14 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                   }`}
                 >
                   <ImageIcon className="h-4 w-4 text-[#1D4E89]" aria-hidden="true" />
-                  <span>{tr('Picha + Muziki', 'Photos + Music')}</span>
+                  <span>{tr('Picha / + Muziki', 'Photos / + Music')}</span>
                 </button>
               </div>
 
               <input
                 ref={videoFileInputRef}
                 type="file"
-                accept="video/mp4,video/webm,video/quicktime,video/x-m4v,.mp4,.mov,.webm,.m4v"
+                accept="video/*,.mp4,.mov,.webm,.m4v,.3gp,.mkv"
                 onChange={handlePickVideoFile}
                 className="sr-only"
               />
@@ -3321,22 +4114,40 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                         {tr('Chagua Video Kutoka Kwenye Simu / PC', 'Select Video From Phone or PC')}
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
-                        {tr('MP4, MOV, au WEBM (Upeo MB 95)', 'MP4, MOV, or WEBM (Max 95MB)')}
+                        {tr('MP4, MOV, 3GP, au WEBM (Upeo MB 95)', 'MP4, MOV, 3GP, or WEBM (Max 95MB)')}
                       </p>
                     </div>
                   </button>
                 ) : (
                   <div className="relative overflow-hidden rounded-xl bg-black">
-                    <video
-                      src={videoPreviewUrl}
-                      controls
-                      playsInline
-                      onLoadedMetadata={(e) => {
-                        const dur = Math.round(e.currentTarget.duration || 0);
-                        if (dur > 0) setDetectedDuration(dur);
-                      }}
-                      className="max-h-64 w-full object-contain"
-                    />
+                    {!videoPreviewError ? (
+                      <video
+                        key={videoPreviewUrl}
+                        src={videoPreviewUrl}
+                        controls
+                        autoPlay
+                        muted
+                        loop
+                        playsInline
+                        onLoadedMetadata={(e) => {
+                          const dur = Math.round(e.currentTarget.duration || 0);
+                          if (dur > 0) setDetectedDuration(dur);
+                        }}
+                        onError={() => setVideoPreviewError(true)}
+                        className="max-h-64 w-full object-contain"
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center gap-2 px-5 py-10 text-center text-white">
+                        <VideoIcon className="h-9 w-9 text-[#22D3EE]" aria-hidden="true" />
+                        <p className="text-xs font-bold">{selectedVideoFile?.name}</p>
+                        <p className="max-w-xs text-[11px] leading-relaxed text-slate-300">
+                          {tr(
+                            'Video imechaguliwa! Itabadilishwa kiotomatiki kuwa MP4 (H.264) na kucheza kikamilifu mara tu ukishachapisha.',
+                            'Video selected! It will automatically transcode to universal H.264 MP4 and play smoothly once published.'
+                          )}
+                        </p>
+                      </div>
+                    )}
                     {!uploading && (
                       <button
                         type="button"
@@ -3463,7 +4274,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                   <div className="flex items-center gap-2">
                     <Music2 className="h-4 w-4 text-[#FE2C55]" aria-hidden="true" />
                     <span className="text-xs font-extrabold text-slate-900">
-                      {tr('Ambatanisha Muziki / Sauti', 'Attach Music / Sound')}
+                      {tr('Ambatanisha Muziki / Sauti (Si lazima)', 'Attach Music / Sound (Optional)')}
                     </span>
                   </div>
                   <button
@@ -3595,7 +4406,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                 </div>
               </div>
 
-              {/* Collapsible TikTok Post Settings (Auto-Reply, Comments, Likes, Download) */}
+              {/* Collapsible Malosha Forums Post Settings (Auto-Reply, Comments, Likes, Download) */}
               <div className="rounded-xl border border-slate-200 bg-slate-50">
                 <button
                   type="button"
@@ -3606,8 +4417,8 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                     <SlidersHorizontal className="h-4 w-4 text-[#FE2C55]" aria-hidden="true" />
                     <span>
                       {tr(
-                        'Mipangilio ya TikTok (Auto-Reply, Maoni, Pakua)',
-                        'TikTok Settings (Auto-Reply, Comments, Download)'
+                        'Mipangilio ya Chapisho (Auto-Reply, Maoni, Pakua)',
+                        'Post Settings (Auto-Reply, Comments, Download)'
                       )}
                     </span>
                   </span>
@@ -3817,6 +4628,401 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
               </div>
             </form>
           </div>
+        </div>
+      )}
+      {/* Long-Press 3-Card Quick Options Sheet */}
+      {longPressSheetVideo && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/55 backdrop-blur-[1px] md:items-center"
+          onClick={() => setLongPressSheetVideo(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[88dvh] w-full overflow-y-auto rounded-t-[26px] bg-[#F2F3F5] px-3.5 pt-2.5 pb-[max(1.25rem,env(safe-area-inset-bottom))] text-slate-900 shadow-2xl md:max-w-md md:rounded-[26px] md:pb-4"
+          >
+            <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-slate-300" />
+
+            <div className="space-y-2.5">
+              {/* Group 1: Not interested & Report */}
+              <div className="divide-y divide-slate-100 overflow-hidden rounded-2xl bg-white shadow-xs">
+                <button
+                  type="button"
+                  onClick={() => handleMarkNotInterested(longPressSheetVideo)}
+                  className="flex min-h-[48px] w-full items-center gap-3.5 px-4 py-3 text-left text-[14px] font-semibold text-slate-900 transition-colors hover:bg-slate-50 active:bg-slate-100"
+                >
+                  <HeartCrack className="h-5 w-5 shrink-0 text-slate-800" aria-hidden="true" />
+                  <span>{tr('Sipendezwi nayo (Not interested)', 'Not interested')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = longPressSheetVideo;
+                    setLongPressSheetVideo(null);
+                    setReportRuleNumber(0);
+                    setReportReasonText('');
+                    setReportSheetVideo(target);
+                  }}
+                  className="flex min-h-[48px] w-full items-center gap-3.5 px-4 py-3 text-left text-[14px] font-semibold text-slate-900 transition-colors hover:bg-slate-50 active:bg-slate-100"
+                >
+                  <Flag className="h-5 w-5 shrink-0 text-slate-800" aria-hidden="true" />
+                  <span>{tr('Ripoti (Report)', 'Report')}</span>
+                </button>
+              </div>
+
+              {/* Group 2: Speed, Clear display, Auto scroll, Data Saver, Captions, PiP, Background audio */}
+              <div className="divide-y divide-slate-100 overflow-hidden rounded-2xl bg-white shadow-xs">
+                {/* Speed Segmented Pills */}
+                <div className="flex min-h-[50px] items-center justify-between gap-2 px-4 py-2.5">
+                  <div className="flex items-center gap-3.5 text-[14px] font-semibold text-slate-900">
+                    <Gauge className="h-5 w-5 shrink-0 text-slate-800" aria-hidden="true" />
+                    <span>{tr('Kasi (Speed)', 'Speed')}</span>
+                  </div>
+                  <div className="flex items-center rounded-xl bg-[#F2F3F5] p-0.5">
+                    {([0.5, 1, 1.5, 2] as const).map((spd) => (
+                      <button
+                        key={spd}
+                        type="button"
+                        onClick={() => setPlaybackSpeed(spd)}
+                        className={`rounded-lg px-2.5 py-1 text-xs font-bold transition-all ${
+                          playbackSpeed === spd
+                            ? 'bg-white text-slate-950 shadow-xs'
+                            : 'text-slate-500 hover:text-slate-800'
+                        }`}
+                      >
+                        {spd.toFixed(1)}×
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Clear display */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setClearScreenMode((v) => !v);
+                    setLongPressSheetVideo(null);
+                  }}
+                  className="flex min-h-[48px] w-full items-center justify-between gap-3 px-4 py-3 text-left text-[14px] font-semibold text-slate-900 transition-colors hover:bg-slate-50 active:bg-slate-100"
+                >
+                  <span className="flex items-center gap-3.5">
+                    <Maximize className="h-5 w-5 shrink-0 text-slate-800" aria-hidden="true" />
+                    <span>{tr('Skrini safi (Clear display)', 'Clear display')}</span>
+                  </span>
+                  {clearScreenMode && (
+                    <span className="rounded-md bg-emerald-100 px-2 py-0.5 text-[11px] font-bold text-emerald-800">
+                      ON
+                    </span>
+                  )}
+                </button>
+
+                {/* Auto scroll Toggle */}
+                <div className="flex min-h-[48px] items-center justify-between gap-3 px-4 py-2.5">
+                  <span className="flex items-center gap-3.5 text-[14px] font-semibold text-slate-900">
+                    <ArrowUpCircle className="h-5 w-5 shrink-0 text-slate-800" aria-hidden="true" />
+                    <span>{tr('Sogeza kiotomatiki (Auto scroll)', 'Auto scroll')}</span>
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={autoScrollNext}
+                    onClick={handleToggleAutoNext}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                      autoScrollNext ? 'bg-emerald-500' : 'bg-slate-200'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                        autoScrollNext ? 'translate-x-5.5' : 'translate-x-0.5'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* Data Saver Toggle (Okoa MB) */}
+                <div className="flex min-h-[48px] items-center justify-between gap-3 px-4 py-2.5">
+                  <div className="flex items-center gap-3.5">
+                    <Wifi className="h-5 w-5 shrink-0 text-emerald-600" aria-hidden="true" />
+                    <div>
+                      <p className="text-[14px] font-semibold text-slate-900">
+                        {tr('Data Saver (Okoa MB)', 'Data Saver')}
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        {tr('Tumia MB chache ukitazama', 'Use fewer MBs while watching')}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={dataSaverMode}
+                    onClick={() => handleToggleDataSaver()}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                      dataSaverMode ? 'bg-emerald-500' : 'bg-slate-200'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                        dataSaverMode ? 'translate-x-5.5' : 'translate-x-0.5'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* Captions and translation */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCaptionsOverlayEnabled((v) => !v);
+                    setLongPressSheetVideo(null);
+                  }}
+                  className="flex min-h-[48px] w-full items-center justify-between gap-3 px-4 py-3 text-left text-[14px] font-semibold text-slate-900 transition-colors hover:bg-slate-50 active:bg-slate-100"
+                >
+                  <span className="flex items-center gap-3.5">
+                    <Languages className="h-5 w-5 shrink-0 text-slate-800" aria-hidden="true" />
+                    <span>{tr('Maelezo & Tafsiri (Captions)', 'Captions and translation')}</span>
+                  </span>
+                  <span
+                    className={`rounded-md px-2 py-0.5 text-[11px] font-bold ${
+                      captionsOverlayEnabled
+                        ? 'bg-sky-100 text-sky-800'
+                        : 'bg-slate-100 text-slate-500'
+                    }`}
+                  >
+                    {captionsOverlayEnabled ? 'ON' : 'OFF'}
+                  </span>
+                </button>
+
+                {/* Picture-in-Picture */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = longPressSheetVideo;
+                    setLongPressSheetVideo(null);
+                    void handleTriggerPiP(target);
+                  }}
+                  className="flex min-h-[48px] w-full items-center gap-3.5 px-4 py-3 text-left text-[14px] font-semibold text-slate-900 transition-colors hover:bg-slate-50 active:bg-slate-100"
+                >
+                  <PictureInPicture2 className="h-5 w-5 shrink-0 text-slate-800" aria-hidden="true" />
+                  <span>{tr('Picture-in-Picture (Dirisha Dogo)', 'Picture-in-Picture')}</span>
+                </button>
+
+                {/* Background audio Toggle */}
+                <div className="flex min-h-[48px] items-center justify-between gap-3 px-4 py-2.5">
+                  <span className="flex items-center gap-3.5 text-[14px] font-semibold text-slate-900">
+                    <Headphones className="h-5 w-5 shrink-0 text-slate-800" aria-hidden="true" />
+                    <span>{tr('Sauti ya nyuma (Background audio)', 'Background audio')}</span>
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={backgroundAudioMode}
+                    onClick={() => handleToggleBackgroundAudio()}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                      backgroundAudioMode ? 'bg-emerald-500' : 'bg-slate-200'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                        backgroundAudioMode ? 'translate-x-5.5' : 'translate-x-0.5'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+
+              {/* Group 3: Why this post, Promote, Download */}
+              <div className="divide-y divide-slate-100 overflow-hidden rounded-2xl bg-white shadow-xs">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = longPressSheetVideo;
+                    setLongPressSheetVideo(null);
+                    setWhyPostVideo(target);
+                  }}
+                  className="flex min-h-[48px] w-full items-center gap-3.5 px-4 py-3 text-left text-[14px] font-semibold text-slate-900 transition-colors hover:bg-slate-50 active:bg-slate-100"
+                >
+                  <HelpCircle className="h-5 w-5 shrink-0 text-slate-800" aria-hidden="true" />
+                  <span>{tr('Kwa nini chapisho hili? (Why this post)', 'Why this post')}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = longPressSheetVideo;
+                    setLongPressSheetVideo(null);
+                    void handleShareVideo(target);
+                  }}
+                  className="flex min-h-[48px] w-full items-center gap-3.5 px-4 py-3 text-left text-[14px] font-semibold text-slate-900 transition-colors hover:bg-slate-50 active:bg-slate-100"
+                >
+                  <Flame className="h-5 w-5 shrink-0 text-slate-800" aria-hidden="true" />
+                  <span>{tr('Tangaza / Shiriki (Promote)', 'Promote')}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = longPressSheetVideo;
+                    setLongPressSheetVideo(null);
+                    void handleDownloadWatermarkedMedia(target);
+                  }}
+                  className="flex min-h-[48px] w-full items-center gap-3.5 px-4 py-3 text-left text-[14px] font-semibold text-slate-900 transition-colors hover:bg-slate-50 active:bg-slate-100"
+                >
+                  <Download className="h-5 w-5 shrink-0 text-slate-800" aria-hidden="true" />
+                  <span>{tr('Pakua na Alama ya Malosha (Download)', 'Download')}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Why This Post Info Modal */}
+      {whyPostVideo && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4 backdrop-blur-xs"
+          onClick={() => setWhyPostVideo(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-2xl bg-white p-5 text-slate-900 shadow-2xl"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <HelpCircle className="h-5 w-5 text-[#1D4E89]" aria-hidden="true" />
+                <h3 className="text-sm font-extrabold text-slate-900">
+                  {tr('Kwa Nini Unaona Chapisho Hili?', 'Why You See This Post')}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setWhyPostVideo(null)}
+                className="rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+            <div className="mt-3 space-y-2.5 text-xs leading-relaxed text-slate-600">
+              <p>
+                {tr(
+                  `Chapisho hili la ${whyPostVideo.authorName} linaonyeshwa kwenye Malosha Forums kutokana na:`,
+                  `This post by ${whyPostVideo.authorName} appears in your Malosha Forums feed because:`
+                )}
+              </p>
+              <ul className="space-y-1.5 rounded-xl bg-slate-50 p-3 text-slate-700">
+                <li>
+                  •{' '}
+                  {followingByAuthor[whyPostVideo.authorId]
+                    ? tr('Unamfuatilia mbunifu huyu.', 'You follow this creator.')
+                    : tr('Ni miongoni mwa video maarufu au mpya jukwaani.', 'It is active or trending in the community.')}
+                </li>
+                {whyPostVideo.tags.length > 0 && (
+                  <li>
+                    • {tr('Mada zinazohusika:', 'Related tags:')}{' '}
+                    <span className="font-semibold">{whyPostVideo.tags.map((t) => `#${t}`).join(' ')}</span>
+                  </li>
+                )}
+                <li>
+                  • {tr('Unaweza kubonyeza "Sipendezwi nayo" wakati wowote kuboresha orodha yako.', 'Tap "Not interested" anytime to customize your feed.')}
+                </li>
+              </ul>
+            </div>
+            <button
+              type="button"
+              onClick={() => setWhyPostVideo(null)}
+              className="mt-4 min-h-[40px] w-full rounded-xl bg-[#0E2640] text-xs font-bold text-white hover:bg-[#1D4E89]"
+            >
+              {tr('Sawa, Nimeelewa', 'Got It')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Report Video Modal (Select from 13 Rules + Reason) */}
+      {reportSheetVideo && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-xs"
+          onClick={() => !submittingReport && setReportSheetVideo(null)}
+        >
+          <form
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={(e) => void handleSubmitVideoReport(e)}
+            className="w-full max-w-md rounded-2xl bg-white p-5 text-slate-900 shadow-2xl"
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="h-5 w-5 text-rose-600" aria-hidden="true" />
+                <h3 className="text-sm font-extrabold text-slate-900">
+                  {tr('Ripoti Chapisho Hili', 'Report This Post')}
+                </h3>
+              </div>
+              <button
+                type="button"
+                disabled={submittingReport}
+                onClick={() => setReportSheetVideo(null)}
+                className="rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            <div className="mt-3.5 space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700">
+                  {tr('Chagua Sheria Iliyokiukwa (1 – 13)', 'Select Violated Rule (1 – 13)')}
+                </label>
+                <select
+                  value={reportRuleNumber}
+                  onChange={(e) => setReportRuleNumber(Number(e.target.value))}
+                  className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-3 text-xs text-slate-900 focus:border-[#1D4E89] focus:outline-none"
+                >
+                  <option value={0}>
+                    {tr('-- Chagua Kanuni (Hiari) --', '-- Select Rule (Optional) --')}
+                  </option>
+                  {COMMUNITY_SAFETY_RULES.map((rule) => (
+                    <option key={rule.number} value={rule.number}>
+                      #{rule.number} · {tr(rule.titleSw, rule.titleEn)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700">
+                  {tr('Maelezo ya Ziada', 'Additional Details')}
+                </label>
+                <textarea
+                  rows={3}
+                  maxLength={350}
+                  value={reportReasonText}
+                  onChange={(e) => setReportReasonText(e.target.value)}
+                  placeholder={tr(
+                    'Eleza kwa ufupi tatizo lililopo kwenye video/picha hii...',
+                    'Briefly explain why you are reporting this post...'
+                  )}
+                  className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#1D4E89] focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={submittingReport}
+                onClick={() => setReportSheetVideo(null)}
+                className="min-h-[40px] rounded-xl border border-slate-300 px-4 text-xs font-bold text-slate-700 hover:bg-slate-50"
+              >
+                {tr('Ghairi', 'Cancel')}
+              </button>
+              <button
+                type="submit"
+                disabled={submittingReport}
+                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-rose-600 px-4 text-xs font-bold text-white hover:bg-rose-700 disabled:opacity-50"
+              >
+                {submittingReport && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+                <span>{tr('Tuma Ripoti', 'Submit Report')}</span>
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>

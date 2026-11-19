@@ -358,6 +358,7 @@ export interface UserProfile {
   verificationBadge: VerificationBadgeType;
   accountStatus?: AccountStatus;
   suspendedReason?: string;
+  suspendedRuleNumber?: number;
   topicsCount: number;
   repliesCount: number;
   followersCount?: number;
@@ -365,18 +366,155 @@ export interface UserProfile {
   updatedAt: Timestamp | null;
 }
 
+export interface CommunitySafetyRule {
+  number: number;
+  titleSw: string;
+  titleEn: string;
+  summarySw: string;
+  summaryEn: string;
+}
+
+export const COMMUNITY_SAFETY_RULES: CommunitySafetyRule[] = [
+  {
+    number: 1,
+    titleSw: 'Heshima na Kuzuia Unyanyasaji',
+    titleEn: 'Respect & Anti-Harassment',
+    summarySw:
+      'Ni marufuku kutukana, kudhalilisha, kukashifu, au kumfuatilia mwanachama mwingine kwa lengo la kumuumiza au kumtisha.',
+    summaryEn:
+      'Insults, humiliation, bullying, stalking, or targeted harassment of any member are strictly prohibited.',
+  },
+  {
+    number: 2,
+    titleSw: 'Kuzuia Kauli za Chuki na Ubaguzi',
+    titleEn: 'No Hate Speech or Discrimination',
+    summarySw:
+      'Hairuhusiwi kuchapisha maneno ya chuki, uchochezi, au ubaguzi wa kabila, dini, jinsia, ulemavu, au asili ya mtu.',
+    summaryEn:
+      'Hate speech or discrimination based on tribe, religion, gender, disability, or origin is not allowed.',
+  },
+  {
+    number: 3,
+    titleSw: 'Kuzuia Maudhui ya Ngono na Uchi',
+    titleEn: 'No Nudity or Sexual Content',
+    summarySw:
+      'Video, picha, au maandishi yenye uchi, picha za ngono, au maudhui machafu yamepigwa marufuku kabisa kwenye jukwaa.',
+    summaryEn:
+      'Nudity, pornography, sexually explicit media, or adult solicitation is strictly forbidden.',
+  },
+  {
+    number: 4,
+    titleSw: 'Kuzuia Vurugu, Vitisho na Maudhui ya Kutisha',
+    titleEn: 'No Violence, Threats, or Graphic Media',
+    summarySw:
+      'Usichapishe vitisho vya kuumiza, kuhamasisha vurugu, kujidhuru, au video/picha zenye damu na ukatili wa kutisha.',
+    summaryEn:
+      'Do not post threats of harm, incitement to violence, self-harm encouragement, or graphic gore.',
+  },
+  {
+    number: 5,
+    titleSw: 'Ulinzi na Usalama wa Watoto',
+    titleEn: 'Child Safety & Protection',
+    summarySw:
+      'Maudhui yoyote yanayomdhalilisha, kumnyanyasa, au kumweka mtoto hatarini yatafungiwa mara moja na akaunti kufungwa.',
+    summaryEn:
+      'Any content exploiting, endangering, or harming minors results in immediate removal and account closure.',
+  },
+  {
+    number: 6,
+    titleSw: 'Kuzuia Taarifa za Uongo na Upotoshaji',
+    titleEn: 'No Misinformation or Fake News',
+    summarySw:
+      'Epuka kusambaza habari za uongo, uzushi wa hatari wa kiafya/kijamii, au taarifa za upotoshaji zinazopotosha umma.',
+    summaryEn:
+      'Do not spread fabricated news, dangerous health/public hoaxes, or deceptive misinformation.',
+  },
+  {
+    number: 7,
+    titleSw: 'Kuzuia Utapeli, Ulaghai na Wizi wa Fedha',
+    titleEn: 'No Scams, Fraud, or Phishing',
+    summarySw:
+      'Ni marufuku kuendesha utapeli, upatu usio halali, kuomba namba za siri za benki/simu, au viungo vya wizi wa akaunti.',
+    summaryEn:
+      'Scams, pyramid schemes, phishing links, or stealing financial/login credentials are strictly banned.',
+  },
+  {
+    number: 8,
+    titleSw: 'Haki Miliki na Umiliki wa Maudhui',
+    titleEn: 'Copyright & Intellectual Property',
+    summarySw:
+      'Chapisha video, sauti, picha, au maandishi yako halisi au uliyoruhusiwa; usibe kazi za wabunifu wengine bila idhini.',
+    summaryEn:
+      'Only post media, audio, or text you own or have permission to share; respect creator copyrights.',
+  },
+  {
+    number: 9,
+    titleSw: 'Kulinda Faragha ya Watu Wengine (Doxxing)',
+    titleEn: 'Privacy & No Doxxing',
+    summarySw:
+      'Usichapishe namba za simu za siri, anwani za makazi, NIDA, au nyaraka za mtu mwingine bila ridhaa yake.',
+    summaryEn:
+      'Never expose another person’s private phone numbers, addresses, IDs, or personal documents without consent.',
+  },
+  {
+    number: 10,
+    titleSw: 'Kuzuia Akaunti Bandia na Kuiga Watu',
+    titleEn: 'No Impersonation or Fake Identities',
+    summarySw:
+      'Hairuhusiwi kujifanya kiongozi, taasisi, mwandishi, au mwanachama mwingine kwa lengo la kupotosha au kutapeli.',
+    summaryEn:
+      'Impersonating individuals, officials, brands, or journalists to mislead members is prohibited.',
+  },
+  {
+    number: 11,
+    titleSw: 'Kuzuia Spam na Matangazo Yasiyo na Mpangilio',
+    titleEn: 'No Spam or Repetitive Abuse',
+    summarySw:
+      'Usirudie-rudie ujumbe uleule, viungo visivyohusiana, au maoni ya roboti yanayoharibu mijadala na Mchart.',
+    summaryEn:
+      'Do not flood feeds, comments, or Mchart with repetitive spam, unsolicited links, or bot abuse.',
+  },
+  {
+    number: 12,
+    titleSw: 'Kuzuia Bidhaa na Shughuli Haramu',
+    titleEn: 'No Illegal Goods or Regulated Contraband',
+    summarySw:
+      'Ni marufuku kutangaza au kuuza dawa za kulevya, silaha haramu, au shughuli zinazokiuka sheria za nchi.',
+    summaryEn:
+      'Promoting or selling illegal drugs, weapons, or unlawful services is strictly forbidden.',
+  },
+  {
+    number: 13,
+    titleSw: 'Uadilifu wa Jukwaa na Ripoti za Kweli',
+    titleEn: 'Platform Integrity & Honest Reporting',
+    summarySw:
+      'Usijaribu kudanganya mfumo wa likes/maoni, kufanya ripoti za uongo ili kumfungia mtu, au kuharibu usalama wa mfumo.',
+    summaryEn:
+      'Do not manipulate engagement, file false abuse reports, or attempt to bypass platform security controls.',
+  },
+];
+
+export function findCommunityRule(ruleNumber?: number | null): CommunitySafetyRule | null {
+  if (!ruleNumber || !Number.isFinite(ruleNumber)) return null;
+  return COMMUNITY_SAFETY_RULES.find((r) => r.number === Math.round(ruleNumber)) || null;
+}
+
 export const MONETIZATION_REQUIREMENTS = {
-  minFollowers: 50,
-  minPosts: 10,
-  minLikes: 100,
-  minComments: 20,
+  minFollowers: 1000,
+  minFriends: 5000,
+  minVideos: 1000,
+  minPosts: 8000,
+  minLikes: 10000,
+  minComments: 15000,
 } as const;
 
 export interface AuthorMetricsSummary {
+  followersCount: number;
+  friendsCount: number;
+  videosCount: number;
   postsCount: number;
   totalLikesReceived: number;
   totalCommentsReceived: number;
-  followersCount: number;
   metCriteriaCount: number;
   totalCriteriaCount: number;
   progressPercent: number;
@@ -386,9 +524,12 @@ export interface AuthorMetricsSummary {
 export function computeAuthorMetrics(
   topics: Pick<Topic, 'authorId' | 'upvotesCount' | 'repliesCount' | 'status'>[],
   authorUid: string,
-  followersCount = 0
+  followersCount = 0,
+  videos: Pick<VideoPost, 'authorId' | 'likesCount' | 'commentsCount' | 'isArchived'>[] = [],
+  friendsCount = 0
 ): AuthorMetricsSummary {
   let postsCount = 0;
+  let videosCount = 0;
   let totalLikesReceived = 0;
   let totalCommentsReceived = 0;
 
@@ -400,24 +541,46 @@ export function computeAuthorMetrics(
     }
   }
 
+  for (const v of videos) {
+    if (v.authorId === authorUid && !v.isArchived) {
+      videosCount += 1;
+      totalLikesReceived += Math.max(0, Number(v.likesCount || 0));
+      totalCommentsReceived += Math.max(0, Number(v.commentsCount || 0));
+    }
+  }
+
   const cleanFollowers = Math.max(0, Number(followersCount || 0));
+  const cleanFriends = Math.max(0, Number(friendsCount || 0));
   const fRatio = Math.min(1, cleanFollowers / MONETIZATION_REQUIREMENTS.minFollowers);
+  const frRatio = Math.min(1, cleanFriends / MONETIZATION_REQUIREMENTS.minFriends);
+  const vRatio = Math.min(1, videosCount / MONETIZATION_REQUIREMENTS.minVideos);
   const pRatio = Math.min(1, postsCount / MONETIZATION_REQUIREMENTS.minPosts);
   const lRatio = Math.min(1, totalLikesReceived / MONETIZATION_REQUIREMENTS.minLikes);
   const cRatio = Math.min(1, totalCommentsReceived / MONETIZATION_REQUIREMENTS.minComments);
 
-  const met = [fRatio >= 1, pRatio >= 1, lRatio >= 1, cRatio >= 1].filter(Boolean).length;
-  const progressPercent = Math.round(((fRatio + pRatio + lRatio + cRatio) / 4) * 100);
+  const met = [
+    fRatio >= 1,
+    frRatio >= 1,
+    vRatio >= 1,
+    pRatio >= 1,
+    lRatio >= 1,
+    cRatio >= 1,
+  ].filter(Boolean).length;
+  const progressPercent = Math.round(
+    ((fRatio + frRatio + vRatio + pRatio + lRatio + cRatio) / 6) * 100
+  );
 
   return {
+    followersCount: cleanFollowers,
+    friendsCount: cleanFriends,
+    videosCount,
     postsCount,
     totalLikesReceived,
     totalCommentsReceived,
-    followersCount: cleanFollowers,
     metCriteriaCount: met,
-    totalCriteriaCount: 4,
+    totalCriteriaCount: 6,
     progressPercent,
-    isEligibleForMonetization: met === 4,
+    isEligibleForMonetization: met === 6,
   };
 }
 
@@ -535,10 +698,11 @@ export const REPORT_REASON_LABELS: Record<ReportReason, string> = {
 export interface Report {
   id: string;
   reporterId: string;
-  targetType: 'topic' | 'reply';
+  targetType: 'topic' | 'reply' | 'video';
   targetId: string;
   topicId: string;
   reason: ReportReason;
+  ruleNumber?: number;
   details: string;
   status: 'pending' | 'reviewed' | 'dismissed';
   createdAt: Timestamp | null;
@@ -624,7 +788,12 @@ export type NavTab =
   | 'auth';
 export type SortMode = 'newest' | 'votes' | 'oldest';
 
-export type UserNotificationType = 'comment_reply' | 'post_comment';
+export type UserNotificationType =
+  | 'comment_reply'
+  | 'post_comment'
+  | 'account_moderation'
+  | 'video_moderation'
+  | 'post_moderation';
 
 export interface UserNotification {
   id: string;
@@ -639,6 +808,8 @@ export interface UserNotification {
   replyId: string;
   parentReplyId: string;
   replyPreview: string;
+  ruleNumber?: number;
+  ruleTitle?: string;
   isRead: boolean;
   createdAt: Timestamp | null;
 }
@@ -765,6 +936,8 @@ export interface VideoPost {
   autoReplyMessage?: string;
   autoReplyTrigger?: VideoAutoReplyTrigger;
   autoReplyKeyword?: string;
+  moderationRuleNumber?: number;
+  moderationReason?: string;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }

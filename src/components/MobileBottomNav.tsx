@@ -88,7 +88,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
       aria-label={tr('Urambazaji wa simu', 'Mobile navigation')}
       className={`fixed right-0 bottom-0 left-0 z-40 transform-gpu border-t backdrop-blur-md pb-[env(safe-area-inset-bottom)] will-change-transform md:hidden ${
         darkTheme
-          ? 'border-white/15 bg-black/95 shadow-[0_-4px_20px_rgba(0,0,0,0.65)]'
+          ? 'border-white/10 bg-black text-white'
           : 'border-slate-200/90 bg-white/95 shadow-[0_-4px_16px_rgba(15,23,42,0.08)]'
       }`}
     >
@@ -105,26 +105,22 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
               className={`relative flex min-h-[48px] flex-col items-center justify-center px-0.5 py-1 transition-all focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[#1D4E89] ${
                 darkTheme
                   ? active
-                    ? 'bg-white/10 font-bold text-white'
-                    : 'text-white/65 hover:bg-white/5 hover:text-white'
+                    ? 'font-bold text-white'
+                    : 'text-white/55 hover:text-white'
                   : active
                     ? 'bg-amber-50/55 font-bold text-[#0E2640]'
                     : 'text-slate-600 hover:bg-slate-50/80 hover:text-slate-900'
               }`}
             >
-              {active && (
+              {active && !darkTheme && (
                 <span
-                  className={`absolute top-0 h-[3px] w-7 rounded-b-full bg-gradient-to-r ${
-                    darkTheme
-                      ? 'from-[#22D3EE] to-[#FE2C55]'
-                      : 'from-[#D97706] to-[#F59E0B]'
-                  }`}
+                  className="absolute top-0 h-[3px] w-7 rounded-b-full bg-gradient-to-r from-[#D97706] to-[#F59E0B]"
                   aria-hidden="true"
                 />
               )}
               <span
                 className={`relative inline-flex items-center justify-center transition-transform duration-150 ${
-                  active ? 'scale-110 drop-shadow-[0_2px_4px_rgba(14,38,64,0.18)]' : ''
+                  active ? 'scale-105' : ''
                 }`}
               >
                 <NavSectionIcon section={item.iconSection} className="h-[21px] w-[21px]" />
@@ -135,7 +131,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
                     } ${
                       item.badgeTone === 'green'
                         ? 'bg-[#25D366] text-[#052e27]'
-                        : 'bg-[#E11D48] text-white'
+                        : 'bg-[#FE2C55] text-white'
                     }`}
                   >
                     {item.unread > 99 ? '99+' : item.unread}
@@ -147,7 +143,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
                   darkTheme
                     ? active
                       ? 'font-bold text-white'
-                      : 'font-medium text-white/65'
+                      : 'font-medium text-white/55'
                     : active
                       ? 'font-bold text-[#0E2640]'
                       : 'font-medium text-slate-600'

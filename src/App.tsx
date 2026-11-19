@@ -47,6 +47,7 @@ import {
   UserNotificationType,
   UserProfile,
   VideoPost,
+  findCommunityRule,
   normalizeAccountStatus,
   normalizeBoardCategory,
   normalizeVerificationBadge,
@@ -419,6 +420,7 @@ function ForumShell() {
           verificationBadge: normalizeVerificationBadge(d.verificationBadge),
           accountStatus: normalizeAccountStatus(d.accountStatus),
           suspendedReason: typeof d.suspendedReason === 'string' ? d.suspendedReason : '',
+          suspendedRuleNumber: Number(d.suspendedRuleNumber || 0),
           topicsCount: Number(d.topicsCount || 0),
           repliesCount: Number(d.repliesCount || 0),
           followersCount: Number(d.followersCount || 0),
@@ -482,7 +484,7 @@ function ForumShell() {
     return () => unsub();
   }, [authReady]);
 
-  // Real-time TikTok short videos & photo-music feed listener (plus signed-in author's private posts)
+  // Real-time Malosha Reels short videos & photo-music feed listener (plus signed-in author's private posts)
   useEffect(() => {
     if (!authReady) return;
     setLoadingVideos(true);
@@ -1422,8 +1424,14 @@ function ForumShell() {
       (snapshot) => {
         const list: UserNotification[] = snapshot.docs.map((d) => {
           const data = d.data();
+          const rawType = String(data.type || 'comment_reply');
           const nType: UserNotificationType =
-            data.type === 'post_comment' ? 'post_comment' : 'comment_reply';
+            rawType === 'post_comment' ||
+            rawType === 'account_moderation' ||
+            rawType === 'video_moderation' ||
+            rawType === 'post_moderation'
+              ? rawType
+              : 'comment_reply';
           return {
             id: d.id,
             recipientId: String(data.recipientId || user.uid),
@@ -1437,6 +1445,8 @@ function ForumShell() {
             replyId: String(data.replyId || ''),
             parentReplyId: String(data.parentReplyId || ''),
             replyPreview: String(data.replyPreview || ''),
+            ruleNumber: Number(data.ruleNumber || 0),
+            ruleTitle: String(data.ruleTitle || ''),
             isRead: Boolean(data.isRead),
             createdAt: data.createdAt || null,
           };
@@ -1463,7 +1473,12 @@ function ForumShell() {
         capped.forEach((n) => knownUserNotifIdsRef.current.add(n.id));
 
         if (newestUnread) {
+          const isModerationAlert =
+            newestUnread.type === 'account_moderation' ||
+            newestUnread.type === 'video_moderation' ||
+            newestUnread.type === 'post_moderation';
           const isViewingSameTopic =
+            !isModerationAlert &&
             selectedTopicIdRef.current === newestUnread.topicId &&
             typeof document !== 'undefined' &&
             !document.hidden;
@@ -1471,8 +1486,9 @@ function ForumShell() {
           if (isViewingSameTopic) {
             void markUserNotificationRead(user.uid, newestUnread.id);
           } else {
-            const actionText =
-              newestUnread.type === 'comment_reply'
+            const actionText = isModerationAlert
+              ? newestUnread.topicTitle || tr('Taarifa ya Usalama', 'Safety Moderation Notice')
+              : newestUnread.type === 'comment_reply'
                 ? tr(
                     `${newestUnread.actorName} amejibu maoni yako`,
                     `${newestUnread.actorName} replied to your comment`
@@ -1481,16 +1497,25 @@ function ForumShell() {
                     `${newestUnread.actorName} ametoa maoni kwenye chapisho lako`,
                     `${newestUnread.actorName} commented on your post`
                   );
-            const topicLabel = newestUnread.topicTitle
-              ? ` · ${newestUnread.topicTitle.slice(0, 50)}`
-              : '';
+            const topicLabel = isModerationAlert
+              ? newestUnread.ruleNumber
+                ? ` · Kanuni #${newestUnread.ruleNumber}`
+                : ''
+              : newestUnread.topicTitle
+                ? ` · ${newestUnread.topicTitle.slice(0, 50)}`
+                : '';
             if (typeof document !== 'undefined' && !document.hidden) {
-              showToast(`${actionText}: "${newestUnread.replyPreview.slice(0, 75)}"`);
+              showToast(
+                isModerationAlert
+                  ? `${actionText}${topicLabel}: ${newestUnread.replyPreview.slice(0, 80)}`
+                  : `${actionText}: "${newestUnread.replyPreview.slice(0, 75)}"`,
+                isModerationAlert ? 'error' : 'success'
+              );
             }
             void sendPhoneNotification({
               title: `${actionText}${topicLabel}`,
               body: newestUnread.replyPreview.slice(0, 140),
-              topicId: newestUnread.topicId,
+              topicId: isModerationAlert ? '' : newestUnread.topicId,
               tag: `malosha-reply-${newestUnread.id}`,
             });
           }
@@ -2343,6 +2368,14 @@ function ForumShell() {
                   <span className="font-bold">
                     {tr('Akaunti Yako Imefungwa:', 'Your Account Is Closed:')}
                   </span>{' '}
+                  {Boolean(userProfile?.suspendedRuleNumber) && (() => {
+                    const rule = findCommunityRule(userProfile?.suspendedRuleNumber);
+                    return rule ? (
+                      <span className="mr-1 font-bold text-red-950">
+                        [{tr(`Kanuni #${rule.number}`, `Rule #${rule.number}`)}: {tr(rule.titleSw, rule.titleEn)}]
+                      </span>
+                    ) : null;
+                  })()}
                   <span>
                     {tr(
                       'Huwezi kupost, ku-comment, wala kupenda.',
@@ -2485,6 +2518,9 @@ function ForumShell() {
             isSuspended={isSuspended}
             myReports={reports}
             topics={topics}
+            videos={videos}
+            friendsCount={directChats.length}
+            userNotifications={userNotifications}
             onSaveProfile={handleSaveProfile}
             onUpdateProfilePhoto={handleUpdateProfilePhoto}
             onPublishPosterTopic={async (data) => {
@@ -2503,6 +2539,11 @@ function ForumShell() {
             }}
             onOpenTopic={(topicId) => {
               setSelectedTopicId(topicId);
+            }}
+            onOpenVideo={(videoId) => {
+              setInitialVideoId(videoId);
+              setSelectedTopicId(null);
+              setActiveTab('video');
             }}
             onToast={showToast}
           />
@@ -2749,6 +2790,7 @@ function ForumShell() {
         currentUserDisplayName={userProfile?.displayName || user?.displayName || 'Mwanachama'}
         currentUserPhoto={userProfile?.photoURL || user?.photoURL || ''}
         topics={topics}
+        videos={videos}
         isSuspended={isSuspended}
         onClose={() => setProfileModalTarget(null)}
         onSignIn={handleSignIn}

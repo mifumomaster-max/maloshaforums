@@ -54,7 +54,7 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'uid', 'displayName', 'photoURL', 'bio', 'role', 'verificationBadge',
-          'accountStatus', 'suspendedReason',
+          'accountStatus', 'suspendedReason', 'suspendedRuleNumber',
           'topicsCount', 'repliesCount', 'followersCount', 'createdAt', 'updatedAt'
         ])
         && data.uid is string && data.uid == userId && data.uid.size() >= 1 && data.uid.size() <= 128
@@ -65,6 +65,7 @@ service cloud.firestore {
         && (!('verificationBadge' in data) || (data.verificationBadge is string && data.verificationBadge in ['none', 'individual', 'organization', 'government', 'owner', 'journalist', 'educator', 'creator']))
         && (!('accountStatus' in data) || (data.accountStatus is string && data.accountStatus in ['active', 'suspended']))
         && (!('suspendedReason' in data) || (data.suspendedReason is string && data.suspendedReason.size() <= 300))
+        && (!('suspendedRuleNumber' in data) || (data.suspendedRuleNumber is int && data.suspendedRuleNumber >= 0 && data.suspendedRuleNumber <= 13))
         && data.topicsCount is int && data.topicsCount >= 0
         && data.repliesCount is int && data.repliesCount >= 0
         && (!('followersCount' in data) || (data.followersCount is int && data.followersCount >= 0))
@@ -180,13 +181,14 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'reporterId', 'targetType', 'targetId', 'topicId',
-          'reason', 'details', 'status', 'createdAt'
+          'reason', 'ruleNumber', 'details', 'status', 'createdAt'
         ])
         && data.reporterId is string && data.reporterId.size() >= 1 && data.reporterId.size() <= 128
-        && data.targetType in ['topic', 'reply']
-        && data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128
-        && data.topicId is string && data.topicId.size() >= 1 && data.topicId.size() <= 128
+        && data.targetType in ['topic', 'reply', 'video']
+        && data.targetId is string && isValidId(data.targetId)
+        && data.topicId is string && isValidId(data.topicId)
         && data.reason in ['spam', 'harassment', 'misinformation', 'unlawful', 'other']
+        && (!('ruleNumber' in data) || (data.ruleNumber is int && data.ruleNumber >= 0 && data.ruleNumber <= 13))
         && data.details is string && data.details.size() <= 500
         && data.status in ['pending', 'reviewed', 'dismissed']
         && data.createdAt is timestamp;
@@ -487,19 +489,22 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'recipientId', 'actorId', 'actorName', 'actorPhoto',
           'type', 'topicId', 'topicTitle', 'topicCategory',
-          'replyId', 'parentReplyId', 'replyPreview', 'isRead', 'createdAt'
+          'replyId', 'parentReplyId', 'replyPreview',
+          'ruleNumber', 'ruleTitle', 'isRead', 'createdAt'
         ])
         && data.recipientId is string && data.recipientId == userId && isValidId(data.recipientId)
         && data.actorId is string && isValidId(data.actorId)
         && data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 80
         && data.actorPhoto is string && data.actorPhoto.size() <= 500
-        && data.type in ['comment_reply', 'post_comment']
+        && data.type in ['comment_reply', 'post_comment', 'account_moderation', 'video_moderation', 'post_moderation']
         && data.topicId is string && isValidId(data.topicId)
         && data.topicTitle is string && data.topicTitle.size() <= 140
         && data.topicCategory in ['Kijiweni', 'Fursa', 'Makala']
         && data.replyId is string && isValidId(data.replyId)
         && data.parentReplyId is string && data.parentReplyId.size() <= 128
         && data.replyPreview is string && data.replyPreview.size() >= 1 && data.replyPreview.size() <= 200
+        && (!('ruleNumber' in data) || (data.ruleNumber is int && data.ruleNumber >= 0 && data.ruleNumber <= 13))
+        && (!('ruleTitle' in data) || (data.ruleTitle is string && data.ruleTitle.size() <= 140))
         && data.isRead is bool
         && data.createdAt is timestamp;
     }
@@ -523,6 +528,7 @@ service cloud.firestore {
           'likesCount', 'commentsCount', 'sharesCount', 'isArchived',
           'allowComments', 'allowDownload', 'allowLikes', 'showLikeCount',
           'autoReplyEnabled', 'autoReplyMessage', 'autoReplyTrigger', 'autoReplyKeyword',
+          'moderationRuleNumber', 'moderationReason',
           'createdAt', 'updatedAt'
         ])
         && data.authorId is string && isValidId(data.authorId)
@@ -565,6 +571,8 @@ service cloud.firestore {
         && (!('autoReplyMessage' in data) || (data.autoReplyMessage is string && data.autoReplyMessage.size() <= 300))
         && (!('autoReplyTrigger' in data) || (data.autoReplyTrigger is string && data.autoReplyTrigger in ['all', 'keyword']))
         && (!('autoReplyKeyword' in data) || (data.autoReplyKeyword is string && data.autoReplyKeyword.size() <= 60))
+        && (!('moderationRuleNumber' in data) || (data.moderationRuleNumber is int && data.moderationRuleNumber >= 0 && data.moderationRuleNumber <= 13))
+        && (!('moderationReason' in data) || (data.moderationReason is string && data.moderationReason.size() <= 300))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -636,6 +644,7 @@ service cloud.firestore {
         && (!('verificationBadge' in incoming()) || incoming().verificationBadge == 'none' || isAdmin())
         && (!('accountStatus' in incoming()) || incoming().accountStatus == 'active' || isAdmin())
         && (!('suspendedReason' in incoming()) || incoming().suspendedReason == '' || isAdmin())
+        && (!('suspendedRuleNumber' in incoming()) || incoming().suspendedRuleNumber == 0 || isAdmin())
         && incoming().topicsCount == 0
         && incoming().repliesCount == 0
         && (!('followersCount' in incoming()) || incoming().followersCount == 0)
@@ -738,10 +747,19 @@ service cloud.firestore {
           && isValidId(notificationId)
           && isValidUserNotification(incoming(), userId)
           && incoming().actorId == request.auth.uid
-          && incoming().recipientId != request.auth.uid
           && incoming().isRead == false
           && incoming().createdAt == request.time
-          && exists(/databases/$(database)/documents/topics/$(incoming().topicId));
+          && (
+            (
+              incoming().type in ['comment_reply', 'post_comment'] &&
+              incoming().recipientId != request.auth.uid &&
+              exists(/databases/$(database)/documents/topics/$(incoming().topicId))
+            ) ||
+            (
+              isAdmin() &&
+              incoming().type in ['account_moderation', 'video_moderation', 'post_moderation']
+            )
+          );
 
         allow update: if isSignedIn()
           && isValidId(userId)
@@ -1005,7 +1023,16 @@ service cloud.firestore {
         && incoming().reporterId == request.auth.uid
         && incoming().status == 'pending'
         && incoming().createdAt == request.time
-        && exists(/databases/$(database)/documents/topics/$(incoming().topicId));
+        && (
+          (
+            incoming().targetType in ['topic', 'reply'] &&
+            exists(/databases/$(database)/documents/topics/$(incoming().topicId))
+          ) ||
+          (
+            incoming().targetType == 'video' &&
+            exists(/databases/$(database)/documents/videos/$(incoming().targetId))
+          )
+        );
 
       allow update: if isAdmin()
         && isValidId(reportId)
@@ -1419,6 +1446,8 @@ service cloud.firestore {
         && isValidVideo(incoming())
         && incoming().authorId == request.auth.uid
         && incoming().isArchived == false
+        && !('moderationRuleNumber' in incoming())
+        && !('moderationReason' in incoming())
         && incoming().likesCount == 0
         && incoming().commentsCount == 0
         && incoming().sharesCount == 0

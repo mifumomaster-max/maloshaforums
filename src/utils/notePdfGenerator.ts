@@ -70,68 +70,90 @@ export async function downloadNoteAsPdf(note: MchartNote): Promise<void> {
 
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
+  const centerX = pageWidth / 2;
   const marginX = 16;
   const maxContentWidth = pageWidth - marginX * 2;
-  const bottomLimit = pageHeight - 18;
+  const bottomLimit = pageHeight - 20;
 
-  const drawHeaderBanner = () => {
+  const drawOfficialHeader = () => {
+    // Formal top institutional accent stripes
     doc.setFillColor(14, 38, 64);
-    doc.rect(0, 0, pageWidth, 22, 'F');
-    doc.setFillColor(7, 94, 84);
-    doc.rect(0, 22, pageWidth, 1.8, 'F');
+    doc.rect(0, 0, pageWidth, 3.8, 'F');
+    doc.setFillColor(217, 119, 6);
+    doc.rect(0, 3.8, pageWidth, 1.0, 'F');
 
-    doc.setTextColor(255, 255, 255);
+    // Centered circular official crest emblem
+    const emblemY = 14.5;
+    doc.setFillColor(14, 38, 64);
+    doc.circle(centerX, emblemY, 6.4, 'F');
+    doc.setDrawColor(217, 119, 6);
+    doc.setLineWidth(0.5);
+    doc.circle(centerX, emblemY, 5.3, 'S');
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(12);
-    doc.text('MALOSHA FORUMS  |  MCHART NOTES', marginX, 11);
+    doc.setFontSize(8.2);
+    doc.setTextColor(255, 255, 255);
+    doc.text('MF', centerX, emblemY + 2.6, { align: 'center' });
+
+    // Centered official institution title & division
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(15.5);
+    doc.setTextColor(14, 38, 64);
+    doc.text('MALOSHA FORUMS', centerX, 27.5, { align: 'center' });
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.2);
+    doc.setTextColor(7, 94, 84);
+    doc.text('MCHART OFFICIAL STUDY NOTES & DIGITAL ARCHIVE', centerX, 32.8, { align: 'center' });
 
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8.5);
-    doc.setTextColor(203, 213, 225);
-    doc.text('Nyaraka Rasmi ya Kusoma na Kumbukumbu', marginX, 17);
+    doc.setFontSize(8.2);
+    doc.setTextColor(71, 85, 105);
+    doc.text('Nyaraka Rasmi ya Kiofisi  |  Elimu, Fursa na Kumbukumbu', centerX, 37.5, {
+      align: 'center',
+    });
+
+    // Double official divider rule
+    doc.setDrawColor(14, 38, 64);
+    doc.setLineWidth(0.65);
+    doc.line(marginX, 41, pageWidth - marginX, 41);
+    doc.setDrawColor(217, 119, 6);
+    doc.setLineWidth(0.28);
+    doc.line(marginX, 42.3, pageWidth - marginX, 42.3);
   };
 
-  drawHeaderBanner();
-  let y = 33;
+  drawOfficialHeader();
+  let y = 49;
 
   const ensureSpace = (neededHeight: number) => {
     if (y + neededHeight <= bottomLimit) return;
     doc.addPage();
-    doc.setFillColor(7, 94, 84);
-    doc.rect(0, 0, pageWidth, 1.8, 'F');
-    y = 16;
+    doc.setFillColor(14, 38, 64);
+    doc.rect(0, 0, pageWidth, 2.2, 'F');
+    doc.setFillColor(217, 119, 6);
+    doc.rect(0, 2.2, pageWidth, 0.7, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(100, 116, 139);
+    doc.text('MALOSHA FORUMS  ·  MCHART OFFICIAL NOTES', centerX, 9.5, { align: 'center' });
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.25);
+    doc.line(marginX, 12, pageWidth - marginX, 12);
+    y = 19;
   };
 
-  // Document Title
+  // Pre-calculate centered official document title card
   const cleanTitle = normalizePdfText(note.title) || 'Notes za Malosha Forums';
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(17);
-  doc.setTextColor(14, 38, 64);
-  const titleLines = doc.splitTextToSize(cleanTitle, maxContentWidth) as string[];
-  for (const line of titleLines) {
-    ensureSpace(8);
-    doc.text(line, marginX, y);
-    y += 7.5;
-  }
+  doc.setFontSize(15.5);
+  const titleLines = doc.splitTextToSize(cleanTitle, maxContentWidth - 12) as string[];
 
-  // Document Subtitle
-  if (note.subtitle) {
-    const cleanSubtitle = normalizePdfText(note.subtitle);
-    if (cleanSubtitle) {
-      doc.setFont('helvetica', 'italic');
-      doc.setFontSize(11.5);
-      doc.setTextColor(71, 85, 105);
-      const subLines = doc.splitTextToSize(cleanSubtitle, maxContentWidth) as string[];
-      for (const sl of subLines) {
-        ensureSpace(6);
-        doc.text(sl, marginX, y);
-        y += 5.5;
-      }
-      y += 1.5;
-    }
-  }
+  const cleanSubtitle = note.subtitle ? normalizePdfText(note.subtitle) : '';
+  doc.setFont('helvetica', 'italic');
+  doc.setFontSize(10.5);
+  const subLines = cleanSubtitle
+    ? (doc.splitTextToSize(cleanSubtitle, maxContentWidth - 14) as string[])
+    : [];
 
-  // Metadata line
   const dateLabel = note.createdAt
     ? note.createdAt.toDate().toLocaleDateString('sw-TZ', {
         day: 'numeric',
@@ -139,20 +161,45 @@ export async function downloadNoteAsPdf(note: MchartNote): Promise<void> {
         year: 'numeric',
       })
     : new Date().toLocaleDateString();
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9.5);
-  doc.setTextColor(71, 85, 105);
+  const refCode = `MF-${(note.id || 'NOTE').slice(0, 6).toUpperCase()}`;
   const metaText = normalizePdfText(
-    `Mwandishi: ${note.authorName || 'Mmiliki'}   |   Tarehe: ${dateLabel}   |   Maneno: ${note.wordCount}`
+    `Kumbukumbu: ${refCode}  |  Mwandishi: ${note.authorName || 'Mmiliki'}  |  Tarehe: ${dateLabel}`
   );
-  doc.text(metaText, marginX, y + 1);
-  y += 6;
 
+  const cardHeight =
+    10 + titleLines.length * 7 + (subLines.length > 0 ? subLines.length * 5.2 + 2 : 0) + 8;
+
+  // Soft centered official title block
+  doc.setFillColor(248, 250, 252);
   doc.setDrawColor(203, 213, 225);
   doc.setLineWidth(0.3);
-  doc.line(marginX, y, pageWidth - marginX, y);
-  y += 7;
+  doc.roundedRect(marginX, y - 3, maxContentWidth, cardHeight, 2, 2, 'FD');
+
+  y += 4.5;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(15.5);
+  doc.setTextColor(14, 38, 64);
+  for (const line of titleLines) {
+    doc.text(line, centerX, y, { align: 'center' });
+    y += 7;
+  }
+
+  if (subLines.length > 0) {
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(10.5);
+    doc.setTextColor(71, 85, 105);
+    for (const sl of subLines) {
+      doc.text(sl, centerX, y, { align: 'center' });
+      y += 5.2;
+    }
+    y += 1.5;
+  }
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(71, 85, 105);
+  doc.text(metaText, centerX, y + 1, { align: 'center' });
+  y += 11;
 
   // Render structured body lines including fenced code blocks
   const lines = note.body.split('\n');
@@ -333,19 +380,21 @@ export async function downloadNoteAsPdf(note: MchartNote): Promise<void> {
     i++;
   }
 
-  // Page numbers footer
+  // Centered official footer & page numbers
   const totalPages = doc.getNumberOfPages();
   for (let p = 1; p <= totalPages; p++) {
     doc.setPage(p);
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.25);
+    doc.line(marginX, pageHeight - 13, pageWidth - marginX, pageHeight - 13);
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8.5);
+    doc.setFontSize(8.2);
     doc.setTextColor(100, 116, 139);
-    doc.text('Malosha Forums · Mchart Notes', marginX, pageHeight - 9);
     doc.text(
-      `Ukurasa ${p} / ${totalPages}`,
-      pageWidth - marginX,
-      pageHeight - 9,
-      { align: 'right' }
+      `Malosha Forums  ·  Nyaraka Rasmi ya Mchart Notes  |  Ukurasa ${p} / ${totalPages}`,
+      centerX,
+      pageHeight - 8.5,
+      { align: 'center' }
     );
   }
 

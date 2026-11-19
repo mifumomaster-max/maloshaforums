@@ -95,7 +95,7 @@ export const NavSectionIcon: React.FC<NavSectionIconProps> = ({
             <stop offset="100%" stopColor="#E11D48" />
           </linearGradient>
         </defs>
-        {/* TikTok-inspired dual cyan / crimson glow layers */}
+        {/* Malosha Reels dual cyan / crimson glow layers */}
         <rect x="2.6" y="4.8" width="19.5" height="19.5" rx="5.2" fill={`url(#vidAccentA-${uid})`} opacity="0.9" />
         <rect x="5.9" y="3.7" width="19.5" height="19.5" rx="5.2" fill={`url(#vidAccentB-${uid})`} opacity="0.9" />
         {/* Crisp dark cinema frame */}

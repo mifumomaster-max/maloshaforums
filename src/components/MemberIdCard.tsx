@@ -249,26 +249,44 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
     drawRoundedRect(ctx, 0, 0, W, H, 32);
     ctx.clip();
 
-    // 1. Base Sky-Cyan Security Gradient
+    // 1. Base Tanzania Horizon Sky-Turquoise Security Gradient
     const bgGrad = ctx.createLinearGradient(0, 0, W, H);
-    bgGrad.addColorStop(0, '#EDF8FE');
-    bgGrad.addColorStop(0.45, '#DDF2FD');
-    bgGrad.addColorStop(0.78, '#CBEAF9');
-    bgGrad.addColorStop(1, '#E5F5FD');
+    bgGrad.addColorStop(0, '#EEF9FD');
+    bgGrad.addColorStop(0.42, '#DCF2FA');
+    bgGrad.addColorStop(0.75, '#C9EBF6');
+    bgGrad.addColorStop(1, '#E7F7F2');
     ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, W, H);
 
-    // 2. Golden Amber Sunburst Rays & Disc
-    const sunX = 612;
-    const sunY = 266;
+    // 1B. Top & Bottom Tanzania Flag National Tricolor Security Ribbon
+    const drawTanzaniaRibbon = (ry: number, rh: number) => {
+      ctx.save();
+      ctx.fillStyle = '#1EB53A';
+      ctx.fillRect(0, ry, W * 0.34, rh);
+      ctx.fillStyle = '#FCD116';
+      ctx.fillRect(W * 0.34, ry, W * 0.05, rh);
+      ctx.fillStyle = '#0F172A';
+      ctx.fillRect(W * 0.39, ry, W * 0.22, rh);
+      ctx.fillStyle = '#FCD116';
+      ctx.fillRect(W * 0.61, ry, W * 0.05, rh);
+      ctx.fillStyle = '#00A3DD';
+      ctx.fillRect(W * 0.66, ry, W * 0.34, rh);
+      ctx.restore();
+    };
+    drawTanzaniaRibbon(0, 8);
+    drawTanzaniaRibbon(H - 8, 8);
+
+    // 2. Golden Amber Sunburst Rays & Disc behind Kilimanjaro
+    const sunX = 590;
+    const sunY = 264;
     ctx.save();
-    const sunGlow = ctx.createRadialGradient(sunX, sunY, 18, sunX, sunY, 210);
-    sunGlow.addColorStop(0, 'rgba(250, 204, 21, 0.34)');
+    const sunGlow = ctx.createRadialGradient(sunX, sunY, 18, sunX, sunY, 215);
+    sunGlow.addColorStop(0, 'rgba(252, 209, 22, 0.38)');
     sunGlow.addColorStop(0.45, 'rgba(245, 158, 11, 0.16)');
     sunGlow.addColorStop(1, 'rgba(245, 158, 11, 0)');
     ctx.fillStyle = sunGlow;
     ctx.beginPath();
-    ctx.arc(sunX, sunY, 210, 0, Math.PI * 2);
+    ctx.arc(sunX, sunY, 215, 0, Math.PI * 2);
     ctx.fill();
 
     const rayCount = 24;
@@ -280,29 +298,29 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
       ctx.lineTo(sunX + Math.cos(angle - spread) * 215, sunY + Math.sin(angle - spread) * 215);
       ctx.lineTo(sunX + Math.cos(angle + spread) * 215, sunY + Math.sin(angle + spread) * 215);
       ctx.closePath();
-      ctx.fillStyle = i % 2 === 0 ? 'rgba(234, 179, 8, 0.22)' : 'rgba(253, 224, 71, 0.14)';
+      ctx.fillStyle = i % 2 === 0 ? 'rgba(234, 179, 8, 0.20)' : 'rgba(253, 224, 71, 0.13)';
       ctx.fill();
     }
     ctx.beginPath();
-    ctx.arc(sunX, sunY, 54, 0, Math.PI * 2);
+    ctx.arc(sunX, sunY, 52, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(253, 224, 71, 0.28)';
     ctx.fill();
-    ctx.strokeStyle = 'rgba(217, 119, 6, 0.28)';
+    ctx.strokeStyle = 'rgba(217, 119, 6, 0.26)';
     ctx.lineWidth = 2;
     ctx.stroke();
     ctx.restore();
 
-    // 3. Dual-Tone Spirograph Guilloche Security Mesh
+    // 3. Dual-Tone Tanzanian Emerald & Cerulean Guilloche Security Mesh
     ctx.save();
     for (let i = 0; i < 24; i++) {
       ctx.beginPath();
       const baseY = 58 + i * 24;
       ctx.strokeStyle =
-        i % 4 === 0
-          ? 'rgba(217, 119, 6, 0.11)'
-          : i % 2 === 0
-            ? 'rgba(14, 116, 174, 0.14)'
-            : 'rgba(56, 189, 248, 0.18)';
+        i % 5 === 0
+          ? 'rgba(30, 181, 58, 0.11)'
+          : i % 3 === 0
+            ? 'rgba(217, 119, 6, 0.10)'
+            : 'rgba(0, 163, 221, 0.15)';
       ctx.lineWidth = 1.2;
       for (let x = 0; x <= W; x += 20) {
         const y =
@@ -316,41 +334,162 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
     }
     ctx.restore();
 
-    // 4. Right Pale Security Shield Silhouette
+    // 4. Mount Kilimanjaro (Mlima Kilimanjaro) Snow-Capped Horizon Watermark
     ctx.save();
-    ctx.fillStyle = 'rgba(14, 116, 174, 0.12)';
+    // Main mountain slope (Shira -> Kibo Dome -> Mawenzi Spire)
+    ctx.fillStyle = 'rgba(14, 74, 102, 0.13)';
     ctx.beginPath();
-    ctx.moveTo(870, 180);
-    ctx.bezierCurveTo(910, 205, 922, 280, 895, 355);
-    ctx.bezierCurveTo(880, 405, 862, 460, 845, 510);
-    ctx.bezierCurveTo(825, 450, 822, 360, 840, 270);
+    ctx.moveTo(210, 534);
+    ctx.lineTo(310, 476);
+    ctx.lineTo(372, 466);
+    ctx.lineTo(432, 434);
+    ctx.lineTo(506, 356);
+    ctx.lineTo(536, 336);
+    ctx.lineTo(582, 336);
+    ctx.lineTo(618, 362);
+    ctx.lineTo(652, 412);
+    ctx.lineTo(676, 396);
+    ctx.lineTo(708, 364);
+    ctx.lineTo(736, 392);
+    ctx.lineTo(776, 444);
+    ctx.lineTo(890, 502);
+    ctx.lineTo(980, 534);
     ctx.closePath();
     ctx.fill();
+
+    // Kibo & Mawenzi Snow-Cap Glacier Watermark Highlights
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.56)';
+    ctx.beginPath();
+    ctx.moveTo(504, 359);
+    ctx.lineTo(536, 336);
+    ctx.lineTo(582, 336);
+    ctx.lineTo(618, 362);
+    ctx.lineTo(604, 376);
+    ctx.lineTo(586, 368);
+    ctx.lineTo(568, 384);
+    ctx.lineTo(552, 370);
+    ctx.lineTo(534, 382);
+    ctx.lineTo(518, 368);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(694, 378);
+    ctx.lineTo(708, 364);
+    ctx.lineTo(724, 380);
+    ctx.lineTo(712, 385);
+    ctx.lineTo(702, 382);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = 'rgba(14, 74, 102, 0.16)';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(458, 456);
+    ctx.quadraticCurveTo(548, 412, 636, 460);
+    ctx.moveTo(350, 494);
+    ctx.quadraticCurveTo(540, 448, 760, 492);
+    ctx.stroke();
     ctx.restore();
 
-    // 5. Bottom Ice-Blue Mountain / Wave Horizon Band
+    // 4B. Tanzania Twiga (Giraffe) & Savanna Acacia Watermark Silhouette (Right Security Zone)
     ctx.save();
-    const horizonGrad = ctx.createLinearGradient(0, 500, 0, H);
-    horizonGrad.addColorStop(0, 'rgba(186, 230, 253, 0.45)');
-    horizonGrad.addColorStop(0.5, 'rgba(125, 211, 252, 0.55)');
-    horizonGrad.addColorStop(1, 'rgba(224, 242, 254, 0.88)');
+    // Subtle acacia crown behind Twiga
+    ctx.fillStyle = 'rgba(30, 181, 58, 0.10)';
+    ctx.beginPath();
+    ctx.ellipse(918, 316, 74, 16, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(15, 68, 92, 0.14)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(920, 520);
+    ctx.quadraticCurveTo(918, 420, 916, 326);
+    ctx.moveTo(917, 366);
+    ctx.lineTo(886, 324);
+    ctx.moveTo(917, 358);
+    ctx.lineTo(948, 324);
+    ctx.stroke();
+
+    // Graceful Twiga Silhouette facing Mount Kilimanjaro
+    ctx.fillStyle = 'rgba(15, 58, 86, 0.155)';
+    ctx.beginPath();
+    // Head + horns (ossicones) + long neck + sloped back + hind & front legs
+    ctx.moveTo(784, 304); // muzzle tip
+    ctx.lineTo(806, 293); // forehead
+    ctx.lineTo(809, 281); // ossicone 1
+    ctx.lineTo(813, 281);
+    ctx.lineTo(814, 291);
+    ctx.lineTo(818, 280); // ossicone 2
+    ctx.lineTo(822, 281);
+    ctx.lineTo(821, 293);
+    ctx.lineTo(830, 298); // ear
+    ctx.lineTo(823, 305); // nape
+    ctx.lineTo(855, 386); // back of neck base
+    ctx.lineTo(906, 405); // sloped croup / back
+    ctx.lineTo(912, 444); // tail base
+    ctx.lineTo(916, 476); // tail tuft
+    ctx.lineTo(911, 476);
+    ctx.lineTo(908, 446);
+    ctx.lineTo(902, 522); // hind leg 1
+    ctx.lineTo(895, 522);
+    ctx.lineTo(893, 452);
+    ctx.lineTo(884, 522); // hind leg 2
+    ctx.lineTo(877, 522);
+    ctx.lineTo(881, 446);
+    ctx.lineTo(852, 442); // belly
+    ctx.lineTo(847, 522); // front leg 1
+    ctx.lineTo(840, 522);
+    ctx.lineTo(841, 442);
+    ctx.lineTo(831, 522); // front leg 2
+    ctx.lineTo(824, 522);
+    ctx.lineTo(832, 412); // chest
+    ctx.lineTo(805, 314); // throat
+    ctx.lineTo(785, 310); // lower jaw
+    ctx.closePath();
+    ctx.fill();
+
+    // Faint reticulated spot watermarks across Twiga neck & body
+    ctx.fillStyle = 'rgba(252, 209, 22, 0.24)';
+    [
+      [818, 326, 3.6],
+      [826, 344, 4.2],
+      [834, 364, 4.4],
+      [843, 384, 4.8],
+      [856, 404, 5.4],
+      [872, 412, 5.6],
+      [888, 418, 5.2],
+      [862, 424, 5.0],
+      [880, 430, 4.6],
+    ].forEach(([sx, sy, sr]) => {
+      ctx.beginPath();
+      ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.restore();
+
+    // 5. Bottom Savanna & Lake Horizon Band
+    ctx.save();
+    const horizonGrad = ctx.createLinearGradient(0, 504, 0, H);
+    horizonGrad.addColorStop(0, 'rgba(186, 230, 253, 0.42)');
+    horizonGrad.addColorStop(0.5, 'rgba(125, 211, 252, 0.50)');
+    horizonGrad.addColorStop(1, 'rgba(209, 250, 229, 0.85)');
     ctx.fillStyle = horizonGrad;
     ctx.beginPath();
     ctx.moveTo(0, 534);
-    ctx.lineTo(130, 504);
-    ctx.lineTo(240, 528);
-    ctx.lineTo(360, 494);
-    ctx.lineTo(485, 526);
-    ctx.lineTo(620, 498);
+    ctx.lineTo(130, 514);
+    ctx.lineTo(240, 530);
+    ctx.lineTo(360, 506);
+    ctx.lineTo(485, 528);
+    ctx.lineTo(620, 508);
     ctx.lineTo(760, 530);
-    ctx.lineTo(905, 500);
-    ctx.lineTo(W, 524);
+    ctx.lineTo(905, 510);
+    ctx.lineTo(W, 526);
     ctx.lineTo(W, H);
     ctx.lineTo(0, H);
     ctx.closePath();
     ctx.fill();
 
-    ctx.strokeStyle = 'rgba(14, 116, 174, 0.22)';
+    ctx.strokeStyle = 'rgba(14, 116, 174, 0.20)';
     ctx.lineWidth = 1.4;
     for (let r = 0; r < 6; r++) {
       ctx.beginPath();
@@ -366,19 +505,19 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
 
     // 6A. Multi-Layer Security Watermark 1: Official Micro-Text (-18 deg)
     ctx.save();
-    ctx.fillStyle = 'rgba(14, 38, 64, 0.05)';
+    ctx.fillStyle = 'rgba(14, 38, 64, 0.048)';
     ctx.font = '800 15px "Plus Jakarta Sans", system-ui, sans-serif';
     ctx.rotate((-18 * Math.PI) / 180);
     for (let y = -180; y < H + 360; y += 78) {
-      for (let x = -280; x < W + 280; x += 270) {
-        ctx.fillText('MALOSHA FORUMS · OFFICIAL ID', x, y);
+      for (let x = -280; x < W + 280; x += 285) {
+        ctx.fillText('TANZANIA · MALOSHA FORUMS ID', x, y);
       }
     }
     ctx.restore();
 
     // 6B. Multi-Layer Security Watermark 2: Holder-Bound Dynamic Watermark (+14 deg)
     ctx.save();
-    ctx.fillStyle = 'rgba(29, 78, 137, 0.045)';
+    ctx.fillStyle = 'rgba(29, 78, 137, 0.042)';
     ctx.font = '700 12px "JetBrains Mono", monospace';
     ctx.rotate((14 * Math.PI) / 180);
     for (let y = -220; y < H + 320; y += 92) {
@@ -390,44 +529,44 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
 
     // 6C. Central Faint Crest Watermark Seal (Behind Text Fields)
     ctx.save();
-    ctx.translate(560, 320);
-    ctx.strokeStyle = 'rgba(14, 116, 174, 0.09)';
+    ctx.translate(560, 315);
+    ctx.strokeStyle = 'rgba(14, 116, 174, 0.08)';
     ctx.lineWidth = 2.5;
     ctx.beginPath();
-    ctx.arc(0, 0, 128, 0, Math.PI * 2);
+    ctx.arc(0, 0, 126, 0, Math.PI * 2);
     ctx.stroke();
     ctx.beginPath();
-    ctx.arc(0, 0, 108, 0, Math.PI * 2);
+    ctx.arc(0, 0, 106, 0, Math.PI * 2);
     ctx.stroke();
     for (let s = 0; s < 16; s++) {
       const ang = (s * Math.PI) / 8;
       ctx.beginPath();
-      ctx.moveTo(Math.cos(ang) * 92, Math.sin(ang) * 92);
-      ctx.lineTo(Math.cos(ang) * 128, Math.sin(ang) * 128);
+      ctx.moveTo(Math.cos(ang) * 90, Math.sin(ang) * 90);
+      ctx.lineTo(Math.cos(ang) * 126, Math.sin(ang) * 126);
       ctx.stroke();
     }
-    ctx.fillStyle = 'rgba(14, 38, 64, 0.06)';
+    ctx.fillStyle = 'rgba(14, 38, 64, 0.055)';
     ctx.font = '900 22px "Plus Jakarta Sans", system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('MALOSHA FORUMS', 0, -8);
+    ctx.fillText('TANZANIA · MALOSHA', 0, -8);
     ctx.font = '700 13px "Plus Jakarta Sans", system-ui, sans-serif';
-    ctx.fillText('AUTHENTIC MEMBER PASS', 0, 14);
+    ctx.fillText('KILIMANJARO & TWIGA EDITION', 0, 14);
     ctx.restore();
 
-    // 7. Top-Left Official Crest + Issuing Organization Identity
+    // 7. Top-Left Official Tanzania Flag Mini-Badge + Crest + Issuing Organization Identity
     ctx.save();
     ctx.translate(62, 60);
     ctx.fillStyle = '#0F2942';
     ctx.beginPath();
     ctx.arc(0, 0, 26, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = '#38BDF8';
+    ctx.strokeStyle = '#1EB53A';
     ctx.lineWidth = 2.5;
     ctx.stroke();
-    ctx.fillStyle = '#F59E0B';
+    ctx.fillStyle = '#FCD116';
     drawRoundedRect(ctx, -11, -10, 22, 16, 5);
     ctx.fill();
-    ctx.fillStyle = '#FFFFFF';
+    ctx.fillStyle = '#0F2942';
     [-5, 0, 5].forEach((dx) => {
       ctx.beginPath();
       ctx.arc(dx, -2, 2, 0, Math.PI * 2);
@@ -435,33 +574,60 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
     });
     ctx.restore();
 
+    // Compact Tanzania Flag Graphic beside title
+    ctx.save();
+    drawRoundedRect(ctx, 102, 34, 28, 18, 3);
+    ctx.clip();
+    ctx.fillStyle = '#1EB53A';
+    ctx.fillRect(102, 34, 28, 18);
+    ctx.fillStyle = '#00A3DD';
+    ctx.beginPath();
+    ctx.moveTo(130, 34);
+    ctx.lineTo(130, 52);
+    ctx.lineTo(102, 52);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#FCD116';
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(100, 54);
+    ctx.lineTo(132, 32);
+    ctx.stroke();
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(100, 54);
+    ctx.lineTo(132, 32);
+    ctx.stroke();
+    ctx.restore();
+
     ctx.fillStyle = '#0F172A';
-    ctx.font = '800 16px "Plus Jakarta Sans", system-ui, sans-serif';
-    ctx.fillText('MALOSHA FORUMS · TANZANIA', 102, 48);
-    ctx.font = '700 11.5px "Plus Jakarta Sans", system-ui, sans-serif';
+    ctx.font = '800 15.5px "Plus Jakarta Sans", system-ui, sans-serif';
+    ctx.fillText('MALOSHA FORUMS · TANZANIA', 138, 49);
+    ctx.font = '700 11px "Plus Jakarta Sans", system-ui, sans-serif';
     ctx.fillStyle = '#1E293B';
-    ctx.fillText('USAJILI RASMI WA WANACHAMA', 102, 66);
-    ctx.fillText('MTANDAO WA JAMII NA MAARIFA', 102, 82);
+    ctx.fillText('JAMHURI YA MUUNGANO WA TANZANIA', 102, 68);
+    ctx.fillText('USAJILI RASMI WA WANACHAMA', 102, 84);
 
     // 8. Top-Right Metallic-Blue Outlined Title + Explicit Issuing Statement
-    const titleX = 398;
+    const titleX = 412;
     const titleY = 66;
     const headerTitle = 'KITAMBULISHO CHA MWANACHAMA';
-    ctx.font = '800 31px "Plus Jakarta Sans", system-ui, sans-serif';
-    const titleGrad = ctx.createLinearGradient(titleX, 36, titleX + 600, 72);
-    titleGrad.addColorStop(0, '#58A6DA');
-    titleGrad.addColorStop(0.5, '#9BD4F5');
-    titleGrad.addColorStop(1, '#3B82B6');
-    ctx.lineWidth = 2.5;
-    ctx.strokeStyle = '#1D4E89';
+    ctx.font = '800 30px "Plus Jakarta Sans", system-ui, sans-serif';
+    const titleGrad = ctx.createLinearGradient(titleX, 36, titleX + 590, 72);
+    titleGrad.addColorStop(0, '#0F4C81');
+    titleGrad.addColorStop(0.5, '#00A3DD');
+    titleGrad.addColorStop(1, '#1EB53A');
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#0F2942';
     ctx.strokeText(headerTitle, titleX, titleY);
     ctx.fillStyle = titleGrad;
     ctx.fillText(headerTitle, titleX, titleY);
 
     ctx.fillStyle = '#0F2942';
-    ctx.font = '800 11.5px "Plus Jakarta Sans", system-ui, sans-serif';
+    ctx.font = '800 11px "Plus Jakarta Sans", system-ui, sans-serif';
     ctx.fillText(
-      'KITAMBULISHO HIKI KIMETOLEWA NA MALOSHA FORUMS · ISSUED BY MALOSHA FORUMS',
+      'KITAMBULISHO HIKI KIMETOLEWA NA MALOSHA FORUMS · ISSUED IN TANZANIA',
       titleX + 2,
       88
     );
@@ -581,66 +747,29 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
     ctx.fillText('HOLOGRAM', holoX, holoY + 22);
     ctx.restore();
 
-    // 11. Top-Right Official Malosha Circular Seal Crest
+    // 11. Top-Right Official Malosha Tanzania Circular Seal Crest (Single Portrait Photo Only)
     ctx.save();
-    const sealX = 950;
-    const sealY = 166;
+    const sealX = 944;
+    const sealY = 172;
     ctx.strokeStyle = '#1E293B';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(sealX, sealY, 42, 0, Math.PI * 2);
+    ctx.arc(sealX, sealY, 44, 0, Math.PI * 2);
     ctx.stroke();
     ctx.beginPath();
-    ctx.arc(sealX, sealY, 32, 0, Math.PI * 2);
+    ctx.arc(sealX, sealY, 34, 0, Math.PI * 2);
     ctx.stroke();
     ctx.fillStyle = '#0F172A';
     ctx.font = '800 8px "Plus Jakarta Sans", system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('MALOSHA FORUMS', sealX, sealY - 20);
-    ctx.fillText('OFFICIAL SEAL', sealX, sealY + 26);
+    ctx.fillText('MALOSHA FORUMS', sealX, sealY - 21);
+    ctx.fillText('TANZANIA SEAL', sealX, sealY + 27);
     ctx.font = '800 12px "Plus Jakarta Sans", system-ui, sans-serif';
     ctx.fillText('VERIFIED', sealX, sealY + 4);
     ctx.font = '700 8px "Plus Jakarta Sans", system-ui, sans-serif';
-    ctx.fillText('KITAMBULISHO RASMI', sealX, sealY + 57);
-    ctx.fillText('CHA MWANACHAMA', sealX, sealY + 68);
+    ctx.fillText('KITAMBULISHO RASMI', sealX, sealY + 58);
+    ctx.fillText('CHA TANZANIA', sealX, sealY + 69);
     ctx.restore();
-
-    // Helper for drawing monochrome ghost portrait ovals
-    const drawGhostOval = (gx: number, gy: number, rx: number, ry: number, alpha: number) => {
-      ctx.save();
-      ctx.beginPath();
-      ctx.ellipse(gx, gy, rx, ry, 0, 0, Math.PI * 2);
-      ctx.clip();
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.65)';
-      ctx.fillRect(gx - rx, gy - ry, rx * 2, ry * 2);
-      if (loadedImg) {
-        ctx.globalAlpha = alpha;
-        ctx.filter = 'grayscale(100%) contrast(115%)';
-        const scale = Math.max((rx * 2) / loadedImg.width, (ry * 2) / loadedImg.height);
-        const dw = loadedImg.width * scale;
-        const dh = loadedImg.height * scale;
-        ctx.drawImage(loadedImg, gx - dw / 2, gy - dh / 2, dw, dh);
-      } else {
-        ctx.globalAlpha = alpha * 0.85;
-        ctx.fillStyle = '#334155';
-        ctx.font = `700 ${Math.round(rx * 0.8)}px Georgia, serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(getInitials(profile.displayName), gx, gy + 2);
-      }
-      ctx.restore();
-
-      ctx.save();
-      ctx.strokeStyle = 'rgba(56, 189, 248, 0.55)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.ellipse(gx, gy, rx, ry, 0, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-    };
-
-    drawGhostOval(826, 178, 34, 42, 0.72);
-    drawGhostOval(912, 540, 52, 64, 0.68);
 
     // 12. Center Member Structured Data Fields
     const fieldX = 368;
@@ -923,24 +1052,24 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
   return (
     <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50/80 p-3.5 sm:p-5">
       <div className="flex items-start gap-2.5">
-        <CreditCard className="mt-0.5 h-5 w-5 shrink-0 text-[#1D4E89]" aria-hidden="true" />
+        <CreditCard className="mt-0.5 h-5 w-5 shrink-0 text-[#1EB53A]" aria-hidden="true" />
         <div className="min-w-0">
           <h3 className="font-display text-base font-bold text-slate-900 sm:text-lg">
-            {tr('Kitambulisho Chako Rasmi cha Mwanachama', 'Your Official Member Identity Card')}
+            {tr('Kitambulisho Chako Rasmi cha Mwanachama · Tanzania', 'Your Official Tanzania Member Identity Card')}
           </h3>
           <p className="text-xs leading-relaxed text-slate-600">
             {tr(
-              'Kimetolewa rasmi na Malosha Forums kikiwa na alama nyingi za usalama (watermarks, hologram, muhuri, saini ya mmiliki wa mfumo na saini yako). Ukibadilisha picha yako ya wasifu, picha ya kitambulisho hubadilika papo hapo.',
-              'Issued officially by Malosha Forums with layered anti-counterfeit watermarks, hologram seal, platform owner signature, and cardholder signature. Updating your profile photo automatically updates this ID.'
+              'Kimeundwa kwa utambulisho wa Tanzania kikiwa na watermark ya Mlima Kilimanjaro na Twiga, picha moja pekee ya mwanachama, hologram na saini rasmi.',
+              'Styled with Tanzania national identity featuring Mount Kilimanjaro and Twiga watermarks, a single member portrait, hologram seal, and official signatures.'
             )}
           </p>
         </div>
       </div>
 
       {/* Live National-ID Specimen Card Container */}
-      <div className="mt-4 overflow-hidden rounded-2xl border border-sky-300/80 bg-gradient-to-br from-[#EDF8FE] via-[#DDF2FD] to-[#CBEAF9] shadow-lg">
+      <div className="mt-4 overflow-hidden rounded-2xl border border-emerald-400/60 bg-gradient-to-br from-[#EEF9FD] via-[#DCF2FA] to-[#E7F7F2] shadow-lg">
         <div className="relative aspect-[1050/662] w-full select-none overflow-hidden text-slate-900">
-          {/* SVG Background & Security Watermark Layers */}
+          {/* SVG Background & Tanzania Security Watermark Layers */}
           <svg
             viewBox="0 0 1050 662"
             preserveAspectRatio="none"
@@ -948,25 +1077,25 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
             aria-hidden="true"
           >
             <defs>
-              <radialGradient id={`sun-${svgUid}`} cx="58%" cy="40%" r="28%">
-                <stop offset="0%" stopColor="#FACC15" stopOpacity="0.42" />
+              <radialGradient id={`sun-${svgUid}`} cx="56%" cy="40%" r="28%">
+                <stop offset="0%" stopColor="#FCD116" stopOpacity="0.42" />
                 <stop offset="45%" stopColor="#F59E0B" stopOpacity="0.18" />
                 <stop offset="100%" stopColor="#F59E0B" stopOpacity="0" />
               </radialGradient>
               <linearGradient id={`ice-${svgUid}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#BAE6FD" stopOpacity="0.45" />
-                <stop offset="55%" stopColor="#7DD3FC" stopOpacity="0.58" />
-                <stop offset="100%" stopColor="#E0F2FE" stopOpacity="0.9" />
+                <stop offset="0%" stopColor="#BAE6FD" stopOpacity="0.42" />
+                <stop offset="55%" stopColor="#7DD3FC" stopOpacity="0.52" />
+                <stop offset="100%" stopColor="#D1FAE5" stopOpacity="0.86" />
               </linearGradient>
               <linearGradient id={`holo-${svgUid}`} x1="0" y1="0" x2="1" y2="1">
                 <stop offset="0%" stopColor="#38BDF8" stopOpacity="0.42" />
                 <stop offset="35%" stopColor="#FACC15" stopOpacity="0.34" />
-                <stop offset="70%" stopColor="#A78BFA" stopOpacity="0.3" />
+                <stop offset="70%" stopColor="#1EB53A" stopOpacity="0.28" />
                 <stop offset="100%" stopColor="#0EA5E9" stopOpacity="0.42" />
               </linearGradient>
               <pattern
                 id={`wm1-${svgUid}`}
-                width="270"
+                width="285"
                 height="78"
                 patternUnits="userSpaceOnUse"
                 patternTransform="rotate(-18)"
@@ -975,12 +1104,12 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
                   x="8"
                   y="44"
                   fill="#0E2640"
-                  fillOpacity="0.055"
+                  fillOpacity="0.05"
                   fontSize="14"
                   fontWeight="800"
                   fontFamily="sans-serif"
                 >
-                  MALOSHA FORUMS · OFFICIAL ID
+                  TANZANIA · MALOSHA FORUMS ID
                 </text>
               </pattern>
               <pattern
@@ -994,7 +1123,7 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
                   x="10"
                   y="54"
                   fill="#1D4E89"
-                  fillOpacity="0.05"
+                  fillOpacity="0.045"
                   fontSize="11.5"
                   fontWeight="700"
                   fontFamily="monospace"
@@ -1004,9 +1133,24 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
               </pattern>
             </defs>
 
-            {/* Sunburst Aura */}
-            <circle cx="612" cy="266" r="210" fill={`url(#sun-${svgUid})`} />
-            <g transform="translate(612 266)" opacity="0.22">
+            {/* Top & Bottom Tanzania National Flag Tricolor Security Ribbons */}
+            <g>
+              <rect x="0" y="0" width="357" height="8" fill="#1EB53A" />
+              <rect x="357" y="0" width="52.5" height="8" fill="#FCD116" />
+              <rect x="409.5" y="0" width="231" height="8" fill="#0F172A" />
+              <rect x="640.5" y="0" width="52.5" height="8" fill="#FCD116" />
+              <rect x="693" y="0" width="357" height="8" fill="#00A3DD" />
+
+              <rect x="0" y="654" width="357" height="8" fill="#1EB53A" />
+              <rect x="357" y="654" width="52.5" height="8" fill="#FCD116" />
+              <rect x="409.5" y="654" width="231" height="8" fill="#0F172A" />
+              <rect x="640.5" y="654" width="52.5" height="8" fill="#FCD116" />
+              <rect x="693" y="654" width="357" height="8" fill="#00A3DD" />
+            </g>
+
+            {/* Sunburst Aura Behind Kilimanjaro */}
+            <circle cx="590" cy="264" r="215" fill={`url(#sun-${svgUid})`} />
+            <g transform="translate(590 264)" opacity="0.22">
               {Array.from({ length: 24 }).map((_, i) => (
                 <polygon
                   key={i}
@@ -1018,7 +1162,7 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
               <circle r="52" fill="#FDE047" fillOpacity="0.5" stroke="#D97706" strokeWidth="2" />
             </g>
 
-            {/* Dual-Tone Guilloche Curves */}
+            {/* Dual-Tone Tanzania Emerald & Cerulean Guilloche Curves */}
             {Array.from({ length: 20 }).map((_, i) => {
               const y0 = 56 + i * 28;
               return (
@@ -1026,23 +1170,80 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
                   key={i}
                   d={`M 0 ${y0} Q 260 ${y0 - 24} 525 ${y0} T 1050 ${y0}`}
                   fill="none"
-                  stroke={i % 4 === 0 ? '#D97706' : i % 2 === 0 ? '#0284C7' : '#38BDF8'}
-                  strokeOpacity={i % 4 === 0 ? '0.11' : '0.16'}
+                  stroke={i % 5 === 0 ? '#1EB53A' : i % 3 === 0 ? '#D97706' : '#00A3DD'}
+                  strokeOpacity={i % 5 === 0 ? '0.11' : '0.15'}
                   strokeWidth="1.25"
                 />
               );
             })}
 
-            {/* Right Security Wing Motif */}
-            <path
-              d="M 870 180 C 910 205 922 280 895 355 C 880 405 862 460 845 510 C 825 450 822 360 840 270 Z"
-              fill="#0E74AE"
-              fillOpacity="0.12"
-            />
+            {/* Mount Kilimanjaro (Mlima Kilimanjaro) Snow-Capped Silhouette Watermark */}
+            <g>
+              <path
+                d="M 210 534 L 310 476 L 372 466 L 432 434 L 506 356 L 536 336 L 582 336 L 618 362 L 652 412 L 676 396 L 708 364 L 736 392 L 776 444 L 890 502 L 980 534 Z"
+                fill="#0E4A66"
+                fillOpacity="0.135"
+              />
+              <path
+                d="M 504 359 L 536 336 L 582 336 L 618 362 L 604 376 L 586 368 L 568 384 L 552 370 L 534 382 L 518 368 Z"
+                fill="#FFFFFF"
+                fillOpacity="0.58"
+              />
+              <path
+                d="M 694 378 L 708 364 L 724 380 L 712 385 L 702 382 Z"
+                fill="#FFFFFF"
+                fillOpacity="0.54"
+              />
+              <path
+                d="M 458 456 Q 548 412 636 460 M 350 494 Q 540 448 760 492"
+                fill="none"
+                stroke="#0E4A66"
+                strokeOpacity="0.16"
+                strokeWidth="1.4"
+              />
+            </g>
 
-            {/* Bottom Ice Wave Horizon */}
+            {/* Tanzania Twiga (Giraffe) & Acacia Silhouette Watermark */}
+            <g>
+              <ellipse cx="918" cy="316" rx="74" ry="16" fill="#1EB53A" fillOpacity="0.11" />
+              <path
+                d="M 920 520 Q 918 420 916 326 M 917 366 L 886 324 M 917 358 L 948 324"
+                fill="none"
+                stroke="#0F445C"
+                strokeOpacity="0.14"
+                strokeWidth="3"
+                strokeLinecap="round"
+              />
+              <path
+                d="M 784 304 L 806 293 L 809 281 L 813 281 L 814 291 L 818 280 L 822 281 L 821 293 L 830 298 L 823 305 L 855 386 L 906 405 L 912 444 L 916 476 L 911 476 L 908 446 L 902 522 L 895 522 L 893 452 L 884 522 L 877 522 L 881 446 L 852 442 L 847 522 L 840 522 L 841 442 L 831 522 L 824 522 L 832 412 L 805 314 L 785 310 Z"
+                fill="#0F3A56"
+                fillOpacity="0.16"
+              />
+              {[
+                [818, 326, 3.6],
+                [826, 344, 4.2],
+                [834, 364, 4.4],
+                [843, 384, 4.8],
+                [856, 404, 5.4],
+                [872, 412, 5.6],
+                [888, 418, 5.2],
+                [862, 424, 5.0],
+                [880, 430, 4.6],
+              ].map(([cx, cy, r], sIdx) => (
+                <circle
+                  key={sIdx}
+                  cx={cx}
+                  cy={cy}
+                  r={r}
+                  fill="#FCD116"
+                  fillOpacity="0.24"
+                />
+              ))}
+            </g>
+
+            {/* Bottom Savanna & Lake Horizon */}
             <path
-              d="M 0 534 L 130 504 L 240 528 L 360 494 L 485 526 L 620 498 L 760 530 L 905 500 L 1050 524 L 1050 662 L 0 662 Z"
+              d="M 0 534 L 130 514 L 240 530 L 360 506 L 485 528 L 620 508 L 760 530 L 905 510 L 1050 526 L 1050 662 L 0 662 Z"
               fill={`url(#ice-${svgUid})`}
             />
 
@@ -1051,14 +1252,14 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
             <rect width="1050" height="662" fill={`url(#wm2-${svgUid})`} />
 
             {/* Central Crest Watermark Seal */}
-            <g transform="translate(560 320)" opacity="0.14">
+            <g transform="translate(560 315)" opacity="0.13">
               <circle r="126" fill="none" stroke="#0E74AE" strokeWidth="2.5" />
               <circle r="106" fill="none" stroke="#0E74AE" strokeWidth="2" />
               {Array.from({ length: 16 }).map((_, idx) => (
                 <line
                   key={idx}
                   x1="0"
-                  y1="-92"
+                  y1="-90"
                   x2="0"
                   y2="-126"
                   stroke="#0E74AE"
@@ -1075,7 +1276,7 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
                 fontWeight="900"
                 fontFamily="sans-serif"
               >
-                MALOSHA FORUMS
+                TANZANIA · MALOSHA
               </text>
               <text
                 x="0"
@@ -1086,7 +1287,7 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
                 fontWeight="700"
                 fontFamily="sans-serif"
               >
-                AUTHENTIC MEMBER PASS
+                KILIMANJARO &amp; TWIGA EDITION
               </text>
             </g>
 
@@ -1162,37 +1363,49 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
 
           {/* Foreground Structured Card Layout */}
           <div className="relative z-10 flex h-full flex-col justify-between p-[2.8%] sm:p-[3.2%]">
-            {/* Top Bar: Crest + Organization Lines (Left) & Metallic Header + Issued By (Right) */}
+            {/* Top Bar: Crest + Tanzania Flag + Organization Lines (Left) & Header + Issued By (Right) */}
             <div className="flex items-start justify-between gap-[2%]">
               <div className="flex min-w-0 items-center gap-[6px] sm:gap-2.5">
-                <div className="flex h-[24px] w-[24px] shrink-0 items-center justify-center rounded-full border border-sky-400 bg-[#0F2942] text-amber-400 shadow-xs sm:h-10 sm:w-10 sm:border-2">
+                <div className="flex h-[24px] w-[24px] shrink-0 items-center justify-center rounded-full border border-[#1EB53A] bg-[#0F2942] text-[#FCD116] shadow-xs sm:h-10 sm:w-10 sm:border-2">
                   <ShieldCheck className="h-3 w-3 sm:h-5 sm:w-5" aria-hidden="true" />
                 </div>
                 <div className="min-w-0 leading-[1.12]">
-                  <p className="truncate text-[6px] font-extrabold tracking-wide text-slate-900 uppercase sm:text-[10.5px]">
-                    MALOSHA FORUMS · TANZANIA
+                  <div className="flex items-center gap-1 sm:gap-1.5">
+                    <svg
+                      viewBox="0 0 28 18"
+                      className="h-[9px] w-[14px] shrink-0 rounded-[1.5px] shadow-2xs sm:h-[13px] sm:w-[20px]"
+                      aria-hidden="true"
+                    >
+                      <rect width="28" height="18" fill="#1EB53A" />
+                      <polygon points="28,0 28,18 0,18" fill="#00A3DD" />
+                      <line x1="-2" y1="20" x2="30" y2="-2" stroke="#FCD116" strokeWidth="5" />
+                      <line x1="-2" y1="20" x2="30" y2="-2" stroke="#000000" strokeWidth="3" />
+                    </svg>
+                    <p className="truncate text-[6px] font-extrabold tracking-wide text-slate-900 uppercase sm:text-[10.5px]">
+                      MALOSHA FORUMS · TANZANIA
+                    </p>
+                  </div>
+                  <p className="truncate text-[4.8px] font-bold text-slate-700 uppercase sm:text-[7.8px]">
+                    JAMHURI YA MUUNGANO WA TANZANIA
                   </p>
-                  <p className="truncate text-[5px] font-bold text-slate-700 uppercase sm:text-[8px]">
+                  <p className="truncate text-[4.8px] font-bold text-slate-700 uppercase sm:text-[7.8px]">
                     USAJILI RASMI WA WANACHAMA
-                  </p>
-                  <p className="truncate text-[5px] font-bold text-slate-700 uppercase sm:text-[8px]">
-                    MTANDAO WA JAMII NA MAARIFA
                   </p>
                 </div>
               </div>
 
               <div className="min-w-0 flex-1 text-right">
                 <p
-                  className="truncate font-display text-[9.5px] font-black tracking-wide text-[#4E9ED6] uppercase sm:text-[17px] md:text-[19px]"
+                  className="truncate font-display text-[9px] font-black tracking-wide text-[#0077B6] uppercase sm:text-[16.5px] md:text-[18.5px]"
                   style={{
-                    WebkitTextStroke: '0.6px #1D4E89',
+                    WebkitTextStroke: '0.5px #0F2942',
                     textShadow: '0 1px 0 rgba(255,255,255,0.75)',
                   }}
                 >
                   KITAMBULISHO CHA MWANACHAMA
                 </p>
-                <p className="truncate text-[4.8px] font-extrabold tracking-wide text-[#0F2942] uppercase sm:text-[7.5px]">
-                  KITAMBULISHO HIKI KIMETOLEWA NA MALOSHA FORUMS · ISSUED BY MALOSHA FORUMS
+                <p className="truncate text-[4.6px] font-extrabold tracking-wide text-[#0F2942] uppercase sm:text-[7.3px]">
+                  KITAMBULISHO HIKI KIMETOLEWA NA MALOSHA FORUMS · ISSUED IN TANZANIA
                 </p>
               </div>
             </div>
@@ -1312,25 +1525,10 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
                 </div>
               </div>
 
-              {/* Right Security Column: Seal Crest, Top Ghost Oval, Vertical Serial, Bottom Ghost Oval */}
+              {/* Right Security Column: Seal Crest & Vertical Serial (No Duplicate Small Photos) */}
               <div className="relative flex h-full flex-col items-end justify-between py-[1%]">
-                <div className="flex w-full items-center justify-end gap-[6%]">
-                  <div className="h-[22px] w-[18px] overflow-hidden rounded-full border border-sky-400/70 bg-white/75 sm:h-[40px] sm:w-[32px]">
-                    {profile.photoURL ? (
-                      <img
-                        src={profile.photoURL}
-                        alt=""
-                        className="h-full w-full object-cover grayscale opacity-75"
-                        referrerPolicy="no-referrer"
-                      />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-[5.5px] font-bold text-slate-600 sm:text-[9px]">
-                        {getInitials(profile.displayName)}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex h-[26px] w-[26px] shrink-0 flex-col items-center justify-center rounded-full border border-slate-800 bg-white/30 text-center sm:h-[48px] sm:w-[48px] sm:border-2">
+                <div className="flex w-full items-center justify-end">
+                  <div className="flex h-[28px] w-[28px] shrink-0 flex-col items-center justify-center rounded-full border border-slate-800 bg-white/35 text-center sm:h-[52px] sm:w-[52px] sm:border-2">
                     <span className="text-[3.2px] font-black leading-none text-slate-900 sm:text-[5px]">
                       MALOSHA
                     </span>
@@ -1338,7 +1536,7 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
                       VERIFIED
                     </span>
                     <span className="text-[3px] font-bold leading-none text-slate-800 sm:text-[4.8px]">
-                      SEAL
+                      TANZANIA
                     </span>
                   </div>
                 </div>
@@ -1353,21 +1551,7 @@ export const MemberIdCard: React.FC<MemberIdCardProps> = ({
                   </span>
                 </div>
 
-                {/* Bottom-Right Larger Ghost Oval */}
-                <div className="h-[30px] w-[25px] overflow-hidden rounded-full border border-sky-400/80 bg-white/75 shadow-xs sm:h-[58px] sm:w-[48px]">
-                  {profile.photoURL ? (
-                    <img
-                      src={profile.photoURL}
-                      alt=""
-                      className="h-full w-full object-cover grayscale opacity-70"
-                      referrerPolicy="no-referrer"
-                    />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center text-[7px] font-bold text-slate-600 sm:text-xs">
-                      {getInitials(profile.displayName)}
-                    </div>
-                  )}
-                </div>
+                <div className="h-[14px] sm:h-[22px]" aria-hidden="true" />
               </div>
             </div>
 

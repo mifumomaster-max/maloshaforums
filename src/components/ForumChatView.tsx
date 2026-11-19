@@ -25,6 +25,7 @@ import {
 import { Timestamp } from 'firebase/firestore';
 import {
   ChatAttachmentUploadResult,
+  downloadChatAttachmentFile,
   optimizeCloudinaryUrl,
   uploadChatFileToCloudinary,
 } from '../services/cloudinaryService';
@@ -50,6 +51,7 @@ import { Avatar, OnlineStatusPill } from './Avatar';
 import { ImageResizeModal } from './ImageResizeModal';
 import { MchartDirectInbox, MchartDirectRoom } from './MchartDirectChatView';
 import { MchartNotesView } from './MchartNotesView';
+import { MobilePdfNoteReader } from './MobilePdfNoteReader';
 import { LinkedText } from './RichText';
 import { AuthorVerificationBadge } from './VerificationBadge';
 import { User } from 'firebase/auth';
@@ -299,6 +301,8 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
   const [lightboxImage, setLightboxImage] = useState<{ url: string; name: string } | null>(
     null
   );
+  const [activePdfDoc, setActivePdfDoc] = useState<{ url: string; name: string } | null>(null);
+  const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
   const [pendingCropImage, setPendingCropImage] = useState<File | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
@@ -1327,38 +1331,110 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                               {/* Document Attachment Card */}
                               {msg.attachmentType === 'document' &&
                                 msg.attachmentUrl &&
-                                docBadge && (
-                                  <a
-                                    href={msg.attachmentUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    download={msg.attachmentName || undefined}
-                                    className={`mb-1.5 flex items-center gap-2.5 rounded-xl border p-2.5 transition-colors ${
-                                      isOwn
-                                        ? 'border-[#B6E2AE] bg-[#CBEFC5]/75 hover:bg-[#C0E8B9]'
-                                        : 'border-slate-200 bg-slate-50 hover:bg-slate-100'
-                                    }`}
-                                  >
+                                docBadge && (() => {
+                                  const isPdfDoc = docBadge.ext === 'PDF';
+                                  const isBusy = downloadingDocId === msg.id;
+                                  const handleDocDownload = async () => {
+                                    if (downloadingDocId) return;
+                                    setDownloadingDocId(msg.id);
+                                    try {
+                                      await downloadChatAttachmentFile(
+                                        msg.attachmentUrl,
+                                        msg.attachmentName || (isPdfDoc ? 'nyaraka.pdf' : 'faili'),
+                                        msg.attachmentMime
+                                      );
+                                      onToast(
+                                        tr(
+                                          'Faili limepakuliwa kwenye simu yako!',
+                                          'File saved to your device!'
+                                        )
+                                      );
+                                    } catch (err) {
+                                      onToast(
+                                        err instanceof Error
+                                          ? err.message
+                                          : tr('Imeshindwa kupakua faili.', 'Failed to download file.'),
+                                        'error'
+                                      );
+                                    } finally {
+                                      setDownloadingDocId(null);
+                                    }
+                                  };
+                                  return (
                                     <div
-                                      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[10px] font-extrabold ${docBadge.bgClass}`}
+                                      className={`mb-1.5 overflow-hidden rounded-xl border transition-colors ${
+                                        isOwn
+                                          ? 'border-[#B6E2AE] bg-[#CBEFC5]/75'
+                                          : 'border-slate-200 bg-slate-50'
+                                      }`}
                                     >
-                                      {docBadge.ext}
+                                      <div className="flex items-center gap-2.5 p-2.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            if (isPdfDoc) {
+                                              setActivePdfDoc({
+                                                url: msg.attachmentUrl,
+                                                name: msg.attachmentName || 'nyaraka.pdf',
+                                              });
+                                            } else {
+                                              void handleDocDownload();
+                                            }
+                                          }}
+                                          className="flex min-w-0 flex-1 items-center gap-2.5 text-left focus:outline-none"
+                                        >
+                                          <div
+                                            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[10px] font-extrabold ${docBadge.bgClass}`}
+                                          >
+                                            {docBadge.ext}
+                                          </div>
+                                          <div className="min-w-0 flex-1">
+                                            <p className="truncate text-xs font-semibold text-slate-900">
+                                              {msg.attachmentName || tr('Nyaraka', 'Document')}
+                                            </p>
+                                            <p className="text-[11px] text-slate-600">
+                                              {formatFileSize(msg.attachmentSize)}
+                                              {isPdfDoc
+                                                ? ` · ${tr('Gusa kufungua', 'Tap to open')}`
+                                                : ` · ${tr('Gusa kupakua', 'Tap to download')}`}
+                                            </p>
+                                          </div>
+                                        </button>
+                                        <div className="flex shrink-0 items-center gap-1.5">
+                                          {isPdfDoc && (
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                setActivePdfDoc({
+                                                  url: msg.attachmentUrl,
+                                                  name: msg.attachmentName || 'nyaraka.pdf',
+                                                })
+                                              }
+                                              className="inline-flex min-h-[34px] items-center gap-1 rounded-lg bg-[#075E54] px-2.5 text-[11px] font-bold text-white hover:bg-[#064E46]"
+                                            >
+                                              <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+                                              <span>{tr('Fungua', 'Open')}</span>
+                                            </button>
+                                          )}
+                                          <button
+                                            type="button"
+                                            disabled={isBusy}
+                                            onClick={() => void handleDocDownload()}
+                                            aria-label={tr('Pakua faili kwenye simu', 'Download file')}
+                                            className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-[#075E54]/30 bg-white px-2.5 text-[11px] font-bold text-[#075E54] hover:bg-emerald-50 disabled:opacity-60"
+                                          >
+                                            {isBusy ? (
+                                              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                                            ) : (
+                                              <Download className="h-3.5 w-3.5" aria-hidden="true" />
+                                            )}
+                                            <span>{tr('Pakua', 'Save')}</span>
+                                          </button>
+                                        </div>
+                                      </div>
                                     </div>
-                                    <div className="min-w-0 flex-1">
-                                      <p className="truncate text-xs font-semibold text-slate-900">
-                                        {msg.attachmentName || tr('Nyaraka', 'Document')}
-                                      </p>
-                                      <p className="text-[11px] text-slate-500">
-                                        {formatFileSize(msg.attachmentSize)} ·{' '}
-                                        {tr('Bonyeza kupakua', 'Tap to download')}
-                                      </p>
-                                    </div>
-                                    <Download
-                                      className="h-4 w-4 shrink-0 text-[#075E54]"
-                                      aria-hidden="true"
-                                    />
-                                  </a>
-                                )}
+                                  );
+                                })()}
 
                               {/* Message Text */}
                               {msg.text && (
@@ -1770,6 +1846,72 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
             onClick={(e) => e.stopPropagation()}
             className="max-h-[82vh] max-w-full rounded-xl object-contain"
           />
+        </div>
+      )}
+
+      {/* In-App PDF Viewer + Download Modal */}
+      {activePdfDoc && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={activePdfDoc.name}
+          onClick={() => setActivePdfDoc(null)}
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/75 p-0 backdrop-blur-xs md:items-center md:p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="flex h-[90dvh] w-full max-w-3xl flex-col overflow-hidden rounded-t-3xl bg-[#F4F7FA] text-slate-900 shadow-2xl md:h-[86dvh] md:rounded-2xl"
+          >
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-[#075E54] px-4 py-3 text-white">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-red-600 text-[10px] font-extrabold text-white">
+                  PDF
+                </span>
+                <p className="truncate text-xs font-bold sm:text-sm">{activePdfDoc.name}</p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void downloadChatAttachmentFile(
+                      activePdfDoc.url,
+                      activePdfDoc.name,
+                      'application/pdf'
+                    ).then(() =>
+                      onToast(tr('PDF imepakuliwa kwenye simu yako!', 'PDF saved to your device!'))
+                    );
+                  }}
+                  className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl bg-[#25D366] px-3 text-xs font-extrabold text-[#064E46] hover:brightness-105"
+                >
+                  <Download className="h-4 w-4" aria-hidden="true" />
+                  <span>{tr('Pakua Simu', 'Save PDF')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActivePdfDoc(null)}
+                  aria-label={tr('Funga PDF', 'Close PDF')}
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25"
+                >
+                  <X className="h-5 w-5" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6 sm:px-5">
+              <MobilePdfNoteReader
+                pdfUrl={activePdfDoc.url}
+                fileName={activePdfDoc.name}
+                onDownload={() => {
+                  void downloadChatAttachmentFile(
+                    activePdfDoc.url,
+                    activePdfDoc.name,
+                    'application/pdf'
+                  ).then(() =>
+                    onToast(tr('PDF imepakuliwa kwenye simu yako!', 'PDF saved to your device!'))
+                  );
+                }}
+              />
+            </div>
+          </div>
         </div>
       )}
 

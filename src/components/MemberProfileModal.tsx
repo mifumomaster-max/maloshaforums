@@ -14,6 +14,7 @@ import {
   UserCheck,
   UserPlus,
   Users,
+  Video as VideoIcon,
   X,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
@@ -28,6 +29,7 @@ import {
   MONETIZATION_REQUIREMENTS,
   Topic,
   UserProfile,
+  VideoPost,
   computeAuthorMetrics,
   formatMemberCode,
   normalizeBoardCategory,
@@ -43,6 +45,7 @@ interface MemberProfileModalProps {
   currentUserDisplayName: string;
   currentUserPhoto: string;
   topics: Topic[];
+  videos?: VideoPost[];
   isSuspended?: boolean;
   onClose: () => void;
   onSignIn: (reason?: AuthPromptReason) => void;
@@ -63,6 +66,7 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
   currentUserDisplayName,
   currentUserPhoto,
   topics,
+  videos = [],
   isSuspended = false,
   onClose,
   onSignIn,
@@ -117,9 +121,9 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
   const metrics = useMemo(
     () =>
       memberUid
-        ? computeAuthorMetrics(topics, memberUid, effectiveFollowersCount)
-        : computeAuthorMetrics([], '', 0),
-    [topics, memberUid, effectiveFollowersCount]
+        ? computeAuthorMetrics(topics, memberUid, effectiveFollowersCount, videos, 0)
+        : computeAuthorMetrics([], '', 0, [], 0),
+    [topics, videos, memberUid, effectiveFollowersCount]
   );
 
   const recentPosts = useMemo(() => {
@@ -221,13 +225,25 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
 
   const criteriaItems = [
     {
-      label: tr('Wanaofuatilia (Followers)', 'Followers'),
+      label: tr('Wafuasi (Followers)', 'Followers'),
       current: metrics.followersCount,
       target: MONETIZATION_REQUIREMENTS.minFollowers,
       met: metrics.followersCount >= MONETIZATION_REQUIREMENTS.minFollowers,
     },
     {
-      label: tr('Machapisho hai (Posts)', 'Active Posts'),
+      label: tr('Marafiki (Friends)', 'Friends'),
+      current: metrics.friendsCount,
+      target: MONETIZATION_REQUIREMENTS.minFriends,
+      met: metrics.friendsCount >= MONETIZATION_REQUIREMENTS.minFriends,
+    },
+    {
+      label: tr('Video zilizopakiwa', 'Videos Posted'),
+      current: metrics.videosCount,
+      target: MONETIZATION_REQUIREMENTS.minVideos,
+      met: metrics.videosCount >= MONETIZATION_REQUIREMENTS.minVideos,
+    },
+    {
+      label: tr('Machapisho (Posts)', 'Posts'),
       current: metrics.postsCount,
       target: MONETIZATION_REQUIREMENTS.minPosts,
       met: metrics.postsCount >= MONETIZATION_REQUIREMENTS.minPosts,
@@ -379,42 +395,52 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
             </>
           )}
 
-          {/* 4 KPI Summary Cards */}
-          <div className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+          {/* KPI Summary Cards */}
+          <div className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-5">
             <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-center">
               <Users className="mx-auto h-4 w-4 text-[#1D4E89]" aria-hidden="true" />
               <p className="mt-1 font-display text-lg font-bold text-slate-900 tabular-nums">
-                {metrics.followersCount}
+                {metrics.followersCount.toLocaleString()}
               </p>
               <p className="text-[11px] font-medium text-slate-600">
-                {tr('Wanaomfuatilia', 'Followers')}
+                {tr('Wafuasi', 'Followers')}
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-center">
+              <VideoIcon className="mx-auto h-4 w-4 text-purple-600" aria-hidden="true" />
+              <p className="mt-1 font-display text-lg font-bold text-slate-900 tabular-nums">
+                {metrics.videosCount.toLocaleString()}
+              </p>
+              <p className="text-[11px] font-medium text-slate-600">
+                {tr('Video', 'Videos')}
               </p>
             </div>
 
             <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-center">
               <Sparkles className="mx-auto h-4 w-4 text-amber-600" aria-hidden="true" />
               <p className="mt-1 font-display text-lg font-bold text-slate-900 tabular-nums">
-                {metrics.postsCount}
+                {metrics.postsCount.toLocaleString()}
               </p>
               <p className="text-[11px] font-medium text-slate-600">
-                {tr('Machapisho', 'Posts')}
+                {tr('Post', 'Posts')}
               </p>
             </div>
 
             <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-center">
               <Heart className="mx-auto h-4 w-4 text-rose-600" aria-hidden="true" />
               <p className="mt-1 font-display text-lg font-bold text-slate-900 tabular-nums">
-                {metrics.totalLikesReceived}
+                {metrics.totalLikesReceived.toLocaleString()}
               </p>
               <p className="text-[11px] font-medium text-slate-600">
-                {tr('Likes Alizopata', 'Likes')}
+                {tr('Likes', 'Likes')}
               </p>
             </div>
 
-            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-center">
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-center col-span-2 sm:col-span-1">
               <MessageCircle className="mx-auto h-4 w-4 text-emerald-700" aria-hidden="true" />
               <p className="mt-1 font-display text-lg font-bold text-slate-900 tabular-nums">
-                {metrics.totalCommentsReceived}
+                {metrics.totalCommentsReceived.toLocaleString()}
               </p>
               <p className="text-[11px] font-medium text-slate-600">
                 {tr('Maoni', 'Comments')}
@@ -474,7 +500,7 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
                     <span className="truncate">{item.label}</span>
                   </span>
                   <span className="font-mono text-[11px] font-bold text-slate-900 tabular-nums">
-                    {item.current}/{item.target}
+                    {item.current.toLocaleString()}/{item.target.toLocaleString()}
                   </span>
                 </div>
               ))}

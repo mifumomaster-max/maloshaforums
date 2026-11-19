@@ -11,6 +11,7 @@ import {
   LogOut,
   MessageSquare,
   Newspaper,
+  ShieldAlert,
   Sparkles,
   User as UserIcon,
 } from 'lucide-react';
@@ -725,7 +726,12 @@ export const Header: React.FC<HeaderProps> = ({
                         </p>
                       </div>
                     ) : (
-                      userNotifications.map((notif) => (
+                      userNotifications.map((notif) => {
+                        const isModerationAlert =
+                          notif.type === 'account_moderation' ||
+                          notif.type === 'video_moderation' ||
+                          notif.type === 'post_moderation';
+                        return (
                         <button
                           key={notif.id}
                           type="button"
@@ -734,10 +740,18 @@ export const Header: React.FC<HeaderProps> = ({
                               void onMarkNotificationRead?.(notif.id);
                             }
                             setNotifOpen(false);
-                            onOpenTopic(notif.topicId);
+                            if (isModerationAlert) {
+                              onSelectTab('safety');
+                            } else {
+                              onOpenTopic(notif.topicId);
+                            }
                           }}
                           className={`flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 ${
-                            !notif.isRead ? 'bg-sky-50/75' : 'bg-white'
+                            !notif.isRead
+                              ? isModerationAlert
+                                ? 'bg-rose-50/80'
+                                : 'bg-sky-50/75'
+                              : 'bg-white'
                           }`}
                         >
                           {/* Facebook-style Avatar + Corner Action Badge */}
@@ -750,11 +764,17 @@ export const Header: React.FC<HeaderProps> = ({
                             />
                             <span
                               className={`absolute -right-1 -bottom-1 flex h-5 w-5 items-center justify-center rounded-full text-white ring-2 ring-white ${
-                                notif.type === 'comment_reply' ? 'bg-[#1877F2]' : 'bg-[#16A34A]'
+                                isModerationAlert
+                                  ? 'bg-rose-600'
+                                  : notif.type === 'comment_reply'
+                                    ? 'bg-[#1877F2]'
+                                    : 'bg-[#16A34A]'
                               }`}
                               aria-hidden="true"
                             >
-                              {notif.type === 'comment_reply' ? (
+                              {isModerationAlert ? (
+                                <ShieldAlert className="h-3 w-3" />
+                              ) : notif.type === 'comment_reply' ? (
                                 <CornerDownRight className="h-3 w-3" />
                               ) : (
                                 <MessageSquare className="h-2.5 w-2.5" />
@@ -763,27 +783,57 @@ export const Header: React.FC<HeaderProps> = ({
                           </div>
 
                           <div className="min-w-0 flex-1">
-                            <p className="text-[13px] leading-snug text-slate-800">
-                              <span className="font-bold text-slate-900">{notif.actorName}</span>{' '}
-                              <span>
-                                {notif.type === 'comment_reply'
-                                  ? tr('alijibu maoni yako kwenye', 'replied to your comment on')
-                                  : tr('alitoa maoni kwenye chapisho lako', 'commented on your post')}
-                              </span>{' '}
-                              {notif.topicTitle && (
-                                <span className="font-semibold text-[#163A5F]">
-                                  «{notif.topicTitle}»
-                                </span>
-                              )}
-                            </p>
-                            {notif.replyPreview && (
-                              <p className="mt-1 line-clamp-2 rounded-lg bg-slate-100/80 px-2.5 py-1 text-xs text-slate-600">
-                                “{notif.replyPreview}”
-                              </p>
+                            {isModerationAlert ? (
+                              <>
+                                <p className="text-[13px] leading-snug text-slate-900">
+                                  <span className="font-bold text-rose-700">
+                                    {notif.topicTitle ||
+                                      tr('Taarifa ya Usalama', 'Safety Moderation Notice')}
+                                  </span>
+                                  {Boolean(notif.ruleNumber) && (
+                                    <span className="ml-1.5 inline-block rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-extrabold text-rose-800">
+                                      {tr(`Kanuni #${notif.ruleNumber}`, `Rule #${notif.ruleNumber}`)}
+                                    </span>
+                                  )}
+                                </p>
+                                {(notif.ruleTitle || notif.replyPreview) && (
+                                  <p className="mt-1 line-clamp-2 rounded-lg bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-900">
+                                    {notif.ruleTitle ? `${notif.ruleTitle}: ` : ''}
+                                    {notif.replyPreview}
+                                  </p>
+                                )}
+                              </>
+                            ) : (
+                              <>
+                                <p className="text-[13px] leading-snug text-slate-800">
+                                  <span className="font-bold text-slate-900">{notif.actorName}</span>{' '}
+                                  <span>
+                                    {notif.type === 'comment_reply'
+                                      ? tr('alijibu maoni yako kwenye', 'replied to your comment on')
+                                      : tr('alitoa maoni kwenye chapisho lako', 'commented on your post')}
+                                  </span>{' '}
+                                  {notif.topicTitle && (
+                                    <span className="font-semibold text-[#163A5F]">
+                                      «{notif.topicTitle}»
+                                    </span>
+                                  )}
+                                </p>
+                                {notif.replyPreview && (
+                                  <p className="mt-1 line-clamp-2 rounded-lg bg-slate-100/80 px-2.5 py-1 text-xs text-slate-600">
+                                    “{notif.replyPreview}”
+                                  </p>
+                                )}
+                              </>
                             )}
                             <div className="mt-1 flex items-center gap-1.5 text-[11px]">
-                              <span className="font-semibold text-[#1877F2]">
-                                {getBoardLabel(notif.topicCategory)}
+                              <span
+                                className={`font-semibold ${
+                                  isModerationAlert ? 'text-rose-700' : 'text-[#1877F2]'
+                                }`}
+                              >
+                                {isModerationAlert
+                                  ? tr('Usalama wa Akaunti', 'Account Safety')
+                                  : getBoardLabel(notif.topicCategory)}
                               </span>
                               <span className="text-slate-300">·</span>
                               <span className="text-slate-400">{formatTime(notif.createdAt)}</span>
@@ -793,11 +843,14 @@ export const Header: React.FC<HeaderProps> = ({
                           {!notif.isRead && (
                             <span
                               aria-label={tr('Haijasomwa', 'Unread')}
-                              className="mt-2 h-2.5 w-2.5 shrink-0 rounded-full bg-[#1877F2]"
+                              className={`mt-2 h-2.5 w-2.5 shrink-0 rounded-full ${
+                                isModerationAlert ? 'bg-rose-600' : 'bg-[#1877F2]'
+                              }`}
                             />
                           )}
                         </button>
-                      ))
+                      );
+                      })
                     )
                   ) : visibleNewsOrTopics.length === 0 ? (
                     <div className="px-5 py-9 text-center">

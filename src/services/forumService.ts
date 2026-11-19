@@ -37,6 +37,7 @@ import {
   UserProfile,
   VerificationBadgeType,
   computeMemberControlSerial,
+  findCommunityRule,
   formatMemberCode,
   normalizeAccountStatus,
   normalizeBoardCategory,
@@ -286,14 +287,27 @@ export async function updateUserVerificationBadge(
 export async function updateUserAccountStatus(
   targetUid: string,
   status: AccountStatus,
-  reason = ''
+  reason = '',
+  ruleNumber?: number
 ): Promise<void> {
   const path = `users/${targetUid}`;
-  const cleanReason = status === 'suspended' ? sanitizeTextInput(reason, 300) : '';
+  const cleanRuleNum =
+    status === 'suspended' && ruleNumber && Number.isFinite(ruleNumber)
+      ? Math.max(0, Math.min(13, Math.round(ruleNumber)))
+      : 0;
+  const matchedRule = cleanRuleNum > 0 ? findCommunityRule(cleanRuleNum) : null;
+  const cleanReason =
+    status === 'suspended'
+      ? sanitizeTextInput(
+          reason || (matchedRule ? `${matchedRule.titleSw}: ${matchedRule.summarySw}` : ''),
+          300
+        )
+      : '';
   try {
     await updateDoc(doc(db, 'users', targetUid), {
       accountStatus: status,
       suspendedReason: cleanReason,
+      suspendedRuleNumber: cleanRuleNum,
       updatedAt: serverTimestamp(),
     });
     const cardId = formatMemberCode(targetUid);
@@ -302,6 +316,45 @@ export async function updateUserAccountStatus(
       await updateDoc(doc(db, 'member_ids', cardId), {
         accountStatus: status,
         updatedAt: serverTimestamp(),
+      }).catch(() => {});
+    }
+
+    const adminUser = auth.currentUser;
+    if (adminUser && adminUser.uid !== targetUid && /^[a-zA-Z0-9_-]{1,128}$/.test(targetUid)) {
+      const notifRef = doc(collection(db, 'users', targetUid, 'notifications'));
+      const ruleTitleText = matchedRule
+        ? `Kanuni #${matchedRule.number}: ${matchedRule.titleSw}`
+        : status === 'suspended'
+          ? 'Ukiukaji wa Sheria za Jukwaa'
+          : 'Akaunti Imefunguliwa';
+      const preview =
+        status === 'suspended'
+          ? sanitizeTextInput(
+              matchedRule
+                ? `Akaunti yako imefungwa kwa kukiuka Kanuni #${matchedRule.number} (${matchedRule.titleSw}). ${cleanReason}`
+                : `Akaunti yako imefungwa. Sababu: ${cleanReason || 'Ukiukaji wa kanuni.'}`,
+              200
+            )
+          : 'Hongera! Akaunti yako imefunguliwa tena na sasa unaweza kushiriki kama kawaida.';
+
+      await setDoc(notifRef, {
+        recipientId: targetUid,
+        actorId: adminUser.uid,
+        actorName: sanitizeTextInput(adminUser.displayName || 'Msimamizi Malosha', 80) || 'Msimamizi Malosha',
+        actorPhoto: sanitizeTextInput(adminUser.photoURL || '', 500),
+        type: 'account_moderation',
+        topicId: targetUid,
+        topicTitle: sanitizeTextInput(
+          status === 'suspended' ? 'Akaunti Imefungwa' : 'Akaunti Imefunguliwa',
+          140
+        ),
+        topicCategory: 'Kijiweni',
+        replyId: 'account',
+        parentReplyId: '',
+        replyPreview: preview,
+        ...(cleanRuleNum > 0 ? { ruleNumber: cleanRuleNum, ruleTitle: sanitizeTextInput(ruleTitleText, 140) } : {}),
+        isRead: false,
+        createdAt: serverTimestamp(),
       }).catch(() => {});
     }
   } catch (error) {
@@ -791,14 +844,19 @@ export async function toggleReplyVote(
 
 export async function submitReport(
   reporterId: string,
-  targetType: 'topic' | 'reply',
+  targetType: 'topic' | 'reply' | 'video',
   targetId: string,
   topicId: string,
   reason: ReportReason,
-  detailsRaw: string
+  detailsRaw: string,
+  ruleNumber?: number
 ): Promise<void> {
   const reportRef = doc(collection(db, 'reports'));
   const path = `reports/${reportRef.id}`;
+  const cleanRuleNum =
+    ruleNumber && Number.isFinite(ruleNumber)
+      ? Math.max(0, Math.min(13, Math.round(ruleNumber)))
+      : 0;
   try {
     await setDoc(reportRef, {
       reporterId,
@@ -806,6 +864,7 @@ export async function submitReport(
       targetId,
       topicId,
       reason,
+      ...(cleanRuleNum > 0 ? { ruleNumber: cleanRuleNum } : {}),
       details: sanitizeTextInput(detailsRaw, 500),
       status: 'pending',
       createdAt: serverTimestamp(),
@@ -2682,6 +2741,7 @@ export async function fetchMemberPublicProfile(targetUid: string): Promise<UserP
       verificationBadge: normalizeVerificationBadge(d.verificationBadge),
       accountStatus: normalizeAccountStatus(d.accountStatus),
       suspendedReason: typeof d.suspendedReason === 'string' ? d.suspendedReason : '',
+      suspendedRuleNumber: Number(d.suspendedRuleNumber || 0),
       topicsCount: Number(d.topicsCount || 0),
       repliesCount: Number(d.repliesCount || 0),
       followersCount: Number(d.followersCount || 0),
@@ -2808,8 +2868,9 @@ export async function createVideoPost(
   const safePhoto = sanitizeTextInput(authorPhoto || user.photoURL || '', 500);
   const soundName =
     sanitizeTextInput(input.soundName || '', 120) ||
-    sanitizeTextInput(`Sauti Halisi - ${safeAuthorName}`, 120) ||
-    'Sauti Halisi';
+    (mediaType === 'photo' && !safeAudioUrl
+      ? ''
+      : sanitizeTextInput(`Sauti Halisi - ${safeAuthorName}`, 120) || 'Sauti Halisi');
   const tags = (input.tags || [])
     .map((t) => sanitizeTextInput(t.replace(/^#/, ''), 30))
     .filter(Boolean)
@@ -2928,6 +2989,75 @@ export async function updateVideoSettings(
 
   try {
     await updateDoc(doc(db, 'videos', videoId), payload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function moderateVideoPost(
+  video: { id: string; authorId: string; caption?: string },
+  options: { isArchived: boolean; ruleNumber?: number; reason?: string }
+): Promise<void> {
+  const path = `videos/${video.id}`;
+  const cleanRuleNum =
+    options.isArchived && options.ruleNumber && Number.isFinite(options.ruleNumber)
+      ? Math.max(0, Math.min(13, Math.round(options.ruleNumber)))
+      : 0;
+  const matchedRule = cleanRuleNum > 0 ? findCommunityRule(cleanRuleNum) : null;
+  const cleanReason = options.isArchived
+    ? sanitizeTextInput(
+        options.reason ||
+          (matchedRule ? `${matchedRule.titleSw}: ${matchedRule.summarySw}` : 'Ukiukaji wa kanuni za jukwaa.'),
+        300
+      )
+    : '';
+
+  try {
+    await updateDoc(doc(db, 'videos', video.id), {
+      isArchived: Boolean(options.isArchived),
+      moderationRuleNumber: cleanRuleNum,
+      moderationReason: cleanReason,
+      updatedAt: serverTimestamp(),
+    });
+
+    const adminUser = auth.currentUser;
+    if (
+      adminUser &&
+      video.authorId &&
+      /^[a-zA-Z0-9_-]{1,128}$/.test(video.authorId)
+    ) {
+      const notifRef = doc(collection(db, 'users', video.authorId, 'notifications'));
+      const ruleTitleText = matchedRule
+        ? `Kanuni #${matchedRule.number}: ${matchedRule.titleSw}`
+        : options.isArchived
+          ? 'Video Imefungiwa'
+          : 'Video Imerejeshwa';
+      const preview = options.isArchived
+        ? sanitizeTextInput(
+            matchedRule
+              ? `Video yako imefungiwa kwa kukiuka Kanuni #${matchedRule.number} (${matchedRule.titleSw}). ${cleanReason}`
+              : `Video yako imefungiwa kwa sababu: ${cleanReason}`,
+            200
+          )
+        : 'Video yako imerejeshwa hewani na sasa inaonekana kwa wanachama wote.';
+
+      await setDoc(notifRef, {
+        recipientId: video.authorId,
+        actorId: adminUser.uid,
+        actorName: sanitizeTextInput(adminUser.displayName || 'Msimamizi Malosha', 80) || 'Msimamizi Malosha',
+        actorPhoto: sanitizeTextInput(adminUser.photoURL || '', 500),
+        type: 'video_moderation',
+        topicId: video.id,
+        topicTitle: sanitizeTextInput(video.caption || 'Chapisho la Video', 140) || 'Chapisho la Video',
+        topicCategory: 'Kijiweni',
+        replyId: video.id,
+        parentReplyId: '',
+        replyPreview: preview,
+        ...(cleanRuleNum > 0 ? { ruleNumber: cleanRuleNum, ruleTitle: sanitizeTextInput(ruleTitleText, 140) } : {}),
+        isRead: false,
+        createdAt: serverTimestamp(),
+      }).catch(() => {});
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }

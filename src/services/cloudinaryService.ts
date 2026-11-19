@@ -146,7 +146,7 @@ export async function uploadChatFileToCloudinary(
   formData.append('file', file);
   formData.append('upload_preset', uploadPreset);
 
-  const endpoint = isImage ? 'image/upload' : 'auto/upload';
+  const endpoint = isImage ? 'image/upload' : 'raw/upload';
   const response = await fetch(
     `https://api.cloudinary.com/v1_1/${encodeURIComponent(cloudName)}/${endpoint}`,
     {
@@ -177,9 +177,63 @@ export async function uploadChatFileToCloudinary(
     url: result.secure_url.slice(0, 500),
     fileName: (file.name || 'faili').slice(0, 140),
     fileSize: Math.max(0, Math.min(file.size, 15_728_640)),
-    mimeType: (file.type || (isImage ? 'image/jpeg' : 'application/octet-stream')).slice(0, 120),
+    mimeType: (file.type || (isImage ? 'image/jpeg' : ext === 'pdf' ? 'application/pdf' : 'application/octet-stream')).slice(0, 120),
     attachmentType: isImage ? 'image' : 'document',
   };
+}
+
+export async function downloadChatAttachmentFile(
+  fileUrl: string,
+  fileName = 'nyaraka.pdf',
+  mimeType = ''
+): Promise<void> {
+  const cleanUrl = (fileUrl || '').trim();
+  if (!cleanUrl) {
+    throw new Error('Kiungo cha faili hakipatikani.');
+  }
+
+  const isPdf =
+    mimeType.toLowerCase().includes('pdf') ||
+    fileName.toLowerCase().endsWith('.pdf') ||
+    cleanUrl.toLowerCase().split('?')[0].endsWith('.pdf');
+
+  const baseName = (fileName || (isPdf ? 'nyaraka.pdf' : 'faili')).trim();
+  const safeName = isPdf
+    ? baseName.toLowerCase().endsWith('.pdf')
+      ? baseName
+      : `${baseName.replace(/\.[^.]+$/, '')}.pdf`
+    : baseName;
+
+  try {
+    const res = await fetch(cleanUrl, { mode: 'cors', credentials: 'omit' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const arrayBuf = await res.arrayBuffer();
+    if (!arrayBuf || arrayBuf.byteLength === 0) {
+      throw new Error('Empty file');
+    }
+    const contentType = isPdf
+      ? 'application/pdf'
+      : mimeType || res.headers.get('content-type') || 'application/octet-stream';
+    const blob = new Blob([arrayBuf], { type: contentType });
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = safeName;
+    a.rel = 'noopener noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+  } catch {
+    const a = document.createElement('a');
+    a.href = cleanUrl;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.download = safeName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
 }
 
 const MAX_NOTE_PDF_BYTES = 15 * 1024 * 1024; // 15MB
@@ -300,8 +354,12 @@ const ALLOWED_VIDEO_TYPES = new Set([
   'video/quicktime',
   'video/x-m4v',
   'video/3gpp',
+  'video/x-matroska',
+  'video/mpeg',
+  'video/avi',
+  'video/x-msvideo',
 ]);
-const ALLOWED_VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v', '3gp']);
+const ALLOWED_VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v', '3gp', 'mkv', 'mpeg', 'avi']);
 
 export interface CloudinaryVideoUploadResult {
   secureUrl: string;
@@ -322,17 +380,68 @@ export function deriveCloudinaryVideoThumbnail(videoUrl: string): string {
   return `${head}so_1,f_jpg,q_auto,w_720/${tail}`.slice(0, 500);
 }
 
+export function needsBrowserVideoTranscode(videoUrl: string): boolean {
+  const clean = (videoUrl || '').trim().toLowerCase().split('?')[0];
+  return /\.(mov|3gp|3gpp|mkv|avi|m4v|mpeg)$/i.test(clean);
+}
+
+export function optimizeCloudinaryVideoPlaybackUrl(
+  videoUrl: string,
+  options?: { dataSaver?: boolean }
+): string {
+  const clean = (videoUrl || '').trim();
+  const marker = '/video/upload/';
+  if (!clean.startsWith('https://res.cloudinary.com/') || !clean.includes(marker)) {
+    return clean;
+  }
+  const idx = clean.indexOf(marker);
+  const after = clean.slice(idx + marker.length);
+  const dataSaver = Boolean(options?.dataSaver);
+  if (/^(?:[a-z_]+:[^/]+,?)+(\/|$)/i.test(after) || after.startsWith('f_')) {
+    return clean;
+  }
+  const head = clean.slice(0, idx + marker.length);
+  const mp4Tail = after.replace(/\.[a-z0-9]+(\?.*)?$/i, '.mp4');
+  if (dataSaver) {
+    return `${head}f_mp4,vc_h264,ac_aac,q_auto:eco,br_450k,w_540,c_limit/${mp4Tail}`;
+  }
+  return `${head}f_mp4,vc_h264,q_auto/${mp4Tail}`;
+}
+
+export function optimizeCloudinaryPhotoUrl(
+  imageUrl: string,
+  options?: { dataSaver?: boolean }
+): string {
+  const clean = (imageUrl || '').trim();
+  const marker = '/image/upload/';
+  if (!clean.startsWith('https://res.cloudinary.com/') || !clean.includes(marker)) {
+    return clean;
+  }
+  const idx = clean.indexOf(marker);
+  const after = clean.slice(idx + marker.length);
+  if (/^(?:[a-z_]+:[^/]+,?)+(\/|$)/i.test(after) || after.startsWith('f_')) {
+    return clean;
+  }
+  const head = clean.slice(0, idx + marker.length);
+  if (options?.dataSaver) {
+    return `${head}f_auto,q_auto:eco,w_540,c_limit/${after}`;
+  }
+  return `${head}f_auto,q_auto:good,w_1080,c_limit/${after}`;
+}
+
 export async function uploadVideoToCloudinary(
   file: File,
   onProgress?: (percent: number) => void
 ): Promise<CloudinaryVideoUploadResult> {
   const ext = file.name.split('.').pop()?.toLowerCase() || '';
+  const mime = (file.type || '').toLowerCase();
   const typeOk =
-    ALLOWED_VIDEO_TYPES.has((file.type || '').toLowerCase()) ||
+    mime.startsWith('video/') ||
+    ALLOWED_VIDEO_TYPES.has(mime) ||
     ALLOWED_VIDEO_EXTENSIONS.has(ext);
 
   if (!typeOk) {
-    throw new Error('Aina hii ya video hairuhusiwi. Tumia MP4, MOV, M4V, au WEBM.');
+    throw new Error('Aina hii ya video hairuhusiwi. Tumia MP4, MOV, M4V, 3GP, au WEBM.');
   }
 
   if (file.size <= 0) {
@@ -419,98 +528,163 @@ export async function uploadVideoToCloudinary(
   };
 }
 
-const MALOSHA_LOGO_PID_STORAGE_KEY = 'malosha_watermark_logo_pid_v1';
+const MALOSHA_LOGO_PID_STORAGE_KEY = 'malosha_watermark_logo_at_v3';
+const MALOSHA_OUTRO_PID_STORAGE_KEY = 'malosha_outro_card_pid_v3';
+
+function drawMaloshaCircularCrest(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  radius: number,
+  fillAlpha = 0.52
+) {
+  ctx.save();
+  ctx.fillStyle = `rgba(10, 30, 51, ${fillAlpha})`;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.72)';
+  ctx.lineWidth = Math.max(2, radius * 0.032);
+  ctx.stroke();
+
+  ctx.strokeStyle = 'rgba(252, 209, 22, 0.78)';
+  ctx.lineWidth = Math.max(1.2, radius * 0.018);
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 0.9, 0, Math.PI * 2);
+  ctx.stroke();
+
+  const bW = radius * 0.56;
+  const bH = radius * 0.39;
+  const bx = cx - bW / 2;
+  const by = cy - radius * 0.52;
+  ctx.fillStyle = 'rgba(251, 191, 36, 0.94)';
+  ctx.beginPath();
+  ctx.roundRect(bx, by, bW, bH, radius * 0.11);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(bx + bW * 0.27, by + bH - 1);
+  ctx.lineTo(bx + bW * 0.15, by + bH + radius * 0.12);
+  ctx.lineTo(bx + bW * 0.46, by + bH - 1);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = 'rgba(14, 38, 64, 0.95)';
+  [0.29, 0.5, 0.71].forEach((frac) => {
+    ctx.beginPath();
+    ctx.arc(bx + bW * frac, by + bH * 0.5, Math.max(2, radius * 0.036), 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.96)';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `800 ${Math.round(radius * 0.24)}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  ctx.fillText('MALOSHA', cx, cy + radius * 0.21);
+
+  ctx.fillStyle = 'rgba(253, 224, 71, 0.94)';
+  ctx.font = `700 ${Math.round(radius * 0.155)}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  ctx.fillText('FORUMS', cx, cy + radius * 0.46);
+  ctx.restore();
+}
 
 async function generateMaloshaWatermarkLogoFile(): Promise<File | null> {
   if (typeof document === 'undefined') return null;
   const canvas = document.createElement('canvas');
-  canvas.width = 460;
-  canvas.height = 112;
+  canvas.width = 260;
+  canvas.height = 268;
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // Translucent dark navy badge pill
-  const r = 24;
-  ctx.fillStyle = 'rgba(10, 30, 51, 0.82)';
-  ctx.beginPath();
-  ctx.moveTo(r, 4);
-  ctx.lineTo(canvas.width - r, 4);
-  ctx.quadraticCurveTo(canvas.width - 4, 4, canvas.width - 4, r);
-  ctx.lineTo(canvas.width - 4, canvas.height - r);
-  ctx.quadraticCurveTo(canvas.width - 4, canvas.height - 4, canvas.width - r, canvas.height - 4);
-  ctx.lineTo(r, canvas.height - 4);
-  ctx.quadraticCurveTo(4, canvas.height - 4, 4, canvas.height - r);
-  ctx.lineTo(4, r);
-  ctx.quadraticCurveTo(4, 4, r, 4);
-  ctx.closePath();
-  ctx.fill();
+  // Circular Malosha Forums logo at top center
+  drawMaloshaCircularCrest(ctx, 130, 96, 82, 0.48);
 
-  ctx.strokeStyle = 'rgba(245, 158, 11, 0.9)';
-  ctx.lineWidth = 3;
-  ctx.stroke();
-
-  // Golden rounded square emblem matching app brand
-  const bx = 18;
-  const by = 18;
-  const bs = 76;
-  const br = 18;
-  const grad = ctx.createLinearGradient(bx, by, bx + bs, by + bs);
-  grad.addColorStop(0, '#FBBF24');
-  grad.addColorStop(1, '#D97706');
-  ctx.fillStyle = grad;
-  ctx.beginPath();
-  ctx.moveTo(bx + br, by);
-  ctx.lineTo(bx + bs - br, by);
-  ctx.quadraticCurveTo(bx + bs, by, bx + bs, by + br);
-  ctx.lineTo(bx + bs, by + bs - br);
-  ctx.quadraticCurveTo(bx + bs, by + bs, bx + bs - br, by + bs);
-  ctx.lineTo(bx + br, by + bs);
-  ctx.quadraticCurveTo(bx, by + bs, bx, by + bs - br);
-  ctx.lineTo(bx, by + br);
-  ctx.quadraticCurveTo(bx, by, bx + br, by);
-  ctx.closePath();
-  ctx.fill();
-
-  // White speech bubble inside emblem
-  ctx.fillStyle = '#FFFFFF';
-  ctx.beginPath();
-  ctx.roundRect(bx + 15, by + 16, 46, 34, 8);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(bx + 26, by + 48);
-  ctx.lineTo(bx + 20, by + 60);
-  ctx.lineTo(bx + 36, by + 48);
-  ctx.closePath();
-  ctx.fill();
-
-  // 3 Navy dots inside bubble
-  ctx.fillStyle = '#0E2640';
-  for (const dx of [28, 38, 48]) {
-    ctx.beginPath();
-    ctx.arc(bx + dx, by + 33, 3.6, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Wordmark text
-  ctx.fillStyle = '#FFFFFF';
-  ctx.font = '800 32px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  // "@malosha forums" label directly underneath the logo
+  ctx.save();
+  ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('Malosha Forums', 110, 46);
-
-  ctx.fillStyle = '#FCD34D';
-  ctx.font = '700 18px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-  ctx.fillText('SAUTI YA JAMII · REELS', 112, 80);
+  ctx.font = '800 24px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.75)';
+  ctx.shadowBlur = 8;
+  ctx.shadowOffsetY = 2;
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.94)';
+  ctx.fillText('@malosha forums', 130, 214);
+  ctx.restore();
 
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
   if (!blob) return null;
-  return new File([blob], 'malosha-watermark-logo.png', { type: 'image/png' });
+  return new File([blob], 'malosha-logo-handle-watermark.png', { type: 'image/png' });
 }
 
-export async function ensureMaloshaWatermarkLogoPublicId(): Promise<string> {
+async function generateMaloshaOutroCardFile(): Promise<File | null> {
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 720;
+  canvas.height = 1280;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  grad.addColorStop(0, '#07182B');
+  grad.addColorStop(0.5, '#0D2643');
+  grad.addColorStop(1, '#061322');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Subtle radial golden spotlight behind crest
+  const glow = ctx.createRadialGradient(360, 560, 20, 360, 560, 320);
+  glow.addColorStop(0, 'rgba(251, 191, 36, 0.24)');
+  glow.addColorStop(0.55, 'rgba(56, 189, 248, 0.12)');
+  glow.addColorStop(1, 'rgba(7, 24, 43, 0)');
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(360, 560, 320, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Centered Malosha Forums circular emblem
+  drawMaloshaCircularCrest(ctx, 360, 540, 148, 0.88);
+
+  // Bold "@malosha forums" label directly below logo
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = '800 44px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  ctx.fillText('@malosha forums', 360, 748);
+
+  // Subtle Tanzania accent strip below handle
+  const barW = 240;
+  const barX = 360 - barW / 2;
+  const barY = 796;
+  ctx.fillStyle = '#1EB53A';
+  ctx.fillRect(barX, barY, barW * 0.35, 6);
+  ctx.fillStyle = '#FCD116';
+  ctx.fillRect(barX + barW * 0.35, barY, barW * 0.08, 6);
+  ctx.fillStyle = '#0F172A';
+  ctx.fillRect(barX + barW * 0.43, barY, barW * 0.14, 6);
+  ctx.fillStyle = '#FCD116';
+  ctx.fillRect(barX + barW * 0.57, barY, barW * 0.08, 6);
+  ctx.fillStyle = '#00A3DD';
+  ctx.fillRect(barX + barW * 0.65, barY, barW * 0.35, 6);
+
+  ctx.fillStyle = 'rgba(226, 232, 240, 0.85)';
+  ctx.font = '700 22px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  ctx.fillText('MALOSHA FORUMS · TANZANIA', 360, 842);
+  ctx.restore();
+
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+  if (!blob) return null;
+  return new File([blob], 'malosha-outro-endcard.png', { type: 'image/png' });
+}
+
+async function uploadCachedCloudinaryPng(
+  storageKey: string,
+  fileFactory: () => Promise<File | null>
+): Promise<string> {
   if (typeof window !== 'undefined') {
-    const cached = window.localStorage.getItem(MALOSHA_LOGO_PID_STORAGE_KEY);
+    const cached = window.localStorage.getItem(storageKey);
     if (cached && cached.trim().length > 2) {
       return cached.trim();
     }
@@ -519,11 +693,11 @@ export async function ensureMaloshaWatermarkLogoPublicId(): Promise<string> {
   const { cloudName, uploadPreset, configured } = getCloudinaryConfig();
   if (!configured) return '';
 
-  const logoFile = await generateMaloshaWatermarkLogoFile();
-  if (!logoFile) return '';
+  const assetFile = await fileFactory();
+  if (!assetFile) return '';
 
   const formData = new FormData();
-  formData.append('file', logoFile);
+  formData.append('file', assetFile);
   formData.append('upload_preset', uploadPreset);
 
   try {
@@ -535,7 +709,7 @@ export async function ensureMaloshaWatermarkLogoPublicId(): Promise<string> {
     const data = (await response.json()) as { public_id?: string };
     const pid = (data.public_id || '').trim();
     if (pid && typeof window !== 'undefined') {
-      window.localStorage.setItem(MALOSHA_LOGO_PID_STORAGE_KEY, pid);
+      window.localStorage.setItem(storageKey, pid);
     }
     return pid;
   } catch {
@@ -543,10 +717,25 @@ export async function ensureMaloshaWatermarkLogoPublicId(): Promise<string> {
   }
 }
 
+export async function ensureMaloshaWatermarkLogoPublicId(): Promise<string> {
+  return uploadCachedCloudinaryPng(MALOSHA_LOGO_PID_STORAGE_KEY, generateMaloshaWatermarkLogoFile);
+}
+
+export async function ensureMaloshaOutroCardPublicId(): Promise<string> {
+  return uploadCachedCloudinaryPng(MALOSHA_OUTRO_PID_STORAGE_KEY, generateMaloshaOutroCardFile);
+}
+
+export interface VideoWatermarkDownloadOptions {
+  logoPublicId?: string;
+  outroPublicId?: string;
+  durationSec?: number;
+  outroMode?: 'splice' | 'endOverlay' | 'watermarkOnly';
+}
+
 export function buildWatermarkedVideoDownloadUrl(
   videoUrl: string,
   authorName: string,
-  logoPublicId?: string
+  options?: string | VideoWatermarkDownloadOptions
 ): string {
   const clean = (videoUrl || '').trim();
   const marker = '/video/upload/';
@@ -554,33 +743,52 @@ export function buildWatermarkedVideoDownloadUrl(
     return clean;
   }
 
+  const opts: VideoWatermarkDownloadOptions =
+    typeof options === 'string' ? { logoPublicId: options } : options || {};
+
   const idx = clean.indexOf(marker);
   const head = clean.slice(0, idx + marker.length);
   const tail = clean.slice(idx + marker.length).replace(/\.[a-z0-9]+(\?.*)?$/i, '.mp4');
 
-  const safeHandle = (authorName || 'Mwanachama')
-    .trim()
-    .replace(/[^a-zA-Z0-9._\s-]/g, '')
-    .slice(0, 24) || 'Mwanachama';
-  const encodedHandle = encodeURIComponent(`@${safeHandle} | Malosha Forums`);
-  const encodedBrand = encodeURIComponent('MALOSHA FORUMS');
-  const fileSlug = `malosha-forums-${safeHandle.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'video'}`;
+  const safeSlug =
+    (authorName || 'malosha')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .slice(0, 20) || 'video';
+  const encodedBrandHandle = encodeURIComponent('@malosha forums');
+  const fileSlug = `malosha-forums-${safeSlug}`;
 
   const transforms: string[] = [];
 
-  if (logoPublicId && logoPublicId.trim()) {
-    const layerId = logoPublicId.trim().replace(/\//g, ':');
-    transforms.push(`l_${layerId},w_230,g_north_west,x_24,y_28,o_94/fl_layer_apply`);
+  if (opts.logoPublicId && opts.logoPublicId.trim()) {
+    const layerId = opts.logoPublicId.trim().replace(/\//g, ':');
+    // Circular logo with "@malosha forums" directly underneath it (subtle & translucent)
+    transforms.push(`l_${layerId},w_128,c_scale,g_north_west,x_16,y_18,o_72/fl_layer_apply`);
   } else {
     transforms.push(
-      `l_text:Arial_28_bold:${encodedBrand},co_white,b_rgb:0A1E33,g_north_west,x_24,y_28,o_88/fl_layer_apply`
+      `l_text:Arial_20_bold:${encodedBrandHandle},co_white,g_north_west,x_18,y_22,o_62/fl_layer_apply`
     );
   }
 
-  transforms.push(
-    `l_text:Arial_22_bold:${encodedHandle},co_rgb:FDE68A,b_rgb:0A1E33,g_south_east,x_24,y_38,o_88/fl_layer_apply`
-  );
-  transforms.push(`f_mp4,fl_attachment:${fileSlug}`);
+  // Append end-of-video Malosha Forums label bumper or timed end-card
+  if (opts.outroMode === 'splice' && opts.outroPublicId && opts.outroPublicId.trim()) {
+    const outroLayerId = opts.outroPublicId.trim().replace(/\//g, ':');
+    transforms.push(
+      `l_${outroLayerId},w_1.0,h_1.0,c_pad,b_rgb:07182B,fl_relative,du_2.2,fl_splice/fl_layer_apply`
+    );
+  } else if (
+    opts.outroMode === 'endOverlay' &&
+    opts.logoPublicId &&
+    opts.logoPublicId.trim() &&
+    (opts.durationSec || 0) >= 3
+  ) {
+    const layerId = opts.logoPublicId.trim().replace(/\//g, ':');
+    const startSec = Math.max(1, Math.floor((opts.durationSec || 3) - 2));
+    transforms.push(`l_${layerId},w_260,c_scale,g_center,o_95,so_${startSec}/fl_layer_apply`);
+  }
+
+  transforms.push(`f_mp4,vc_h264,fl_attachment:${fileSlug}`);
 
   return `${head}${transforms.join('/')}/${tail}`;
 }
@@ -721,7 +929,7 @@ export async function uploadPhotoCarouselToCloudinary(
 
 export function buildWatermarkedPhotoDownloadUrl(
   imageUrl: string,
-  authorName: string,
+  _authorName: string,
   logoPublicId?: string
 ): string {
   const clean = (imageUrl || '').trim();
@@ -732,32 +940,33 @@ export function buildWatermarkedPhotoDownloadUrl(
 
   const idx = clean.indexOf(marker);
   const head = clean.slice(0, idx + marker.length);
-  const tail = clean.slice(idx + marker.length).replace(/\.[a-z0-9]+(\?.*)?$/i, '.png');
+  const tail = clean.slice(idx + marker.length).replace(/\.[a-z0-9]+(\?.*)?$/i, '.jpg');
 
-  const safeHandle =
-    (authorName || 'Mwanachama')
-      .trim()
-      .replace(/[^a-zA-Z0-9._\s-]/g, '')
-      .slice(0, 24) || 'Mwanachama';
-  const encodedHandle = encodeURIComponent(`@${safeHandle} | Malosha Forums`);
-  const encodedBrand = encodeURIComponent('MALOSHA FORUMS');
-  const fileSlug = `malosha-forums-${safeHandle.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'photo'}`;
+  const encodedBrandHandle = encodeURIComponent('@malosha forums');
+  const fileSlug = 'malosha-forums-photo';
 
   const transforms: string[] = [];
   if (logoPublicId && logoPublicId.trim()) {
     const layerId = logoPublicId.trim().replace(/\//g, ':');
-    transforms.push(`l_${layerId},w_220,g_north_west,x_24,y_24,o_94/fl_layer_apply`);
+    transforms.push(`l_${layerId},w_120,c_scale,g_north_west,x_18,y_18,o_68/fl_layer_apply`);
   } else {
     transforms.push(
-      `l_text:Arial_26_bold:${encodedBrand},co_white,b_rgb:0A1E33,g_north_west,x_24,y_24,o_90/fl_layer_apply`
+      `l_text:Arial_20_bold:${encodedBrandHandle},co_white,g_north_west,x_18,y_18,o_60/fl_layer_apply`
     );
   }
-  transforms.push(
-    `l_text:Arial_20_bold:${encodedHandle},co_rgb:FDE68A,b_rgb:0A1E33,g_south_east,x_24,y_24,o_90/fl_layer_apply`
-  );
-  transforms.push(`f_png,fl_attachment:${fileSlug}`);
+  transforms.push(`f_jpg,q_auto:good,fl_attachment:${fileSlug}`);
 
   return `${head}${transforms.join('/')}/${tail}`;
+}
+
+async function loadImageElementCors(srcUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Image load failed'));
+    img.src = srcUrl;
+  });
 }
 
 export async function downloadWatermarkedPhoto(
@@ -767,97 +976,83 @@ export async function downloadWatermarkedPhoto(
 ): Promise<void> {
   const logoPid = await ensureMaloshaWatermarkLogoPublicId();
   const fallbackUrl = buildWatermarkedPhotoDownloadUrl(imageUrl, authorName, logoPid);
+  const finalFileName = /\.(jpe?g|png|webp)$/i.test(fileName)
+    ? fileName.replace(/\.(png|webp)$/i, '.jpg')
+    : `${fileName}.jpg`;
 
   try {
-    const res = await fetch(imageUrl);
-    if (!res.ok) throw new Error('Fetch failed');
-    const srcBlob = await res.blob();
-    const bitmap = await createImageBitmap(srcBlob);
-
     const canvas = document.createElement('canvas');
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
+    let drawn = false;
+
+    try {
+      const res = await fetch(imageUrl, { mode: 'cors', credentials: 'omit' });
+      if (!res.ok) throw new Error('Fetch failed');
+      const srcBlob = await res.blob();
+      const bitmap = await createImageBitmap(srcBlob);
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(bitmap, 0, 0);
+        drawn = true;
+      }
       bitmap.close();
-      throw new Error('No canvas context');
+    } catch {
+      const img = await loadImageElementCors(imageUrl);
+      canvas.width = img.naturalWidth || img.width || 1080;
+      canvas.height = img.naturalHeight || img.height || 1080;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        drawn = true;
+      }
     }
 
-    ctx.drawImage(bitmap, 0, 0);
-    bitmap.close();
+    const ctx = canvas.getContext('2d');
+    if (!drawn || !ctx) {
+      throw new Error('No canvas context');
+    }
 
     const baseDim = Math.max(480, Math.min(canvas.width, canvas.height));
     const scale = baseDim / 720;
 
-    // Top-left Malosha Forums emblem badge
-    const pad = Math.round(20 * scale);
-    const pillW = Math.round(250 * scale);
-    const pillH = Math.round(56 * scale);
+    // Subtle translucent circular seal in top-left corner with "@malosha forums" underneath
+    const pad = Math.round(22 * scale);
+    const radius = Math.round(40 * scale);
+    const cx = pad + radius + Math.round(22 * scale);
+    const cy = pad + radius;
+
     ctx.save();
-    ctx.fillStyle = 'rgba(10, 30, 51, 0.84)';
-    ctx.strokeStyle = 'rgba(245, 158, 11, 0.92)';
-    ctx.lineWidth = Math.max(2, Math.round(2.5 * scale));
-    ctx.beginPath();
-    ctx.roundRect(pad, pad, pillW, pillH, Math.round(14 * scale));
-    ctx.fill();
-    ctx.stroke();
+    ctx.globalAlpha = 0.68;
+    drawMaloshaCircularCrest(ctx, cx, cy, radius, 0.56);
 
-    const boxSize = Math.round(36 * scale);
-    const boxX = pad + Math.round(10 * scale);
-    const boxY = pad + Math.round((pillH - boxSize) / 2);
-    const grad = ctx.createLinearGradient(boxX, boxY, boxX + boxSize, boxY + boxSize);
-    grad.addColorStop(0, '#FBBF24');
-    grad.addColorStop(1, '#D97706');
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.roundRect(boxX, boxY, boxSize, boxSize, Math.round(9 * scale));
-    ctx.fill();
-
-    ctx.fillStyle = '#FFFFFF';
-    ctx.font = `800 ${Math.round(19 * scale)}px system-ui, -apple-system, sans-serif`;
+    ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('Malosha Forums', boxX + boxSize + Math.round(10 * scale), pad + Math.round(pillH * 0.42));
-
-    ctx.fillStyle = '#FCD34D';
-    ctx.font = `700 ${Math.round(11 * scale)}px system-ui, -apple-system, sans-serif`;
-    ctx.fillText('SAUTI YA JAMII', boxX + boxSize + Math.round(10 * scale), pad + Math.round(pillH * 0.74));
-
-    // Bottom-right author handle badge
-    const handleText = `@${(authorName || 'Mwanachama').trim().slice(0, 24)} · Malosha Forums`;
-    ctx.font = `700 ${Math.round(16 * scale)}px system-ui, -apple-system, sans-serif`;
-    const metrics = ctx.measureText(handleText);
-    const bW = Math.round(metrics.width + 26 * scale);
-    const bH = Math.round(36 * scale);
-    const bX = Math.max(pad, canvas.width - bW - pad);
-    const bY = Math.max(pad, canvas.height - bH - pad);
-
-    ctx.fillStyle = 'rgba(10, 30, 51, 0.82)';
-    ctx.beginPath();
-    ctx.roundRect(bX, bY, bW, bH, Math.round(10 * scale));
-    ctx.fill();
-
-    ctx.fillStyle = '#FDE68A';
-    ctx.fillText(handleText, bX + Math.round(13 * scale), bY + bH / 2);
+    ctx.font = `800 ${Math.round(13 * scale)}px system-ui, -apple-system, sans-serif`;
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.72)';
+    ctx.shadowBlur = Math.round(4 * scale);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText('@malosha forums', cx, cy + radius + Math.round(16 * scale));
     ctx.restore();
 
     const outBlob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, 'image/png', 0.94)
+      canvas.toBlob(resolve, 'image/jpeg', 0.94)
     );
     if (!outBlob) throw new Error('Canvas export failed');
 
     const blobUrl = URL.createObjectURL(outBlob);
     const a = document.createElement('a');
     a.href = blobUrl;
-    a.download = fileName;
+    a.download = finalFileName;
     a.rel = 'noopener noreferrer';
     document.body.appendChild(a);
     a.click();
     a.remove();
-    window.setTimeout(() => URL.revokeObjectURL(blobUrl), 4000);
+    window.setTimeout(() => URL.revokeObjectURL(blobUrl), 8000);
   } catch {
     const a = document.createElement('a');
     a.href = fallbackUrl || imageUrl;
-    a.download = fileName;
+    a.download = finalFileName;
     a.rel = 'noopener noreferrer';
     document.body.appendChild(a);
     a.click();

@@ -15,6 +15,7 @@ import {
   Trash2,
   Unlock,
   Users,
+  Video as VideoIcon,
   XCircle,
 } from 'lucide-react';
 import { collection, onSnapshot } from 'firebase/firestore';
@@ -22,20 +23,25 @@ import { useLanguage } from '../context/LanguageContext';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import {
   deleteTopic,
+  deleteVideoPost,
   getAdminUserPrivateDetails,
+  moderateVideoPost,
   updateTopicStatus,
   updateUserAccountStatus,
   updateUserVerificationBadge,
 } from '../services/forumService';
 import {
   AccountStatus,
+  COMMUNITY_SAFETY_RULES,
   Report,
   Topic,
   UserProfile,
   VERIFICATION_BADGE_META,
   VERIFICATION_BADGE_TIERS,
   VerificationBadgeType,
+  VideoPost,
   computeMemberControlSerial,
+  findCommunityRule,
   formatMemberCode,
   normalizeAccountStatus,
   normalizeBoardCategory,
@@ -50,19 +56,22 @@ interface ModerationViewProps {
   currentUserUid: string | null;
   onUpdateStatus: (reportId: string, status: 'reviewed' | 'dismissed') => Promise<void>;
   onOpenTopic: (topicId: string) => void;
+  onOpenVideo?: (videoId: string) => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
   embedded?: boolean;
 }
 
-type AdminSection = 'members' | 'verify_id' | 'posts' | 'reports';
+type AdminSection = 'members' | 'verify_id' | 'posts' | 'videos' | 'reports';
 type MemberFilter = 'all' | 'active' | 'suspended';
 type PostFilter = 'all' | 'open' | 'locked' | 'archived';
+type VideoFilter = 'all' | 'live' | 'blocked';
 
 export const ModerationView: React.FC<ModerationViewProps> = ({
   reports,
   currentUserUid,
   onUpdateStatus,
   onOpenTopic,
+  onOpenVideo,
   onToast,
   embedded = false,
 }) => {
@@ -87,6 +96,7 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
   const [memberFilter, setMemberFilter] = useState<MemberFilter>('all');
   const [updatingUid, setUpdatingUid] = useState<string | null>(null);
   const [lockPromptUid, setLockPromptUid] = useState<string | null>(null);
+  const [lockRuleNumber, setLockRuleNumber] = useState<number>(1);
   const [lockReasonDraft, setLockReasonDraft] = useState('');
 
   const [allTopics, setAllTopics] = useState<Topic[]>([]);
@@ -95,6 +105,16 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
   const [postFilter, setPostFilter] = useState<PostFilter>('all');
   const [updatingTopicId, setUpdatingTopicId] = useState<string | null>(null);
   const [confirmDeleteTopicId, setConfirmDeleteTopicId] = useState<string | null>(null);
+
+  const [allVideos, setAllVideos] = useState<VideoPost[]>([]);
+  const [loadingVideos, setLoadingVideos] = useState(true);
+  const [videoSearch, setVideoSearch] = useState('');
+  const [videoFilter, setVideoFilter] = useState<VideoFilter>('all');
+  const [updatingVideoId, setUpdatingVideoId] = useState<string | null>(null);
+  const [blockVideoPromptId, setBlockVideoPromptId] = useState<string | null>(null);
+  const [blockVideoRuleNum, setBlockVideoRuleNum] = useState<number>(1);
+  const [blockVideoReasonDraft, setBlockVideoReasonDraft] = useState('');
+  const [confirmDeleteVideoId, setConfirmDeleteVideoId] = useState<string | null>(null);
 
   const pendingCount = reports.filter((r) => r.status === 'pending').length;
 
@@ -116,6 +136,7 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
             accountStatus: normalizeAccountStatus(data.accountStatus),
             suspendedReason:
               typeof data.suspendedReason === 'string' ? data.suspendedReason : '',
+            suspendedRuleNumber: Number(data.suspendedRuleNumber || 0),
             topicsCount: Number(data.topicsCount || 0),
             repliesCount: Number(data.repliesCount || 0),
             followersCount: Number(data.followersCount || 0),
@@ -234,6 +255,64 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
     return () => unsub();
   }, []);
 
+  useEffect(() => {
+    setLoadingVideos(true);
+    const path = 'videos';
+    const unsub = onSnapshot(
+      collection(db, 'videos'),
+      (snapshot) => {
+        const list: VideoPost[] = snapshot.docs.map((d) => {
+          const data = d.data();
+          return {
+            id: d.id,
+            mediaType: data.mediaType === 'photo' ? 'photo' : 'video',
+            videoUrl: String(data.videoUrl || ''),
+            photoUrls: Array.isArray(data.photoUrls) ? data.photoUrls.map(String) : [],
+            audioUrl: String(data.audioUrl || ''),
+            cloudinaryPublicId: String(data.cloudinaryPublicId || ''),
+            thumbnailUrl: String(data.thumbnailUrl || ''),
+            caption: String(data.caption || ''),
+            soundName: String(data.soundName || ''),
+            tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
+            authorId: String(data.authorId || ''),
+            authorName: String(data.authorName || 'Mwanachama'),
+            authorPhoto: String(data.authorPhoto || ''),
+            durationSec: Number(data.durationSec || 0),
+            likesCount: Number(data.likesCount || 0),
+            commentsCount: Number(data.commentsCount || 0),
+            sharesCount: Number(data.sharesCount || 0),
+            allowComments: data.allowComments !== false,
+            allowDownload: data.allowDownload !== false,
+            allowLikes: data.allowLikes !== false,
+            showLikeCount: data.showLikeCount !== false,
+            autoReplyEnabled: Boolean(data.autoReplyEnabled),
+            autoReplyTrigger: data.autoReplyTrigger === 'keyword' ? 'keyword' : 'all',
+            autoReplyKeyword: String(data.autoReplyKeyword || ''),
+            autoReplyMessage: String(data.autoReplyMessage || ''),
+            isArchived: Boolean(data.isArchived),
+            moderationRuleNumber: Number(data.moderationRuleNumber || 0),
+            moderationReason: typeof data.moderationReason === 'string' ? data.moderationReason : '',
+            createdAt: data.createdAt || null,
+            updatedAt: data.updatedAt || null,
+          };
+        });
+        list.sort((a, b) => {
+          const am = a.createdAt ? a.createdAt.toMillis() : Date.now();
+          const bm = b.createdAt ? b.createdAt.toMillis() : Date.now();
+          return bm - am;
+        });
+        setAllVideos(list);
+        setLoadingVideos(false);
+      },
+      (error) => {
+        setLoadingVideos(false);
+        handleFirestoreError(error, OperationType.LIST, path);
+      }
+    );
+
+    return () => unsub();
+  }, []);
+
   const verifiedCount = useMemo(
     () => members.filter((m) => m.verificationBadge !== 'none').length,
     [members]
@@ -289,6 +368,27 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
     return map;
   }, [allTopics]);
 
+  const videoById = useMemo(() => {
+    const map = new Map<string, VideoPost>();
+    allVideos.forEach((v) => map.set(v.id, v));
+    return map;
+  }, [allVideos]);
+
+  const filteredVideos = useMemo(() => {
+    const q = videoSearch.trim().toLowerCase();
+    return allVideos.filter((v) => {
+      if (videoFilter === 'live' && v.isArchived) return false;
+      if (videoFilter === 'blocked' && !v.isArchived) return false;
+      if (!q) return true;
+      return (
+        v.caption.toLowerCase().includes(q) ||
+        v.authorName.toLowerCase().includes(q) ||
+        v.soundName.toLowerCase().includes(q) ||
+        v.tags.some((t) => t.toLowerCase().includes(q))
+      );
+    });
+  }, [allVideos, videoSearch, videoFilter]);
+
   const handleAssignBadge = async (member: UserProfile, nextBadge: VerificationBadgeType) => {
     if (member.verificationBadge === nextBadge) return;
     setUpdatingUid(member.uid);
@@ -313,19 +413,32 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
     }
   };
 
-  const handleSuspendAccount = async (member: UserProfile, reason: string) => {
+  const handleSuspendAccount = async (
+    member: UserProfile,
+    reason: string,
+    ruleNumber?: number
+  ) => {
     setUpdatingUid(member.uid);
+    const chosenRule = ruleNumber ? findCommunityRule(ruleNumber) : null;
     const effectiveReason =
       reason.trim() ||
-      tr('Ukiukaji wa maadili ya jukwaa.', 'Violation of community guidelines.');
+      (chosenRule
+        ? `${chosenRule.titleSw} — ${chosenRule.summarySw}`
+        : tr('Ukiukaji wa maadili ya jukwaa.', 'Violation of community guidelines.'));
     try {
-      await updateUserAccountStatus(member.uid, 'suspended', effectiveReason);
+      await updateUserAccountStatus(
+        member.uid,
+        'suspended',
+        effectiveReason,
+        chosenRule ? chosenRule.number : undefined
+      );
       setLockPromptUid(null);
       setLockReasonDraft('');
+      setLockRuleNumber(1);
       onToast(
         tr(
-          `Akaunti ya ${member.displayName} imefungwa. Hataweza kufanya chochote kwenye jukwaa.`,
-          `${member.displayName}'s account has been closed. All platform actions are blocked.`
+          `Akaunti ya ${member.displayName} imefungwa${chosenRule ? ` (Kanuni #${chosenRule.number})` : ''} na arifa imetumwa.`,
+          `${member.displayName}'s account has been closed${chosenRule ? ` (Rule #${chosenRule.number})` : ''} and notified.`
         )
       );
     } catch (err) {
@@ -405,24 +518,83 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
     }
   };
 
+  const handleModerateVideo = async (
+    video: VideoPost,
+    opts: { isArchived: boolean; ruleNumber?: number; reason?: string }
+  ) => {
+    setUpdatingVideoId(video.id);
+    const chosenRule = opts.ruleNumber ? findCommunityRule(opts.ruleNumber) : null;
+    try {
+      await moderateVideoPost(video, opts);
+      setBlockVideoPromptId(null);
+      setBlockVideoReasonDraft('');
+      onToast(
+        opts.isArchived
+          ? tr(
+              `Video imefungiwa${chosenRule ? ` (Kanuni #${chosenRule.number})` : ''} na mwandishi amearifiwa.`,
+              `Video blocked${chosenRule ? ` (Rule #${chosenRule.number})` : ''} and creator notified.`
+            )
+          : tr('Video imerejeshwa hewani na mwandishi amearifiwa.', 'Video restored and creator notified.')
+      );
+    } catch (err) {
+      onToast(
+        err instanceof Error
+          ? err.message
+          : tr('Imeshindwa kubadilisha hali ya video.', 'Failed to moderate video.'),
+        'error'
+      );
+    } finally {
+      setUpdatingVideoId(null);
+    }
+  };
+
+  const handlePermanentDeleteVideo = async (videoId: string) => {
+    setUpdatingVideoId(videoId);
+    try {
+      await deleteVideoPost(videoId);
+      setConfirmDeleteVideoId(null);
+      onToast(tr('Video imefutwa kabisa.', 'Video permanently deleted.'));
+    } catch (err) {
+      onToast(
+        err instanceof Error
+          ? err.message
+          : tr('Imeshindwa kufuta video.', 'Failed to delete video.'),
+        'error'
+      );
+    } finally {
+      setUpdatingVideoId(null);
+    }
+  };
+
   const handleCloseReportedPost = async (report: Report) => {
     setUpdatingTopicId(report.topicId);
     try {
-      await updateTopicStatus(report.topicId, 'archived');
+      if (report.targetType === 'video') {
+        const vid = videoById.get(report.topicId);
+        if (vid) {
+          await moderateVideoPost(vid, {
+            isArchived: true,
+            ruleNumber: report.ruleNumber || 1,
+            reason: report.reason,
+          });
+        }
+      } else {
+        await updateTopicStatus(report.topicId, 'archived');
+      }
       if (report.status === 'pending') {
         await onUpdateStatus(report.id, 'reviewed');
       }
       onToast(
         tr(
-          'Chapisho lililoripotiwa limefungwa na kuondolewa kwa watumiaji wengine.',
-          'Reported post closed and removed from public view.'
+          'Maudhui yaliyoripotiwa yamefungiwa na kuondolewa hadharani.',
+          'Reported content blocked and removed from public view.'
         )
       );
     } catch (err) {
       onToast(
         err instanceof Error
           ? err.message
-          : tr('Imeshindwa kufunga chapisho.', 'Failed to close post.'),
+          : tr('Imeshindwa kufunga maudhui.', 'Failed to block content.'),
         'error'
       );
     } finally {
@@ -504,6 +676,21 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
             <FileText className="h-3.5 w-3.5" aria-hidden="true" />
             <span>
               {tr('Machapisho', 'Posts')} ({allTopics.length})
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSection('videos')}
+            className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
+              section === 'videos'
+                ? 'bg-[#1D4E89] text-white'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <VideoIcon className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>
+              {tr('Video', 'Videos')} ({allVideos.length})
             </span>
           </button>
 
@@ -755,11 +942,24 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
                             <p className="text-xs text-slate-600">{member.bio}</p>
                           )}
 
-                          {isSuspended && member.suspendedReason && (
-                            <p className="text-xs font-medium text-red-800">
-                              {tr('Sababu ya kufungwa', 'Closure reason')}:{' '}
-                              {member.suspendedReason}
-                            </p>
+                          {(isSuspended && (member.suspendedReason || member.suspendedRuleNumber)) && (
+                            <div className="space-y-0.5 text-xs font-medium text-red-800">
+                              {Boolean(member.suspendedRuleNumber) && (() => {
+                                const rule = findCommunityRule(member.suspendedRuleNumber);
+                                return rule ? (
+                                  <p className="font-bold">
+                                    {tr(`Kanuni #${rule.number}`, `Rule #${rule.number}`)}:{' '}
+                                    {tr(rule.titleSw, rule.titleEn)}
+                                  </p>
+                                ) : null;
+                              })()}
+                              {member.suspendedReason && (
+                                <p>
+                                  {tr('Sababu ya kufungwa', 'Closure reason')}:{' '}
+                                  {member.suspendedReason}
+                                </p>
+                              )}
+                            </div>
                           )}
                         </div>
                       </div>
@@ -813,24 +1013,40 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
                       </div>
                     </div>
 
-                    {/* Inline Lock Confirmation Box */}
+                    {/* Inline Lock Confirmation Box with 13 Rules Selector */}
                     {showLockPrompt && !isSuspended && !isSelf && (
-                      <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3">
+                      <div className="mt-3 space-y-2.5 rounded-lg border border-red-200 bg-red-50 p-3">
                         <p className="text-xs font-semibold text-red-900">
                           {tr(
-                            `Funga akaunti ya ${member.displayName}? Hatoweza kupost, ku-comment, wala ku-like.`,
-                            `Close ${member.displayName}'s account? They will be blocked from posting, commenting, and liking.`
+                            `Funga akaunti ya ${member.displayName}? Atapata ujumbe wa kanuni aliyovunja kwenye akaunti yake.`,
+                            `Close ${member.displayName}'s account? They will receive an in-account notice with the violated rule.`
                           )}
                         </p>
-                        <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <div>
+                          <label className="block text-[11px] font-bold text-red-900">
+                            {tr('Chagua Sheria Iliyokiukwa (Kanuni #1 – #13)', 'Select Violated Rule (#1 – #13)')}
+                          </label>
+                          <select
+                            value={lockRuleNumber}
+                            onChange={(e) => setLockRuleNumber(Number(e.target.value))}
+                            className="mt-1 min-h-[38px] w-full rounded-lg border border-red-200 bg-white px-3 text-xs font-medium text-slate-900 focus:border-red-500 focus:outline-none"
+                          >
+                            {COMMUNITY_SAFETY_RULES.map((rule) => (
+                              <option key={rule.number} value={rule.number}>
+                                #{rule.number} · {tr(rule.titleSw, rule.titleEn)}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                           <input
                             type="text"
                             maxLength={250}
                             value={lockReasonDraft}
                             onChange={(e) => setLockReasonDraft(e.target.value)}
                             placeholder={tr(
-                              'Sababu ya kufunga (hiari): Mf. Ukiukaji wa maadili...',
-                              'Reason for closing (optional): e.g. Policy violation...'
+                              'Maelezo ya ziada kwa mtumiaji (hiari)...',
+                              'Additional reason for the user (optional)...'
                             )}
                             className="min-h-[38px] flex-1 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-red-500 focus:outline-none"
                           />
@@ -838,7 +1054,9 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
                             <button
                               type="button"
                               disabled={busy}
-                              onClick={() => void handleSuspendAccount(member, lockReasonDraft)}
+                              onClick={() =>
+                                void handleSuspendAccount(member, lockReasonDraft, lockRuleNumber)
+                              }
                               className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg bg-red-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-800 disabled:opacity-60"
                             >
                               <Lock className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1052,6 +1270,274 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
             </div>
           )}
         </div>
+      ) : section === 'videos' ? (
+        <div className="mt-6 space-y-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="relative flex-1">
+              <Search
+                className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400"
+                aria-hidden="true"
+              />
+              <input
+                type="search"
+                value={videoSearch}
+                onChange={(e) => setVideoSearch(e.target.value)}
+                placeholder={tr(
+                  'Tafuta video kwa maelezo, sauti, au mbunifu...',
+                  'Search videos by caption, sound, or creator...'
+                )}
+                className="min-h-[42px] w-full rounded-lg border border-slate-300 bg-white py-2 pr-4 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#1D4E89] focus:outline-none"
+              />
+            </div>
+
+            <div className="inline-flex flex-wrap rounded-lg border border-slate-300 bg-white p-1 shrink-0">
+              {(
+                [
+                  { id: 'all', label: tr('Zote', 'All') },
+                  { id: 'live', label: tr('Hewani', 'Live') },
+                  { id: 'blocked', label: tr('Zimefungiwa', 'Blocked') },
+                ] as { id: VideoFilter; label: string }[]
+              ).map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setVideoFilter(f.id)}
+                  className={`min-h-[34px] rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
+                    videoFilter === f.id
+                      ? 'bg-[#0E2640] text-white'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {loadingVideos ? (
+            <div className="rounded-xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-500">
+              {tr('Inapakia video...', 'Loading videos...')}
+            </div>
+          ) : filteredVideos.length === 0 ? (
+            <div className="rounded-xl border border-slate-200 bg-white px-6 py-12 text-center text-sm text-slate-600">
+              <VideoIcon className="mx-auto mb-2 h-6 w-6 text-slate-400" aria-hidden="true" />
+              {tr('Hakuna video zilizopatikana.', 'No videos found.')}
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white sm:rounded-lg">
+              {filteredVideos.map((vid) => {
+                const busy = updatingVideoId === vid.id;
+                const showBlockPrompt = blockVideoPromptId === vid.id;
+                const confirmingDelete = confirmDeleteVideoId === vid.id;
+                const violatedRule = vid.moderationRuleNumber
+                  ? findCommunityRule(vid.moderationRuleNumber)
+                  : null;
+                const thumbSrc = vid.thumbnailUrl || vid.photoUrls?.[0] || '';
+
+                return (
+                  <div
+                    key={vid.id}
+                    className={`p-4 sm:px-5 ${vid.isArchived ? 'bg-red-50/35' : ''}`}
+                  >
+                    <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-center">
+                      <div className="flex min-w-0 items-start gap-3">
+                        <div className="h-16 w-12 shrink-0 overflow-hidden rounded-lg bg-slate-900">
+                          {thumbSrc ? (
+                            <img
+                              src={thumbSrc}
+                              alt=""
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center text-white/40">
+                              <VideoIcon className="h-5 w-5" aria-hidden="true" />
+                            </div>
+                          )}
+                        </div>
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex flex-wrap items-center gap-2 text-xs">
+                            <span className="font-bold text-slate-900">{vid.authorName}</span>
+                            <span aria-hidden="true">·</span>
+                            <span className="text-slate-500">{formatTime(vid.createdAt)}</span>
+                            <span aria-hidden="true">·</span>
+                            {vid.isArchived ? (
+                              <span className="inline-flex items-center gap-1 rounded bg-red-100 px-1.5 py-0.5 text-[11px] font-bold text-red-800">
+                                <EyeOff className="h-3 w-3" aria-hidden="true" />
+                                <span>{tr('Imefungiwa', 'Blocked')}</span>
+                              </span>
+                            ) : (
+                              <span className="text-[11px] font-semibold text-emerald-700">
+                                {tr('Hewani', 'Live')}
+                              </span>
+                            )}
+                          </div>
+
+                          <p className="text-sm font-bold text-slate-900 line-clamp-1">
+                            {vid.caption.trim() ||
+                              vid.soundName ||
+                              tr('Video ya mwanachama', 'Member video')}
+                          </p>
+                          <p className="text-[11px] text-slate-500 tabular-nums">
+                            {tr('Penda', 'Likes')} {vid.likesCount} · {tr('Maoni', 'Comments')}{' '}
+                            {vid.commentsCount} · {tr('Shiriki', 'Shares')} {vid.sharesCount}
+                          </p>
+                          {vid.isArchived && (violatedRule || vid.moderationReason) && (
+                            <p className="text-xs font-semibold text-red-800">
+                              {violatedRule && (
+                                <>
+                                  {tr(`Kanuni #${violatedRule.number}`, `Rule #${violatedRule.number}`)}:{' '}
+                                  {tr(violatedRule.titleSw, violatedRule.titleEn)}
+                                  {vid.moderationReason ? ' — ' : ''}
+                                </>
+                              )}
+                              {vid.moderationReason}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        {onOpenVideo && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenVideo(vid.id)}
+                            className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                            <span>{tr('Tazama', 'Watch')}</span>
+                          </button>
+                        )}
+
+                        {vid.isArchived ? (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() =>
+                              void handleModerateVideo(vid, { isArchived: false })
+                            }
+                            className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                            <span>{tr('Rejesha Hewani', 'Restore Video')}</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => {
+                              setBlockVideoPromptId(showBlockPrompt ? null : vid.id);
+                              setBlockVideoRuleNum(1);
+                              setBlockVideoReasonDraft('');
+                            }}
+                            className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
+                          >
+                            <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
+                            <span>{tr('Fungia Video', 'Block Video')}</span>
+                          </button>
+                        )}
+
+                        {confirmingDelete ? (
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void handlePermanentDeleteVideo(vid.id)}
+                              className="inline-flex min-h-[38px] items-center gap-1 rounded-lg bg-red-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-800 disabled:opacity-60"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                              <span>{tr('Futa Kabisa', 'Confirm Delete')}</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => setConfirmDeleteVideoId(null)}
+                              className="min-h-[38px] rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                            >
+                              {tr('Ghairi', 'Cancel')}
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => setConfirmDeleteVideoId(vid.id)}
+                            className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                            <span>{tr('Futa', 'Delete')}</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {showBlockPrompt && !vid.isArchived && (
+                      <div className="mt-3 space-y-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                        <p className="text-xs font-semibold text-amber-950">
+                          {tr(
+                            `Chagua Kanuni iliyokiukwa na video ya ${vid.authorName}. Mwandishi atapokea taarifa kwenye akaunti yake:`,
+                            `Select the violated rule for ${vid.authorName}'s video. The creator will receive an in-account notice:`
+                          )}
+                        </p>
+                        <select
+                          value={blockVideoRuleNum}
+                          onChange={(e) => setBlockVideoRuleNum(Number(e.target.value))}
+                          className="min-h-[38px] w-full rounded-lg border border-amber-300 bg-white px-3 text-xs font-medium text-slate-900 focus:border-amber-600 focus:outline-none"
+                        >
+                          {COMMUNITY_SAFETY_RULES.map((rule) => (
+                            <option key={rule.number} value={rule.number}>
+                              #{rule.number} · {tr(rule.titleSw, rule.titleEn)}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                          <input
+                            type="text"
+                            maxLength={250}
+                            value={blockVideoReasonDraft}
+                            onChange={(e) => setBlockVideoReasonDraft(e.target.value)}
+                            placeholder={tr(
+                              'Maelezo ya ziada kwa mwandishi (hiari)...',
+                              'Extra explanation for creator (optional)...'
+                            )}
+                            className="min-h-[38px] flex-1 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-amber-600 focus:outline-none"
+                          />
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() =>
+                                void handleModerateVideo(vid, {
+                                  isArchived: true,
+                                  ruleNumber: blockVideoRuleNum,
+                                  reason: blockVideoReasonDraft,
+                                })
+                              }
+                              className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg bg-red-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-800 disabled:opacity-60"
+                            >
+                              <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
+                              <span>{tr('Thibitisha Kufungia', 'Confirm Block')}</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => {
+                                setBlockVideoPromptId(null);
+                                setBlockVideoReasonDraft('');
+                              }}
+                              className="min-h-[38px] rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                            >
+                              {tr('Ghairi', 'Cancel')}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       ) : reports.length === 0 ? (
         <div className="mt-6 rounded-xl border border-slate-200 bg-white px-6 py-14 text-center text-sm text-slate-600">
           {tr('Hakuna ripoti yoyote iliyotumwa kwa sasa.', 'No safety reports submitted yet.')}
@@ -1059,9 +1545,14 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
       ) : (
         <div className="mt-6 divide-y divide-slate-200 rounded-xl border border-slate-200 bg-white">
           {reports.map((report) => {
+            const isVideoReport = report.targetType === 'video';
+            const reportedVideo = isVideoReport ? videoById.get(report.topicId) : undefined;
             const topicStatus = topicStatusById.get(report.topicId);
-            const alreadyArchived = topicStatus === 'archived';
+            const alreadyArchived = isVideoReport
+              ? Boolean(reportedVideo?.isArchived)
+              : topicStatus === 'archived';
             const busyTopic = updatingTopicId === report.topicId;
+            const reportedRule = report.ruleNumber ? findCommunityRule(report.ruleNumber) : null;
 
             return (
               <div
@@ -1075,8 +1566,20 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
                     </span>
                     <span aria-hidden="true">·</span>
                     <span className="text-slate-600">
-                      {report.targetType === 'topic' ? tr('Mada', 'Post') : tr('Jibu', 'Comment')}
+                      {report.targetType === 'video'
+                        ? tr('Video', 'Video')
+                        : report.targetType === 'topic'
+                          ? tr('Mada', 'Post')
+                          : tr('Jibu', 'Comment')}
                     </span>
+                    {reportedRule && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[11px] font-bold text-rose-800">
+                          {tr(`Kanuni #${reportedRule.number}`, `Rule #${reportedRule.number}`)}
+                        </span>
+                      </>
+                    )}
                     <span aria-hidden="true">·</span>
                     <span className="text-slate-500">{formatTime(report.createdAt)}</span>
                     <span aria-hidden="true">·</span>
@@ -1097,7 +1600,9 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
                     </span>
                     {alreadyArchived && (
                       <span className="rounded bg-red-100 px-1.5 py-0.5 text-[11px] font-bold text-red-800">
-                        {tr('Chapisho Limeondolewa', 'Post Removed')}
+                        {isVideoReport
+                          ? tr('Video Imefungiwa', 'Video Blocked')
+                          : tr('Chapisho Limeondolewa', 'Post Removed')}
                       </span>
                     )}
                   </div>
@@ -1106,16 +1611,29 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => onOpenTopic(report.topicId)}
-                    className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                  >
-                    <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>{tr('Fungua Mada', 'Open Post')}</span>
-                  </button>
+                  {isVideoReport ? (
+                    onOpenVideo && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenVideo(report.topicId)}
+                        className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>{tr('Tazama Video', 'Open Video')}</span>
+                      </button>
+                    )
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => onOpenTopic(report.topicId)}
+                      className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>{tr('Fungua Mada', 'Open Post')}</span>
+                    </button>
+                  )}
 
-                  {!alreadyArchived && topicStatus && (
+                  {!alreadyArchived && (isVideoReport ? Boolean(reportedVideo) : Boolean(topicStatus)) && (
                     <button
                       type="button"
                       disabled={busyTopic}
@@ -1123,7 +1641,11 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
                       className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg bg-red-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-800 disabled:opacity-60"
                     >
                       <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>{tr('Ondoa Chapisho', 'Remove Post')}</span>
+                      <span>
+                        {isVideoReport
+                          ? tr('Fungia Video', 'Block Video')
+                          : tr('Ondoa Chapisho', 'Remove Post')}
+                      </span>
                     </button>
                   )}
 

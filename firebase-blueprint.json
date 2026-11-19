@@ -25,6 +25,10 @@
           "maxLength": 300,
           "description": "Optional reason shown when an account is suspended by the platform owner."
         },
+        "suspendedRuleNumber": {
+          "type": "integer",
+          "description": "Community rule number (1-13) violated when suspended."
+        },
         "topicsCount": { "type": "integer" },
         "repliesCount": { "type": "integer" },
         "followersCount": { "type": "integer" },
@@ -139,10 +143,11 @@
       "type": "object",
       "properties": {
         "reporterId": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "targetType": { "type": "string", "enum": ["topic", "reply"] },
+        "targetType": { "type": "string", "enum": ["topic", "reply", "video"] },
         "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "topicId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "reason": { "type": "string", "enum": ["spam", "harassment", "misinformation", "unlawful", "other"] },
+        "ruleNumber": { "type": "integer", "description": "Optional community rule number (1-13)." },
         "details": { "type": "string", "maxLength": 500 },
         "status": { "type": "string", "enum": ["pending", "reviewed", "dismissed"] },
         "createdAt": { "type": "string", "format": "date-time" }
@@ -292,13 +297,15 @@
         "actorId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "actorName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "actorPhoto": { "type": "string", "maxLength": 500 },
-        "type": { "type": "string", "enum": ["comment_reply", "post_comment"] },
+        "type": { "type": "string", "enum": ["comment_reply", "post_comment", "account_moderation", "video_moderation", "post_moderation"] },
         "topicId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "topicTitle": { "type": "string", "maxLength": 140 },
         "topicCategory": { "type": "string", "enum": ["Kijiweni", "Fursa", "Makala"] },
         "replyId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "parentReplyId": { "type": "string", "maxLength": 128 },
         "replyPreview": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "ruleNumber": { "type": "integer", "description": "Violated community rule number (1-13) for moderation alerts." },
+        "ruleTitle": { "type": "string", "maxLength": 140 },
         "isRead": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
@@ -439,6 +446,8 @@
         "autoReplyMessage": { "type": "string", "maxLength": 300 },
         "autoReplyTrigger": { "type": "string", "enum": ["all", "keyword"] },
         "autoReplyKeyword": { "type": "string", "maxLength": 60 },
+        "moderationRuleNumber": { "type": "integer" },
+        "moderationReason": { "type": "string", "maxLength": 300 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },

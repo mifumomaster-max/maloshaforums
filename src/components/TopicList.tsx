@@ -460,8 +460,8 @@ export const TopicList: React.FC<TopicListProps> = ({
 
   return (
     <div className="mx-auto max-w-6xl px-3.5 py-4 sm:px-6 sm:py-6">
-      {/* Breadcrumb Bar when inside a specific section */}
-      {effectiveCategory !== 'all' && (
+      {/* Breadcrumb Bar when inside a specific section (hidden in Kijiweni to avoid wasted header space) */}
+      {effectiveCategory !== 'all' && effectiveCategory !== 'Kijiweni' && (
         <div className="mb-3 flex items-center gap-1.5 text-xs text-slate-600 sm:mb-4">
           <button
             type="button"
@@ -477,96 +477,125 @@ export const TopicList: React.FC<TopicListProps> = ({
         </div>
       )}
 
-      {/* Forum Masthead Banner */}
-      <div className="mb-4 flex flex-col justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-4 sm:mb-6 sm:flex-row sm:items-center sm:rounded-lg sm:px-5 sm:py-5">
-        <div>
-          <h1 className="font-display text-xl font-bold tracking-tight text-slate-900 sm:text-3xl [text-wrap:balance]">
-            {pageHeading}
-          </h1>
-          <p className="mt-1 text-xs leading-relaxed text-slate-600 sm:text-sm">{pageSubheading}</p>
-        </div>
+      {/* Forum Masthead Banner (hidden in Kijiweni where compact Chapisha Kijiweni + Search leads directly) */}
+      {effectiveCategory !== 'Kijiweni' && (
+        <div className="mb-4 flex flex-col justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-4 sm:mb-6 sm:flex-row sm:items-center sm:rounded-lg sm:px-5 sm:py-5">
+          <div>
+            <h1 className="font-display text-xl font-bold tracking-tight text-slate-900 sm:text-3xl [text-wrap:balance]">
+              {pageHeading}
+            </h1>
+            <p className="mt-1 text-xs leading-relaxed text-slate-600 sm:text-sm">{pageSubheading}</p>
+          </div>
 
-        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-          {(effectiveCategory !== 'all' || activeTab === 'trending') && (
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            {(effectiveCategory !== 'all' || activeTab === 'trending') && (
+              <button
+                type="button"
+                onClick={() => handleBoardSelect('all')}
+                className="min-h-[40px] rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
+              >
+                {tr('Onyesha Zote', 'Show All')}
+              </button>
+            )}
             <button
               type="button"
-              onClick={() => handleBoardSelect('all')}
-              className="min-h-[40px] rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
+              onClick={() => {
+                if (effectiveCategory === 'Fursa') {
+                  if (!userUid) {
+                    onToast(
+                      tr(
+                        'Tengeneza akaunti au ingia ili kutangaza fursa.',
+                        'Create an account or sign in to post an opportunity.'
+                      ),
+                      'error'
+                    );
+                    onSignIn('post');
+                    return;
+                  }
+                  if (isSuspended) {
+                    onToast(
+                      tr('Akaunti yako imefungwa na msimamizi.', 'Your account is suspended.'),
+                      'error'
+                    );
+                    return;
+                  }
+                  setFursaInlineOpen(true);
+                  window.setTimeout(() => {
+                    fursaComposerAnchorRef.current?.scrollIntoView({
+                      behavior: 'smooth',
+                      block: 'start',
+                    });
+                  }, 70);
+                } else {
+                  onOpenComposer();
+                }
+              }}
+              className="hidden sm:inline-flex min-h-[40px] items-center gap-1.5 rounded-lg bg-[#1D4E89] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#163A5F] whitespace-nowrap shrink-0"
             >
-              {tr('Onyesha Zote', 'Show All')}
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              <span>{composerButtonLabel}</span>
             </button>
-          )}
-          <button
-            type="button"
-            onClick={() => {
-              if (effectiveCategory === 'Kijiweni') {
-                if (!userUid) {
-                  onToast(
-                    tr(
-                      'Tengeneza akaunti au ingia ili kuchapisha Kijiweni.',
-                      'Create an account or sign in to post.'
-                    ),
-                    'error'
-                  );
-                  onSignIn('post');
-                  return;
-                }
-                if (isSuspended) {
-                  onToast(
-                    tr('Akaunti yako imefungwa na msimamizi.', 'Your account is suspended.'),
-                    'error'
-                  );
-                  return;
-                }
-                setInlineComposerOpen(true);
-                window.setTimeout(() => {
-                  inlineComposerAnchorRef.current?.scrollIntoView({
-                    behavior: 'smooth',
-                    block: 'start',
-                  });
-                }, 70);
-              } else if (effectiveCategory === 'Fursa') {
-                if (!userUid) {
-                  onToast(
-                    tr(
-                      'Tengeneza akaunti au ingia ili kutangaza fursa.',
-                      'Create an account or sign in to post an opportunity.'
-                    ),
-                    'error'
-                  );
-                  onSignIn('post');
-                  return;
-                }
-                if (isSuspended) {
-                  onToast(
-                    tr('Akaunti yako imefungwa na msimamizi.', 'Your account is suspended.'),
-                    'error'
-                  );
-                  return;
-                }
-                setFursaInlineOpen(true);
-                window.setTimeout(() => {
-                  fursaComposerAnchorRef.current?.scrollIntoView({
-                    behavior: 'smooth',
-                    block: 'start',
-                  });
-                }, 70);
-              } else {
-                onOpenComposer();
-              }
-            }}
-            className="hidden sm:inline-flex min-h-[40px] items-center gap-1.5 rounded-lg bg-[#1D4E89] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#163A5F] whitespace-nowrap shrink-0"
-          >
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            <span>{composerButtonLabel}</span>
-          </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Main Split Grid */}
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
         {/* Left/Primary Feed */}
         <div className="min-w-0 flex-1">
+          {/* Kijiweni Compact Top Action: ONLY "+ Chapisha Kijiweni" (or inline composer when open), then Search below */}
+          {effectiveCategory === 'Kijiweni' && (
+            <div
+              ref={inlineComposerAnchorRef}
+              className="mb-3 scroll-mt-[calc(var(--malosha-header-h,106px)+14px)]"
+            >
+              {!inlineComposerOpen && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!userUid) {
+                      onToast(
+                        tr(
+                          'Tengeneza akaunti au ingia ili kuchapisha Kijiweni.',
+                          'Create an account or sign in to post.'
+                        ),
+                        'error'
+                      );
+                      onSignIn('post');
+                      return;
+                    }
+                    if (isSuspended) {
+                      onToast(
+                        tr('Akaunti yako imefungwa na msimamizi.', 'Your account is suspended.'),
+                        'error'
+                      );
+                      return;
+                    }
+                    setInlineComposerOpen(true);
+                  }}
+                  className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-[#1D4E89] px-4 py-2.5 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-[#163A5F] sm:w-auto sm:rounded-lg"
+                >
+                  <Plus className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span>{tr('Chapisha Kijiweni', 'Post to Kijiweni')}</span>
+                </button>
+              )}
+
+              <KijiweniInlineComposer
+                expanded={inlineComposerOpen}
+                onExpandedChange={setInlineComposerOpen}
+                userUid={userUid}
+                userDisplayName={userDisplayName}
+                userPhoto={userPhoto}
+                isSuspended={isSuspended}
+                sharedPayload={sharedKijiweniPayload}
+                onClearSharedPayload={onClearSharedKijiweniPayload}
+                onSignIn={onSignIn}
+                onSubmitPost={onCreateKijiweniPost}
+                onToast={onToast}
+              />
+            </div>
+          )}
+
           {/* Toolbar: Search + Sort */}
           <div className="mb-3 flex flex-col gap-2.5 sm:mb-4 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
             <div className="relative flex-1">
@@ -708,30 +737,6 @@ export const TopicList: React.FC<TopicListProps> = ({
                   {getJobTypeLabel(jt)}
                 </button>
               ))}
-            </div>
-          )}
-
-          {/* Kijiweni Inline Composer — always inline inside the page, never a popup */}
-          {effectiveCategory === 'Kijiweni' && (
-            <div
-              ref={inlineComposerAnchorRef}
-              className={`scroll-mt-[calc(var(--malosha-header-h,106px)+14px)] ${
-                inlineComposerOpen ? 'mb-4' : ''
-              }`}
-            >
-              <KijiweniInlineComposer
-                expanded={inlineComposerOpen}
-                onExpandedChange={setInlineComposerOpen}
-                userUid={userUid}
-                userDisplayName={userDisplayName}
-                userPhoto={userPhoto}
-                isSuspended={isSuspended}
-                sharedPayload={sharedKijiweniPayload}
-                onClearSharedPayload={onClearSharedKijiweniPayload}
-                onSignIn={onSignIn}
-                onSubmitPost={onCreateKijiweniPost}
-                onToast={onToast}
-              />
             </div>
           )}
 
