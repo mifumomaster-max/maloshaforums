@@ -3,6 +3,7 @@ import {
   Archive,
   ArchiveRestore,
   ArrowLeft,
+  AtSign,
   BookOpen,
   Check,
   Clock,
@@ -50,6 +51,11 @@ import {
   UserProfile,
 } from '../types';
 import { downloadNoteAsPdf, downloadUploadedPdfFile } from '../utils/notePdfGenerator';
+import {
+  InlineMediaInsertModal,
+  InsertedInlineMedia,
+  computeTextAfterInlineMediaInsert,
+} from './InlineMediaInsertModal';
 import { extractPlainTextFromPdfFile, MobilePdfNoteReader } from './MobilePdfNoteReader';
 import { NoteFormattedRenderer } from './NoteFormattedRenderer';
 import { NoteLockManageModal } from './NoteLockManageModal';
@@ -126,6 +132,11 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const pdfInputRef = useRef<HTMLInputElement>(null);
+  const noteBodyTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const [inlineMediaPicker, setInlineMediaPicker] = useState<{
+    atIndex: number;
+    replaceAt: boolean;
+  } | null>(null);
 
   // Access & Protected Content State
   const [myAccessByNoteId, setMyAccessByNoteId] = useState<Record<string, MchartNoteAccess | null>>({});
@@ -469,6 +480,7 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
       setComposerLockEnabled(false);
       setComposerLockMode('all');
       setSelectedLockedUids(new Set());
+      setInlineMediaPicker(null);
       setComposerOpen(false);
       onToast(
         tr(
@@ -1253,8 +1265,31 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                   </button>
                 </div>
 
+                <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 rounded-t-xl border border-b-0 border-slate-200 bg-slate-50 px-2.5 py-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowPreview(false);
+                      setInlineMediaPicker({
+                        atIndex: noteBodyTextareaRef.current?.selectionStart ?? rawText.length,
+                        replaceAt: false,
+                      });
+                    }}
+                    className="inline-flex min-h-[32px] items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-[#0E2640] hover:bg-amber-100"
+                  >
+                    <AtSign className="h-3.5 w-3.5 text-[#075E54]" aria-hidden="true" />
+                    <span>{tr('Pakia Picha / Video Hapa', 'Insert Photo / Video')}</span>
+                  </button>
+                  <span className="text-[11px] text-slate-500">
+                    {tr(
+                      'Andika @ popote kwenye notes kuweka picha au video',
+                      'Type @ anywhere in notes to insert a photo or video'
+                    )}
+                  </span>
+                </div>
+
                 {showPreview && previewFormatted ? (
-                  <div className="mt-1.5 max-h-80 overflow-y-auto rounded-xl border border-emerald-200 bg-[#FAF9F5] p-4">
+                  <div className="max-h-80 overflow-y-auto rounded-b-xl border border-emerald-200 bg-[#FAF9F5] p-4">
                     <p className="text-[11px] font-bold text-[#075E54]">
                       {tr('Mwonekano Kitaalamu Kwa Wasomaji', 'Formatted Reader Preview')} ·{' '}
                       {previewFormatted.fileName}
@@ -1278,16 +1313,29 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                 ) : (
                   <textarea
                     id="mchart-note-body"
+                    ref={noteBodyTextareaRef}
                     rows={7}
                     maxLength={15000}
                     required={!pendingPdf}
                     value={rawText}
-                    onChange={(e) => setRawText(e.target.value)}
+                    onChange={(e) => {
+                      const nextVal = e.target.value;
+                      const cursor = e.target.selectionStart ?? nextVal.length;
+                      const wasAtTyped =
+                        nextVal.length > rawText.length &&
+                        nextVal.length - rawText.length <= 2 &&
+                        cursor > 0 &&
+                        nextVal[cursor - 1] === '@';
+                      setRawText(nextVal);
+                      if (wasAtTyped) {
+                        setInlineMediaPicker({ atIndex: cursor - 1, replaceAt: true });
+                      }
+                    }}
                     placeholder={tr(
-                      'Bandika maandishi yako hapa... Tumia ``` kuweka code (au bandika code moja kwa moja), vipengele vidogo (## / ###), orodha (- au 1.) na aya.',
-                      'Paste your notes here... Code blocks (or ```code```), subtitles, bullets, and paragraphs are organized automatically.'
+                      'Bandika maandishi yako hapa... Andika @ popote kupakia picha au video katikati ya notes, au tumia ``` kuweka code, ## / ### kwa vichwa, na - / 1. kwa orodha.',
+                      'Paste your notes here... Type @ anywhere to insert a photo or video inline, or use ```code```, ## headings, and - / 1. lists.'
                     )}
-                    className="mt-1 w-full rounded-xl border border-slate-300 bg-white p-3 text-sm leading-relaxed text-slate-900 focus:border-[#075E54] focus:outline-none"
+                    className="w-full rounded-b-xl border border-slate-300 bg-white p-3 text-sm leading-relaxed text-slate-900 focus:border-[#075E54] focus:outline-none"
                   />
                 )}
               </div>
@@ -1861,6 +1909,33 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
         note={liveLockModalNote}
         onClose={() => setLockModalNote(null)}
         onToast={onToast}
+      />
+
+      <InlineMediaInsertModal
+        isOpen={inlineMediaPicker !== null}
+        onClose={() => setInlineMediaPicker(null)}
+        onToast={onToast}
+        onInsert={(media: InsertedInlineMedia) => {
+          const picker = inlineMediaPicker ?? {
+            atIndex: noteBodyTextareaRef.current?.selectionStart ?? rawText.length,
+            replaceAt: false,
+          };
+          const { nextText, nextCursor } = computeTextAfterInlineMediaInsert(
+            rawText,
+            picker.atIndex,
+            picker.replaceAt,
+            media
+          );
+          setRawText(nextText);
+          setInlineMediaPicker(null);
+          setShowPreview(false);
+          window.requestAnimationFrame(() => {
+            const el = noteBodyTextareaRef.current;
+            if (!el) return;
+            el.focus();
+            el.setSelectionRange(nextCursor, nextCursor);
+          });
+        }}
       />
     </div>
   );

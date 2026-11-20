@@ -76,6 +76,23 @@ self.addEventListener('fetch', function (event) {
   }
 });
 
+self.addEventListener('message', function (event) {
+  var payload = event && event.data;
+  if (!payload || payload.type !== 'SET_BADGE') return;
+  var count = Number(payload.count || 0);
+  try {
+    if (self.navigator && typeof self.navigator.setAppBadge === 'function') {
+      if (count > 0) {
+        self.navigator.setAppBadge(count);
+      } else if (typeof self.navigator.clearAppBadge === 'function') {
+        self.navigator.clearAppBadge();
+      }
+    }
+  } catch (err) {
+    // Ignore unsupported badge calls in SW
+  }
+});
+
 self.addEventListener('notificationclick', function (event) {
   event.notification.close();
   var data = (event.notification && event.notification.data) || {};

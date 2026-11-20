@@ -6,6 +6,8 @@ import {
   CheckCheck,
   ChevronRight,
   CornerDownRight,
+  Eye,
+  EyeOff,
   Globe,
   Lock,
   LogOut,
@@ -14,6 +16,8 @@ import {
   ShieldAlert,
   Sparkles,
   User as UserIcon,
+  UserPlus,
+  X,
 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 import {
@@ -60,10 +64,19 @@ interface HeaderProps {
   userNotifications?: UserNotification[];
   onMarkNotificationRead?: (notificationId: string) => void | Promise<void>;
   onMarkAllNotificationsRead?: (notificationIds: string[]) => void | Promise<void>;
+  hideVideoTab?: boolean;
+  hideVideoTabForUsers?: boolean;
+  onToggleHideVideoTab?: () => void | Promise<void>;
+  recentSignups?: UserProfile[];
+  unreadSignupCount?: number;
+  signupLastSeenMs?: number;
+  onMarkSignupsSeen?: () => void;
+  onOpenAdminMembers?: () => void;
 }
 
 const NOTIF_READ_IDS_KEY = 'malosha_notif_read_ids_v1';
 const NOTIF_CLEARED_AT_KEY = 'malosha_notif_cleared_at_v1';
+const NOTIF_BANNER_DISMISSED_KEY = 'malosha_notif_banner_dismissed_v1';
 
 const GoogleGIcon: React.FC = () => (
   <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
@@ -106,15 +119,31 @@ export const Header: React.FC<HeaderProps> = ({
   userNotifications = [],
   onMarkNotificationRead,
   onMarkAllNotificationsRead,
+  hideVideoTab = false,
+  hideVideoTabForUsers = false,
+  onToggleHideVideoTab,
+  recentSignups = [],
+  unreadSignupCount = 0,
+  signupLastSeenMs = 0,
+  onMarkSignupsSeen,
+  onOpenAdminMembers,
 }) => {
   const { lang, setLang, tr, formatTime, getMakalaSectionLabel, getBoardLabel } = useLanguage();
   const [menuOpen, setMenuOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
-  const [notifFilter, setNotifFilter] = useState<'replies' | 'news' | 'all'>('replies');
+  const [notifFilter, setNotifFilter] = useState<'replies' | 'news' | 'signups' | 'all'>('replies');
   const [notifPermission, setNotifPermission] = useState<PhoneNotificationPermission>(() =>
     getNotificationPermission()
   );
   const [phoneAlertsOn, setPhoneAlertsOn] = useState<boolean>(() => isPhoneAlertsEnabled());
+  const [notifBannerDismissed, setNotifBannerDismissed] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    try {
+      return window.localStorage.getItem(NOTIF_BANNER_DISMISSED_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
   const menuRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
   const fixedHeaderRef = useRef<HTMLElement>(null);
@@ -220,7 +249,8 @@ export const Header: React.FC<HeaderProps> = ({
     [userNotifications]
   );
   const unreadRepliesCount = unreadReplyIds.length;
-  const totalBellUnreadCount = unreadRepliesCount + unreadNewsCount;
+  const activeUnreadSignupCount = isAdmin ? unreadSignupCount : 0;
+  const totalBellUnreadCount = unreadRepliesCount + unreadNewsCount + activeUnreadSignupCount;
 
   const visibleNewsOrTopics = notifFilter === 'news' ? newsNotifications : allNotifications;
 
@@ -251,6 +281,9 @@ export const Header: React.FC<HeaderProps> = ({
     }
     if (unreadReplyIds.length > 0 && onMarkAllNotificationsRead) {
       void onMarkAllNotificationsRead(unreadReplyIds);
+    }
+    if (isAdmin && onMarkSignupsSeen) {
+      onMarkSignupsSeen();
     }
   };
 
@@ -320,7 +353,7 @@ export const Header: React.FC<HeaderProps> = ({
     chat: unreadChatCount,
   };
 
-  const navItems: {
+  const allNavItems: {
     id: NavTab;
     iconSection: NavIconSection;
     label: string;
@@ -370,6 +403,10 @@ export const Header: React.FC<HeaderProps> = ({
       badgeTone: 'crimson',
     },
   ];
+
+  const navItems = hideVideoTab
+    ? allNavItems.filter((item) => item.id !== 'video')
+    : allNavItems;
 
   return (
     <header
@@ -518,9 +555,47 @@ export const Header: React.FC<HeaderProps> = ({
           })}
         </nav>
 
-        {/* Zone 2B: Centered Notification Bell (Separated Cleanly From Profile) */}
-        <div className="flex flex-1 items-center justify-center md:flex-none md:mr-3 lg:mr-5">
-          {/* Notification Bell (Facebook-Style Replies + News Alerts) */}
+        {/* Zone 2B: Owner Top Video Visibility Switch + Centered Notification Bell */}
+        <div className="flex flex-1 items-center justify-center gap-2 md:flex-none md:mr-3 lg:mr-5">
+          {isAdmin && onToggleHideVideoTab && (
+            <button
+              type="button"
+              onClick={() => void onToggleHideVideoTab()}
+              title={
+                hideVideoTabForUsers
+                  ? tr(
+                      'Kipengele cha Video kimefichwa kwa watumiaji wengine (Gusa kukiweka wazi)',
+                      'Video tab is hidden from other users (Tap to show)'
+                    )
+                  : tr(
+                      'Ficha kipengele cha Video kwa watumiaji wengine',
+                      'Hide Video tab from other users'
+                    )
+              }
+              aria-pressed={hideVideoTabForUsers}
+              className={`inline-flex h-9 items-center gap-1.5 rounded-xl border px-2.5 text-[11px] font-bold transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300 ${
+                hideVideoTabForUsers
+                  ? 'border-rose-400/70 bg-rose-600/90 text-white shadow-sm hover:bg-rose-600'
+                  : 'border-white/20 bg-white/10 text-amber-200 hover:bg-white/20 hover:text-white'
+              }`}
+            >
+              {hideVideoTabForUsers ? (
+                <EyeOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              ) : (
+                <Eye className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              )}
+              <span className="hidden sm:inline">
+                {hideVideoTabForUsers
+                  ? tr('Video: Imefichwa', 'Video: Hidden')
+                  : tr('Ficha Video', 'Hide Video')}
+              </span>
+              <span className="sm:hidden">
+                {hideVideoTabForUsers ? tr('Imefichwa', 'Hidden') : 'Video'}
+              </span>
+            </button>
+          )}
+
+          {/* Notification Bell (Facebook-Style Replies + News Alerts + Owner Signups) */}
           <div className="relative" ref={notifRef}>
             <button
               type="button"
@@ -528,7 +603,9 @@ export const Header: React.FC<HeaderProps> = ({
                 setNotifOpen((prev) => {
                   const next = !prev;
                   if (next) {
-                    if (unreadRepliesCount > 0 || (userUid && userNotifications.length > 0)) {
+                    if (isAdmin && activeUnreadSignupCount > 0 && unreadRepliesCount === 0) {
+                      setNotifFilter('signups');
+                    } else if (unreadRepliesCount > 0 || (userUid && userNotifications.length > 0)) {
                       setNotifFilter('replies');
                     } else if (unreadNewsCount > 0) {
                       setNotifFilter('news');
@@ -573,7 +650,9 @@ export const Header: React.FC<HeaderProps> = ({
                       </span>
                     )}
                   </div>
-                  {(userNotifications.length > 0 || visibleNewsOrTopics.length > 0) && (
+                  {(userNotifications.length > 0 ||
+                    visibleNewsOrTopics.length > 0 ||
+                    (isAdmin && activeUnreadSignupCount > 0)) && (
                     <button
                       type="button"
                       onClick={markAllRead}
@@ -585,8 +664,8 @@ export const Header: React.FC<HeaderProps> = ({
                   )}
                 </div>
 
-                {/* Filter Tabs: Majibu (Replies) vs Habari vs Zote */}
-                <div className="flex items-center gap-1.5 border-b border-slate-100 bg-white px-4 py-2">
+                {/* Filter Tabs: Majibu (Replies) vs Habari vs Usajili (Owner) vs Zote */}
+                <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-100 bg-white px-4 py-2">
                   <button
                     type="button"
                     onClick={() => setNotifFilter('replies')}
@@ -631,6 +710,31 @@ export const Header: React.FC<HeaderProps> = ({
                       </span>
                     )}
                   </button>
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => setNotifFilter('signups')}
+                      className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors ${
+                        notifFilter === 'signups'
+                          ? 'bg-emerald-700 text-white'
+                          : 'text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      <UserPlus className="h-3 w-3" aria-hidden="true" />
+                      <span>{tr('Usajili', 'Signups')}</span>
+                      {activeUnreadSignupCount > 0 && (
+                        <span
+                          className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none tabular-nums ${
+                            notifFilter === 'signups'
+                              ? 'bg-white text-emerald-800'
+                              : 'bg-emerald-600 text-white'
+                          }`}
+                        >
+                          {activeUnreadSignupCount}
+                        </span>
+                      )}
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => setNotifFilter('all')}
@@ -646,20 +750,34 @@ export const Header: React.FC<HeaderProps> = ({
 
                 {/* Native Phone Notification Enable / Toggle Bar */}
                 {isNotificationSupported() && (
-                  <div className="flex items-center justify-between gap-2 border-b border-slate-100 bg-sky-50/70 px-4 py-2 text-xs">
-                    <div className="flex min-w-0 items-center gap-2 text-[#163A5F]">
+                  <div className="flex items-center justify-between gap-2 border-b border-slate-100 bg-sky-50/75 px-4 py-2.5 text-xs">
+                    <div className="flex min-w-0 items-start gap-2 text-[#163A5F]">
                       {notifPermission === 'granted' && phoneAlertsOn ? (
-                        <BellRing className="h-3.5 w-3.5 shrink-0 text-emerald-700" aria-hidden="true" />
+                        <BellRing className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-700" aria-hidden="true" />
                       ) : (
-                        <BellOff className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden="true" />
+                        <BellOff className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden="true" />
                       )}
-                      <span className="truncate font-semibold">
-                        {notifPermission === 'granted' && phoneAlertsOn
-                          ? tr('Arifa za simu zimewashwa', 'Phone alerts active')
-                          : notifPermission === 'denied'
-                            ? tr('Arifa zimezuiwa kwenye Settings', 'Blocked in Settings')
-                            : tr('Pata arifa mpya kwenye simu', 'Get new alerts on phone')}
-                      </span>
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold">
+                          {notifPermission === 'granted' && phoneAlertsOn
+                            ? tr(
+                                'Arifa za skrini na namba ya App zimewashwa',
+                                'Screen alerts & App icon badge active'
+                              )
+                            : notifPermission === 'denied'
+                              ? tr('Arifa zimezuiwa kwenye Settings', 'Blocked in Settings')
+                              : tr(
+                                  'Washa arifa juu ya skrini na namba kwenye icon',
+                                  'Enable screen alerts & App badge counter'
+                                )}
+                        </p>
+                        <p className="truncate text-[10.5px] text-slate-500">
+                          {tr(
+                            'Utaona taarifa juu ya simu kama Facebook hata App ikiwa imefungwa',
+                            'See alerts at top of screen like Facebook even when closed'
+                          )}
+                        </p>
+                      </div>
                     </div>
                     <button
                       type="button"
@@ -850,6 +968,86 @@ export const Header: React.FC<HeaderProps> = ({
                           )}
                         </button>
                       );
+                      })
+                    )
+                  ) : notifFilter === 'signups' && isAdmin ? (
+                    recentSignups.length === 0 ? (
+                      <div className="px-5 py-9 text-center">
+                        <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-emerald-50 text-emerald-700">
+                          <UserPlus className="h-5 w-5" aria-hidden="true" />
+                        </div>
+                        <p className="mt-3 text-sm font-semibold text-slate-800">
+                          {tr('Bado hakuna usajili wa hivi karibuni', 'No recent signups yet')}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {tr(
+                            'Mwanachama mpya akijisajili kwenye jukwaa, taarifa yake itaonekana hapa papo hapo.',
+                            'Whenever a new member registers on the forum, their alert will appear right here.'
+                          )}
+                        </p>
+                      </div>
+                    ) : (
+                      recentSignups.map((member) => {
+                        const createdMs = member.createdAt ? member.createdAt.toMillis() : 0;
+                        const isUnreadSignup =
+                          member.uid !== userUid && createdMs > signupLastSeenMs;
+                        return (
+                          <button
+                            key={member.uid}
+                            type="button"
+                            onClick={() => {
+                              onMarkSignupsSeen?.();
+                              setNotifOpen(false);
+                              onOpenAdminMembers?.();
+                            }}
+                            className={`flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 ${
+                              isUnreadSignup ? 'bg-emerald-50/75' : 'bg-white'
+                            }`}
+                          >
+                            <div className="relative shrink-0">
+                              <Avatar
+                                name={member.displayName}
+                                photoURL={member.photoURL}
+                                size="md"
+                                uid={member.uid}
+                              />
+                              <span
+                                className="absolute -right-1 -bottom-1 flex h-5 w-5 items-center justify-center rounded-full bg-emerald-600 text-white ring-2 ring-white"
+                                aria-hidden="true"
+                              >
+                                <UserPlus className="h-2.5 w-2.5" />
+                              </span>
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="truncate text-[13px] font-bold text-slate-900">
+                                  {member.displayName}
+                                </span>
+                                <VerificationBadge badge={member.verificationBadge} size="xs" />
+                                {isUnreadSignup && (
+                                  <span className="rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-extrabold text-white">
+                                    {tr('Mpya', 'New')}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="mt-0.5 text-xs text-slate-600">
+                                {tr(
+                                  'Amejisajili kwenye Malosha Forums · Gusa kumhakiki.',
+                                  'Registered on Malosha Forums · Tap to inspect profile.'
+                                )}
+                              </p>
+                              <p className="mt-1 text-[11px] font-semibold text-emerald-700">
+                                {member.createdAt ? formatTime(member.createdAt) : tr('Sasa hivi', 'Just now')}
+                              </p>
+                            </div>
+                            {isUnreadSignup && (
+                              <span
+                                aria-label={tr('Haijasomwa', 'Unread')}
+                                className="mt-2 h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-600"
+                              />
+                            )}
+                          </button>
+                        );
                       })
                     )
                   ) : visibleNewsOrTopics.length === 0 ? (
@@ -1117,6 +1315,47 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </div>
       </div>
+
+      {/* Slim 1-tap Prompt for Facebook-style Top-of-Screen & App Badge Alerts */}
+      {isNotificationSupported() && notifPermission === 'default' && !notifBannerDismissed && (
+        <div className="border-t border-white/10 bg-[#0A1E33]/95 px-3 py-1.5 text-white">
+          <div className="mx-auto flex max-w-6xl items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2 text-[11px] sm:text-xs">
+              <BellRing className="h-3.5 w-3.5 shrink-0 text-amber-300" aria-hidden="true" />
+              <span className="truncate font-medium text-slate-100">
+                {tr(
+                  'Washa arifa juu ya skrini (kama Facebook) na namba kwenye icon ya App.',
+                  'Enable top-screen alerts (like Facebook) & unread app icon badge.'
+                )}
+              </span>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => void handleEnablePhoneAlerts()}
+                className="rounded-lg bg-amber-400 px-2.5 py-1 text-[11px] font-extrabold text-[#0A1E33] hover:bg-amber-300"
+              >
+                {tr('Washa Sasa', 'Enable')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setNotifBannerDismissed(true);
+                  try {
+                    window.localStorage.setItem(NOTIF_BANNER_DISMISSED_KEY, '1');
+                  } catch {
+                    // Ignore storage error
+                  }
+                }}
+                aria-label={tr('Funga', 'Dismiss')}
+                className="rounded-lg p-1 text-slate-300 hover:bg-white/10 hover:text-white"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </header>
   );
 };

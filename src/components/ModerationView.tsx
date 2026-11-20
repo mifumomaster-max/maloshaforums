@@ -4,6 +4,7 @@ import {
   Calendar,
   Check,
   ExternalLink,
+  Eye,
   EyeOff,
   FileText,
   Lock,
@@ -59,6 +60,9 @@ interface ModerationViewProps {
   onOpenVideo?: (videoId: string) => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
   embedded?: boolean;
+  hideVideoTabForUsers?: boolean;
+  onToggleHideVideoTab?: () => void | Promise<void>;
+  signupLastSeenMs?: number;
 }
 
 type AdminSection = 'members' | 'verify_id' | 'posts' | 'videos' | 'reports';
@@ -74,6 +78,9 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
   onOpenVideo,
   onToast,
   embedded = false,
+  hideVideoTabForUsers = false,
+  onToggleHideVideoTab,
+  signupLastSeenMs = 0,
 }) => {
   const {
     tr,
@@ -94,6 +101,7 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
 
   const [memberSearch, setMemberSearch] = useState('');
   const [memberFilter, setMemberFilter] = useState<MemberFilter>('all');
+  const [memberSortNewest, setMemberSortNewest] = useState(true);
   const [updatingUid, setUpdatingUid] = useState<string | null>(null);
   const [lockPromptUid, setLockPromptUid] = useState<string | null>(null);
   const [lockRuleNumber, setLockRuleNumber] = useState<number>(1);
@@ -328,7 +336,7 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
 
   const filteredMembers = useMemo(() => {
     const q = memberSearch.trim().toLowerCase();
-    return members.filter((m) => {
+    const filtered = members.filter((m) => {
       const status: AccountStatus = m.accountStatus === 'suspended' ? 'suspended' : 'active';
       if (memberFilter === 'active' && status !== 'active') return false;
       if (memberFilter === 'suspended' && status !== 'suspended') return false;
@@ -346,7 +354,16 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
         getBadgeLabel(m.verificationBadge).toLowerCase().includes(q)
       );
     });
-  }, [members, memberSearch, memberFilter, privateDetails, getBadgeLabel]);
+    if (memberSortNewest) {
+      return [...filtered].sort((a, b) => {
+        const am = a.createdAt ? a.createdAt.toMillis() : 0;
+        const bm = b.createdAt ? b.createdAt.toMillis() : 0;
+        if (bm !== am) return bm - am;
+        return a.displayName.localeCompare(b.displayName);
+      });
+    }
+    return filtered;
+  }, [members, memberSearch, memberFilter, memberSortNewest, privateDetails, getBadgeLabel]);
 
   const filteredTopics = useMemo(() => {
     const q = postSearch.trim().toLowerCase();
@@ -750,6 +767,67 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
         </div>
       </div>
 
+      {/* Owner Quick Visibility Switch: Hide Video Icon for Regular Users */}
+      {onToggleHideVideoTab && (
+        <div className="mt-4 flex flex-col justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50/80 p-3.5 sm:flex-row sm:items-center">
+          <div className="flex items-start gap-3">
+            <span
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+                hideVideoTabForUsers
+                  ? 'bg-rose-100 text-rose-700'
+                  : 'bg-sky-100 text-[#1D4E89]'
+              }`}
+            >
+              {hideVideoTabForUsers ? (
+                <EyeOff className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <Eye className="h-4 w-4" aria-hidden="true" />
+              )}
+            </span>
+            <div>
+              <p className="text-xs font-bold text-slate-900 sm:text-sm">
+                {tr(
+                  'Uonekano wa Kipengele cha Video kwa Watumiaji',
+                  'Video Feature Visibility for Users'
+                )}
+              </p>
+              <p className="text-[11px] text-slate-600">
+                {hideVideoTabForUsers
+                  ? tr(
+                      'Icon ya Video imefichwa kwa watumiaji wengine wote (Mmiliki pekee ndiye anaiona).',
+                      'Video icon is currently hidden from all non-admin users.'
+                    )
+                  : tr(
+                      'Icon ya Video inaonekana wazi kwa watumiaji wote kwenye menu ya juu na chini.',
+                      'Video icon is visible to everyone in navigation.'
+                    )}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void onToggleHideVideoTab()}
+            className={`inline-flex min-h-[38px] shrink-0 items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-bold transition-colors ${
+              hideVideoTabForUsers
+                ? 'bg-emerald-700 text-white hover:bg-emerald-800'
+                : 'bg-rose-700 text-white hover:bg-rose-800'
+            }`}
+          >
+            {hideVideoTabForUsers ? (
+              <>
+                <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>{tr('Onyesha Video kwa Wote', 'Show Video Tab')}</span>
+              </>
+            ) : (
+              <>
+                <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>{tr('Ficha Video kwa Watumiaji', 'Hide Video Tab')}</span>
+              </>
+            )}
+          </button>
+        </div>
+      )}
+
       {section === 'verify_id' ? (
         <div className="mt-6">
           <MemberIdVerifier />
@@ -815,7 +893,7 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
             <div
               role="group"
               aria-label={tr('Chuja hali ya akaunti', 'Filter account status')}
-              className="inline-flex rounded-lg border border-slate-300 bg-white p-1 shrink-0"
+              className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-slate-300 bg-white p-1 shrink-0"
             >
               {(
                 [
@@ -837,6 +915,17 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
                   {f.label}
                 </button>
               ))}
+              <button
+                type="button"
+                onClick={() => setMemberSortNewest((prev) => !prev)}
+                className={`min-h-[34px] rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors ${
+                  memberSortNewest
+                    ? 'border-emerald-600 bg-emerald-50 text-emerald-800'
+                    : 'border-slate-200 bg-slate-50 text-slate-600'
+                }`}
+              >
+                {memberSortNewest ? tr('Wapya Kwanza', 'Newest First') : tr('Kwa Cheo', 'By Badge')}
+              </button>
             </div>
           </div>
 
@@ -884,6 +973,19 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
                             </span>
                             <VerificationBadge badge={member.verificationBadge} size="sm" />
                             <OnlineStatusPill uid={member.uid} />
+                            {(() => {
+                              const joinedMs = member.createdAt ? member.createdAt.toMillis() : 0;
+                              const isRecent =
+                                !isSelf &&
+                                joinedMs > 0 &&
+                                (joinedMs > signupLastSeenMs ||
+                                  Date.now() - joinedMs < 24 * 60 * 60 * 1000);
+                              return isRecent ? (
+                                <span className="rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-extrabold text-white">
+                                  {tr('Mpya', 'New')}
+                                </span>
+                              ) : null;
+                            })()}
                             {isSuspended && (
                               <span className="inline-flex items-center gap-1 rounded bg-red-100 px-1.5 py-0.5 text-[11px] font-bold text-red-800">
                                 <Lock className="h-3 w-3" aria-hidden="true" />

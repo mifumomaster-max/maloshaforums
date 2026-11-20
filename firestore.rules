@@ -325,17 +325,33 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'uid', 'displayName', 'photoURL', 'isOnline', 'isTypingInMchart',
-          'replyingToName', 'activeArea', 'lastSeenAt', 'typingUpdatedAt', 'updatedAt'
+          'typingChatId', 'replyingToName', 'activeArea', 'lastSeenAt', 'typingUpdatedAt', 'updatedAt'
         ])
         && data.uid is string && data.uid == userId && data.uid.size() >= 1 && data.uid.size() <= 128
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
         && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500))
         && data.isOnline is bool
         && data.isTypingInMchart is bool
+        && (!('typingChatId' in data) || (data.typingChatId is string && data.typingChatId.size() <= 128))
         && data.replyingToName is string && data.replyingToName.size() <= 80
         && data.activeArea in ['kijiweni', 'video', 'fursa', 'makala', 'mchart', 'profile', 'forum']
         && data.lastSeenAt is timestamp
         && data.typingUpdatedAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMemberDirectoryEntry(data, userId) {
+      return data.keys().hasAll([
+          'uid', 'displayName', 'photoURL', 'verificationBadge', 'isActive', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'displayName', 'photoURL', 'verificationBadge', 'isActive', 'updatedAt'
+        ])
+        && data.uid is string && data.uid == userId && isValidId(data.uid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && data.photoURL is string && data.photoURL.size() <= 500
+        && data.verificationBadge in ['none', 'individual', 'organization', 'government', 'owner', 'journalist', 'educator', 'creator']
+        && data.isActive is bool
         && data.updatedAt is timestamp;
     }
 
@@ -434,14 +450,18 @@ service cloud.firestore {
           'createdAt', 'expiresAt'
         ])
         && data.keys().hasOnly([
-          'authorId', 'authorName', 'authorPhoto', 'imageUrl', 'caption',
+          'authorId', 'authorName', 'authorPhoto', 'mediaType', 'imageUrl', 'videoUrl', 'durationSec', 'caption',
           'privacy', 'allowedViewerIds', 'audienceTokens', 'viewsCount',
           'createdAt', 'expiresAt'
         ])
         && data.authorId is string && isValidId(data.authorId)
         && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80
         && data.authorPhoto is string && data.authorPhoto.size() <= 500
+        && (!('mediaType' in data) || (data.mediaType is string && data.mediaType in ['image', 'video']))
         && data.imageUrl is string && data.imageUrl.size() >= 10 && data.imageUrl.size() <= 500 && data.imageUrl.matches('^https://.*')
+        && (!('videoUrl' in data) || (data.videoUrl is string && data.videoUrl.size() <= 500 && (data.videoUrl == '' || data.videoUrl.matches('^https://.*'))))
+        && (!('durationSec' in data) || (data.durationSec is int && data.durationSec >= 0 && data.durationSec <= 300))
+        && (!('mediaType' in data) || data.mediaType != 'video' || ('videoUrl' in data && data.videoUrl is string && data.videoUrl.size() >= 10 && data.videoUrl.matches('^https://.*')))
         && data.caption is string && data.caption.size() <= 280
         && data.privacy in ['members', 'selected']
         && data.allowedViewerIds is list && data.allowedViewerIds.size() <= 50
@@ -596,6 +616,122 @@ service cloud.firestore {
         && (!('isAutoReply' in data) || data.isAutoReply is bool)
         && data.isDeleted is bool
         && data.createdAt is timestamp;
+    }
+
+    function isValidSiteNavSettings(data) {
+      return data.keys().hasAll(['hideVideoTabForUsers', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['hideVideoTabForUsers', 'updatedBy', 'updatedAt'])
+        && data.hideVideoTabForUsers is bool
+        && data.updatedBy is string && isValidId(data.updatedBy)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOwnerCustomIdCard(data, cardId) {
+      return data.keys().hasAll([
+          'cardId', 'ownerUid', 'headerTopLeftSw', 'headerTopLeftEn',
+          'headerTopRightSw', 'headerTopRightEn', 'idNumberLabel', 'idNumber',
+          'surnameLabel', 'surname', 'givenNamesLabel', 'givenNames',
+          'dobLabel', 'dateOfBirth', 'sexLabel', 'sex',
+          'nationalityLabel', 'nationality', 'signatureLabel', 'signatureText',
+          'signaturePath', 'portraitUrl', 'hologramPhotoUrl',
+          'showSpecimenStamp', 'specimenText', 'showRightEmblem',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'cardId', 'ownerUid', 'headerTopLeftSw', 'headerTopLeftEn',
+          'headerTopRightSw', 'headerTopRightEn', 'idNumberLabel', 'idNumber',
+          'surnameLabel', 'surname', 'givenNamesLabel', 'givenNames',
+          'dobLabel', 'dateOfBirth', 'sexLabel', 'sex',
+          'nationalityLabel', 'nationality', 'signatureLabel', 'signatureText',
+          'signaturePath', 'portraitUrl', 'hologramPhotoUrl',
+          'showSpecimenStamp', 'specimenText', 'showRightEmblem',
+          'createdAt', 'updatedAt'
+        ])
+        && data.cardId is string && data.cardId == cardId && isValidId(data.cardId)
+        && data.ownerUid is string && isValidId(data.ownerUid)
+        && data.headerTopLeftSw is string && data.headerTopLeftSw.size() <= 100
+        && data.headerTopLeftEn is string && data.headerTopLeftEn.size() <= 100
+        && data.headerTopRightSw is string && data.headerTopRightSw.size() <= 100
+        && data.headerTopRightEn is string && data.headerTopRightEn.size() <= 100
+        && data.idNumberLabel is string && data.idNumberLabel.size() <= 80
+        && data.idNumber is string && data.idNumber.size() <= 60
+        && data.surnameLabel is string && data.surnameLabel.size() <= 80
+        && data.surname is string && data.surname.size() <= 80
+        && data.givenNamesLabel is string && data.givenNamesLabel.size() <= 80
+        && data.givenNames is string && data.givenNames.size() <= 120
+        && data.dobLabel is string && data.dobLabel.size() <= 80
+        && data.dateOfBirth is string && data.dateOfBirth.size() <= 60
+        && data.sexLabel is string && data.sexLabel.size() <= 80
+        && data.sex is string && data.sex.size() <= 30
+        && data.nationalityLabel is string && data.nationalityLabel.size() <= 80
+        && data.nationality is string && data.nationality.size() <= 80
+        && data.signatureLabel is string && data.signatureLabel.size() <= 80
+        && data.signatureText is string && data.signatureText.size() <= 80
+        && data.signaturePath is string && data.signaturePath.size() <= 4000
+        && data.portraitUrl is string && data.portraitUrl.size() <= 500
+        && data.hologramPhotoUrl is string && data.hologramPhotoUrl.size() <= 500
+        && data.showSpecimenStamp is bool
+        && data.specimenText is string && data.specimenText.size() <= 40
+        && data.showRightEmblem is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTrainingCertificate(data, certId) {
+      return data.keys().hasAll([
+          'certId', 'serialNumber', 'issuerUid', 'orientation', 'theme',
+          'institutionName', 'institutionSubtitle', 'institutionLogoUrl',
+          'kickerText', 'certificateTitle', 'certificateSubtitle', 'introLine',
+          'recipientUid', 'recipientName', 'completionLine', 'courseTitle',
+          'courseDetails', 'durationText', 'gradeText', 'issueDateText', 'issueLocation',
+          'signatory1Name', 'signatory1Title', 'signatory1SigText', 'signatory1SigPath',
+          'showSignatory2', 'signatory2Name', 'signatory2Title', 'signatory2SigText', 'signatory2SigPath',
+          'sealText', 'watermarkText', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'certId', 'serialNumber', 'issuerUid', 'orientation', 'theme',
+          'institutionName', 'institutionSubtitle', 'institutionLogoUrl',
+          'kickerText', 'certificateTitle', 'certificateSubtitle', 'introLine',
+          'recipientUid', 'recipientName', 'completionLine', 'courseTitle',
+          'courseDetails', 'durationText', 'gradeText', 'issueDateText', 'issueLocation',
+          'signatory1Name', 'signatory1Title', 'signatory1SigText', 'signatory1SigPath',
+          'showSignatory2', 'signatory2Name', 'signatory2Title', 'signatory2SigText', 'signatory2SigPath',
+          'sealText', 'watermarkText', 'createdAt', 'updatedAt'
+        ])
+        && data.certId is string && data.certId == certId && isValidId(data.certId)
+        && data.serialNumber is string && data.serialNumber.size() >= 4 && data.serialNumber.size() <= 64
+        && data.issuerUid is string && isValidId(data.issuerUid)
+        && data.orientation in ['landscape', 'portrait']
+        && data.theme in ['navy_gold', 'emerald_gold', 'burgundy_gold']
+        && data.institutionName is string && data.institutionName.size() <= 140
+        && data.institutionSubtitle is string && data.institutionSubtitle.size() <= 180
+        && data.institutionLogoUrl is string && data.institutionLogoUrl.size() <= 500
+        && data.kickerText is string && data.kickerText.size() <= 120
+        && data.certificateTitle is string && data.certificateTitle.size() <= 120
+        && data.certificateSubtitle is string && data.certificateSubtitle.size() <= 140
+        && data.introLine is string && data.introLine.size() <= 140
+        && data.recipientUid is string && data.recipientUid.size() <= 128
+        && data.recipientName is string && data.recipientName.size() >= 1 && data.recipientName.size() <= 120
+        && data.completionLine is string && data.completionLine.size() <= 180
+        && data.courseTitle is string && data.courseTitle.size() >= 1 && data.courseTitle.size() <= 180
+        && data.courseDetails is string && data.courseDetails.size() <= 500
+        && data.durationText is string && data.durationText.size() <= 80
+        && data.gradeText is string && data.gradeText.size() <= 80
+        && data.issueDateText is string && data.issueDateText.size() <= 80
+        && data.issueLocation is string && data.issueLocation.size() <= 100
+        && data.signatory1Name is string && data.signatory1Name.size() <= 100
+        && data.signatory1Title is string && data.signatory1Title.size() <= 100
+        && data.signatory1SigText is string && data.signatory1SigText.size() <= 80
+        && data.signatory1SigPath is string && data.signatory1SigPath.size() <= 4000
+        && data.showSignatory2 is bool
+        && data.signatory2Name is string && data.signatory2Name.size() <= 100
+        && data.signatory2Title is string && data.signatory2Title.size() <= 100
+        && data.signatory2SigText is string && data.signatory2SigText.size() <= 80
+        && data.signatory2SigPath is string && data.signatory2SigPath.size() <= 4000
+        && data.sealText is string && data.sealText.size() <= 80
+        && data.watermarkText is string && data.watermarkText.size() <= 100
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
     }
 
     function noteDocData(noteId) {
@@ -1216,6 +1352,58 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(cardId);
     }
 
+    // 10B. Zero-PII Active Member Directory (Alphabetical A-Z Private Chat Discovery)
+    match /member_directory/{userId} {
+      allow get: if isSignedIn() && isValidId(userId);
+      allow list: if isSignedIn() && resource.data.isActive == true;
+
+      allow create: if isSignedIn()
+        && isValidId(userId)
+        && isValidMemberDirectoryEntry(incoming(), userId)
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            isOwner(userId) &&
+            isNotSuspended() &&
+            incoming().isActive == true &&
+            (
+              incoming().verificationBadge == 'none' ||
+              (
+                exists(/databases/$(database)/documents/users/$(userId)) &&
+                'verificationBadge' in get(/databases/$(database)/documents/users/$(userId)).data &&
+                incoming().verificationBadge == get(/databases/$(database)/documents/users/$(userId)).data.verificationBadge
+              )
+            )
+          )
+        );
+
+      allow update: if isSignedIn()
+        && isValidId(userId)
+        && isValidMemberDirectoryEntry(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            isOwner(userId) &&
+            isNotSuspended() &&
+            incoming().isActive == true &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'verificationBadge', 'isActive', 'updatedAt']) &&
+            (
+              incoming().verificationBadge == existing().verificationBadge ||
+              (
+                exists(/databases/$(database)/documents/users/$(userId)) &&
+                'verificationBadge' in get(/databases/$(database)/documents/users/$(userId)).data &&
+                incoming().verificationBadge == get(/databases/$(database)/documents/users/$(userId)).data.verificationBadge
+              )
+            )
+          )
+        );
+
+      allow delete: if isAdmin() && isValidId(userId);
+    }
+
     // 11. Real-Time Online Presence & Mchart Typing State (Zero PII)
     match /user_presence/{userId} {
       allow get: if isValidId(userId);
@@ -1609,6 +1797,69 @@ service cloud.firestore {
           && isValidId(commentId)
           && (isAdmin() || (isNotSuspended() && existing().authorId == request.auth.uid));
       }
+    }
+
+    // 15. Owner-Controlled Navigation Settings
+    match /site_settings/{settingId} {
+      allow get: if isValidId(settingId) && settingId == 'navigation';
+      allow list: if false;
+
+      allow create, update: if isAdmin()
+        && isValidId(settingId)
+        && settingId == 'navigation'
+        && isValidSiteNavSettings(incoming())
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isAdmin()
+        && isValidId(settingId)
+        && settingId == 'navigation';
+    }
+
+    // 16. Owner-Only Editable Specimen Identity Cards
+    match /owner_id_cards/{cardId} {
+      allow get: if isAdmin() && isValidId(cardId);
+      allow list: if isAdmin();
+
+      allow create: if isAdmin()
+        && isValidId(cardId)
+        && isValidOwnerCustomIdCard(incoming(), cardId)
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidId(cardId)
+        && isValidOwnerCustomIdCard(incoming(), cardId)
+        && incoming().cardId == existing().cardId
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isAdmin() && isValidId(cardId);
+    }
+
+    // 17. Owner-Issued Institutional Training Certificates (A4)
+    match /training_certificates/{certId} {
+      allow get: if isAdmin() && isValidId(certId);
+      allow list: if isAdmin();
+
+      allow create: if isAdmin()
+        && isValidId(certId)
+        && isValidTrainingCertificate(incoming(), certId)
+        && incoming().issuerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidId(certId)
+        && isValidTrainingCertificate(incoming(), certId)
+        && incoming().certId == existing().certId
+        && incoming().issuerUid == existing().issuerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isAdmin() && isValidId(certId);
     }
   }
 }

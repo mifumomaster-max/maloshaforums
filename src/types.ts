@@ -613,6 +613,7 @@ export interface UserPresence {
   photoURL?: string;
   isOnline: boolean;
   isTypingInMchart: boolean;
+  typingChatId?: string;
   replyingToName: string;
   activeArea: PresenceArea;
   lastSeenAt: Timestamp | null;
@@ -873,7 +874,10 @@ export interface MchartStatus {
   authorId: string;
   authorName: string;
   authorPhoto: string;
+  mediaType?: 'image' | 'video';
   imageUrl: string;
+  videoUrl?: string;
+  durationSec?: number;
   caption: string;
   privacy: StatusPrivacyMode;
   allowedViewerIds: string[];
@@ -896,6 +900,7 @@ export interface MemberDirectoryCandidate {
   uid: string;
   displayName: string;
   photoURL: string;
+  verificationBadge?: VerificationBadgeType;
   isOnline?: boolean;
 }
 
@@ -956,4 +961,80 @@ export interface VideoComment {
   createdAt: Timestamp | null;
 }
 
+export interface SiteNavSettings {
+  hideVideoTabForUsers: boolean;
+  updatedBy: string;
+  updatedAt: Timestamp | null;
+}
+
+export interface OwnerCustomIdCardData {
+  cardId: string;
+  ownerUid: string;
+  headerTopLeftSw: string;
+  headerTopLeftEn: string;
+  headerTopRightSw: string;
+  headerTopRightEn: string;
+  idNumberLabel: string;
+  idNumber: string;
+  surnameLabel: string;
+  surname: string;
+  givenNamesLabel: string;
+  givenNames: string;
+  dobLabel: string;
+  dateOfBirth: string;
+  sexLabel: string;
+  sex: string;
+  nationalityLabel: string;
+  nationality: string;
+  signatureLabel: string;
+  signatureText: string;
+  signaturePath: string;
+  portraitUrl: string;
+  hologramPhotoUrl: string;
+  showSpecimenStamp: boolean;
+  specimenText: string;
+  showRightEmblem: boolean;
+  createdAt?: Timestamp | null;
+  updatedAt?: Timestamp | null;
+}
+
+export type CertificateOrientation = 'landscape' | 'portrait';
+export type CertificateTheme = 'navy_gold' | 'emerald_gold' | 'burgundy_gold';
+
+export interface TrainingCertificateData {
+  certId: string;
+  serialNumber: string;
+  issuerUid: string;
+  orientation: CertificateOrientation;
+  theme: CertificateTheme;
+  institutionName: string;
+  institutionSubtitle: string;
+  institutionLogoUrl: string;
+  kickerText: string;
+  certificateTitle: string;
+  certificateSubtitle: string;
+  introLine: string;
+  recipientUid: string;
+  recipientName: string;
+  completionLine: string;
+  courseTitle: string;
+  courseDetails: string;
+  durationText: string;
+  gradeText: string;
+  issueDateText: string;
+  issueLocation: string;
+  signatory1Name: string;
+  signatory1Title: string;
+  signatory1SigText: string;
+  signatory1SigPath: string;
+  showSignatory2: boolean;
+  signatory2Name: string;
+  signatory2Title: string;
+  signatory2SigText: string;
+  signatory2SigPath: string;
+  sealText: string;
+  watermarkText: string;
+  createdAt?: Timestamp | null;
+  updatedAt?: Timestamp | null;
+}
 

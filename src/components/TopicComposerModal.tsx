@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  AtSign,
   Eye,
   Heading2,
   Heading3,
@@ -27,6 +28,11 @@ import { autoFormatScholarlyText } from '../utils/editorialFormatter';
 import { parseTagsInput } from '../utils/formatters';
 import { useLanguage } from '../context/LanguageContext';
 import { ImageResizeModal } from './ImageResizeModal';
+import {
+  InlineMediaInsertModal,
+  InsertedInlineMedia,
+  computeTextAfterInlineMediaInsert,
+} from './InlineMediaInsertModal';
 import { MakalaArticleRenderer } from './MakalaArticleRenderer';
 
 interface TopicComposerModalProps {
@@ -83,6 +89,10 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
   const bodyTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const [makalaPreview, setMakalaPreview] = useState(false);
+  const [inlineMediaPicker, setInlineMediaPicker] = useState<{
+    atIndex: number;
+    replaceAt: boolean;
+  } | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -126,17 +136,24 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
       setKijiweniImage('');
     }
     setMakalaPreview(false);
+    setInlineMediaPicker(null);
     setError('');
   }, [editingTopic, defaultCategory, isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        if (inlineMediaPicker !== null) {
+          setInlineMediaPicker(null);
+        } else {
+          onClose();
+        }
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, inlineMediaPicker]);
 
   if (!isOpen) return null;
 
@@ -161,6 +178,44 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
       el.focus();
       const pos = start + insertion.length;
       el.setSelectionRange(pos, pos);
+    });
+  };
+
+  const handleBodyChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const nextVal = e.target.value;
+    const cursor = e.target.selectionStart ?? nextVal.length;
+    const wasAtTyped =
+      isMakala &&
+      nextVal.length > body.length &&
+      nextVal.length - body.length <= 2 &&
+      cursor > 0 &&
+      nextVal[cursor - 1] === '@';
+
+    setBody(nextVal);
+    if (wasAtTyped) {
+      setInlineMediaPicker({ atIndex: cursor - 1, replaceAt: true });
+    }
+  };
+
+  const handleInsertInlineMedia = (media: InsertedInlineMedia) => {
+    const picker = inlineMediaPicker ?? {
+      atIndex: bodyTextareaRef.current?.selectionStart ?? body.length,
+      replaceAt: false,
+    };
+    const { nextText, nextCursor } = computeTextAfterInlineMediaInsert(
+      body,
+      picker.atIndex,
+      picker.replaceAt,
+      media
+    );
+    setBody(nextText);
+    setInlineMediaPicker(null);
+    setMakalaPreview(false);
+    window.requestAnimationFrame(() => {
+      const el = bodyTextareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(nextCursor, nextCursor);
     });
   };
 
@@ -726,6 +781,23 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
                 </button>
                 <button
                   type="button"
+                  onClick={() =>
+                    setInlineMediaPicker({
+                      atIndex: bodyTextareaRef.current?.selectionStart ?? body.length,
+                      replaceAt: false,
+                    })
+                  }
+                  title={tr(
+                    'Weka picha au video mahali hapa (au andika @)',
+                    'Insert photo or video at cursor (or type @)'
+                  )}
+                  className="inline-flex items-center gap-1 rounded border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-bold text-[#0E2640] hover:border-[#B80000] hover:bg-amber-100"
+                >
+                  <AtSign className="h-3 w-3 text-[#B80000]" aria-hidden="true" />
+                  <span>{tr('Picha / Video', 'Photo / Video')}</span>
+                </button>
+                <button
+                  type="button"
                   onClick={() => {
                     if (body.trim()) setBody((p) => autoFormatScholarlyText(p));
                   }}
@@ -750,7 +822,7 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
                 minLength={isKijiweni && kijiweniImage.trim().length >= 10 ? 0 : 10}
                 maxLength={8000}
                 value={body}
-                onChange={(e) => setBody(e.target.value)}
+                onChange={handleBodyChange}
                 placeholder={
                   isFursa
                     ? tr(
@@ -759,8 +831,8 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
                       )
                     : isMakala
                       ? tr(
-                          'Andika uchambuzi wenye ## Vichwa, ### Vichwa Vidogo, - Orodha, na aya zinazoeleweka...',
-                          'Write a structured analysis with ## Headings, ### Subtitles, - Bullets, and clear paragraphs...'
+                          'Andika uchambuzi, na andika @ popote kupakia picha au video katikati ya makala...',
+                          'Write your analysis, and type @ anywhere to insert a photo or video inline...'
                         )
                       : tr('Shiriki mawazo yako na jamii...', 'Share your thoughts with the community...')
                 }
@@ -807,6 +879,15 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
         file={pendingResize?.file || null}
         onCancel={() => setPendingResize(null)}
         onConfirm={(resizedFile) => void handleConfirmResizedImage(resizedFile)}
+      />
+
+      <InlineMediaInsertModal
+        isOpen={inlineMediaPicker !== null}
+        onClose={() => setInlineMediaPicker(null)}
+        onInsert={handleInsertInlineMedia}
+        onToast={(msg, kind) => {
+          if (kind === 'error') setError(msg);
+        }}
       />
     </div>
   );

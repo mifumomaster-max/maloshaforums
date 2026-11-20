@@ -277,6 +277,7 @@
         "photoURL": { "type": "string", "maxLength": 500 },
         "isOnline": { "type": "boolean" },
         "isTypingInMchart": { "type": "boolean" },
+        "typingChatId": { "type": "string", "maxLength": 128 },
         "replyingToName": { "type": "string", "maxLength": 80 },
         "activeArea": { "type": "string", "enum": ["kijiweni", "video", "fursa", "makala", "mchart", "profile", "forum"] },
         "lastSeenAt": { "type": "string", "format": "date-time" },
@@ -287,6 +288,20 @@
         "uid", "displayName", "isOnline", "isTypingInMchart",
         "replyingToName", "activeArea", "lastSeenAt", "typingUpdatedAt", "updatedAt"
       ]
+    },
+    "MemberDirectoryEntry": {
+      "title": "MemberDirectoryEntry",
+      "description": "Zero-PII public member directory entry used for alphabetical A-Z member discovery and Private Chat search.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "photoURL": { "type": "string", "maxLength": 500 },
+        "verificationBadge": { "type": "string", "enum": ["none", "individual", "organization", "government", "owner", "journalist", "educator", "creator"] },
+        "isActive": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "photoURL", "verificationBadge", "isActive", "updatedAt"]
     },
     "UserNotification": {
       "title": "UserNotification",
@@ -381,13 +396,16 @@
     },
     "MchartStatus": {
       "title": "MchartStatus",
-      "description": "24-hour WhatsApp-style ephemeral photo status with strict audience privacy.",
+      "description": "24-hour WhatsApp-style ephemeral photo or video status with strict audience privacy.",
       "type": "object",
       "properties": {
         "authorId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "authorName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "authorPhoto": { "type": "string", "maxLength": 500 },
+        "mediaType": { "type": "string", "enum": ["image", "video"] },
         "imageUrl": { "type": "string", "minLength": 10, "maxLength": 500 },
+        "videoUrl": { "type": "string", "maxLength": 500 },
+        "durationSec": { "type": "integer" },
         "caption": { "type": "string", "maxLength": 280 },
         "privacy": { "type": "string", "enum": ["members", "selected"] },
         "allowedViewerIds": { "type": "array", "description": "Up to 50 permitted viewer UIDs when privacy is selected." },
@@ -475,6 +493,113 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["videoId", "authorId", "authorName", "authorPhoto", "body", "isDeleted", "createdAt"]
+    },
+    "SiteNavSettings": {
+      "title": "SiteNavSettings",
+      "description": "Owner-controlled navigation visibility settings (e.g. hiding Video tab for non-admin users).",
+      "type": "object",
+      "properties": {
+        "hideVideoTabForUsers": { "type": "boolean" },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["hideVideoTabForUsers", "updatedBy", "updatedAt"]
+    },
+    "OwnerCustomIdCard": {
+      "title": "OwnerCustomIdCard",
+      "description": "Owner-only editable specimen identity card matching the Tanzania citizen ID layout.",
+      "type": "object",
+      "properties": {
+        "cardId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "headerTopLeftSw": { "type": "string", "maxLength": 100 },
+        "headerTopLeftEn": { "type": "string", "maxLength": 100 },
+        "headerTopRightSw": { "type": "string", "maxLength": 100 },
+        "headerTopRightEn": { "type": "string", "maxLength": 100 },
+        "idNumberLabel": { "type": "string", "maxLength": 80 },
+        "idNumber": { "type": "string", "maxLength": 60 },
+        "surnameLabel": { "type": "string", "maxLength": 80 },
+        "surname": { "type": "string", "maxLength": 80 },
+        "givenNamesLabel": { "type": "string", "maxLength": 80 },
+        "givenNames": { "type": "string", "maxLength": 120 },
+        "dobLabel": { "type": "string", "maxLength": 80 },
+        "dateOfBirth": { "type": "string", "maxLength": 60 },
+        "sexLabel": { "type": "string", "maxLength": 80 },
+        "sex": { "type": "string", "maxLength": 30 },
+        "nationalityLabel": { "type": "string", "maxLength": 80 },
+        "nationality": { "type": "string", "maxLength": 80 },
+        "signatureLabel": { "type": "string", "maxLength": 80 },
+        "signatureText": { "type": "string", "maxLength": 80 },
+        "signaturePath": { "type": "string", "maxLength": 4000 },
+        "portraitUrl": { "type": "string", "maxLength": 500 },
+        "hologramPhotoUrl": { "type": "string", "maxLength": 500 },
+        "showSpecimenStamp": { "type": "boolean" },
+        "specimenText": { "type": "string", "maxLength": 40 },
+        "showRightEmblem": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "cardId", "ownerUid", "headerTopLeftSw", "headerTopLeftEn",
+        "headerTopRightSw", "headerTopRightEn", "idNumberLabel", "idNumber",
+        "surnameLabel", "surname", "givenNamesLabel", "givenNames",
+        "dobLabel", "dateOfBirth", "sexLabel", "sex",
+        "nationalityLabel", "nationality", "signatureLabel", "signatureText",
+        "signaturePath", "portraitUrl", "hologramPhotoUrl",
+        "showSpecimenStamp", "specimenText", "showRightEmblem",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "TrainingCertificate": {
+      "title": "TrainingCertificate",
+      "description": "Owner-issued A4 institutional training certificate with anti-counterfeit watermarks and serial verification.",
+      "type": "object",
+      "properties": {
+        "certId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "serialNumber": { "type": "string", "minLength": 4, "maxLength": 64 },
+        "issuerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orientation": { "type": "string", "enum": ["landscape", "portrait"] },
+        "theme": { "type": "string", "enum": ["navy_gold", "emerald_gold", "burgundy_gold"] },
+        "institutionName": { "type": "string", "maxLength": 140 },
+        "institutionSubtitle": { "type": "string", "maxLength": 180 },
+        "institutionLogoUrl": { "type": "string", "maxLength": 500 },
+        "kickerText": { "type": "string", "maxLength": 120 },
+        "certificateTitle": { "type": "string", "maxLength": 120 },
+        "certificateSubtitle": { "type": "string", "maxLength": 140 },
+        "introLine": { "type": "string", "maxLength": 140 },
+        "recipientUid": { "type": "string", "maxLength": 128 },
+        "recipientName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "completionLine": { "type": "string", "maxLength": 180 },
+        "courseTitle": { "type": "string", "minLength": 1, "maxLength": 180 },
+        "courseDetails": { "type": "string", "maxLength": 500 },
+        "durationText": { "type": "string", "maxLength": 80 },
+        "gradeText": { "type": "string", "maxLength": 80 },
+        "issueDateText": { "type": "string", "maxLength": 80 },
+        "issueLocation": { "type": "string", "maxLength": 100 },
+        "signatory1Name": { "type": "string", "maxLength": 100 },
+        "signatory1Title": { "type": "string", "maxLength": 100 },
+        "signatory1SigText": { "type": "string", "maxLength": 80 },
+        "signatory1SigPath": { "type": "string", "maxLength": 4000 },
+        "showSignatory2": { "type": "boolean" },
+        "signatory2Name": { "type": "string", "maxLength": 100 },
+        "signatory2Title": { "type": "string", "maxLength": 100 },
+        "signatory2SigText": { "type": "string", "maxLength": 80 },
+        "signatory2SigPath": { "type": "string", "maxLength": 4000 },
+        "sealText": { "type": "string", "maxLength": 80 },
+        "watermarkText": { "type": "string", "maxLength": 100 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "certId", "serialNumber", "issuerUid", "orientation", "theme",
+        "institutionName", "institutionSubtitle", "institutionLogoUrl",
+        "kickerText", "certificateTitle", "certificateSubtitle", "introLine",
+        "recipientUid", "recipientName", "completionLine", "courseTitle",
+        "courseDetails", "durationText", "gradeText", "issueDateText", "issueLocation",
+        "signatory1Name", "signatory1Title", "signatory1SigText", "signatory1SigPath",
+        "showSignatory2", "signatory2Name", "signatory2Title", "signatory2SigText", "signatory2SigPath",
+        "sealText", "watermarkText", "createdAt", "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -534,6 +659,10 @@
       "schema": { "$ref": "#/entities/MemberIdRecord" },
       "description": "Official member ID card registry used by platform owner to verify ID authenticity."
     },
+    "/member_directory/{userId}": {
+      "schema": { "$ref": "#/entities/MemberDirectoryEntry" },
+      "description": "Zero-PII active member directory entries for alphabetical A-Z member discovery and Private Chat search."
+    },
     "/user_presence/{userId}": {
       "schema": { "$ref": "#/entities/UserPresence" },
       "description": "Real-time online presence and Mchart typing status for active members."
@@ -548,7 +677,7 @@
     },
     "/mchart_statuses/{statusId}": {
       "schema": { "$ref": "#/entities/MchartStatus" },
-      "description": "24-hour ephemeral WhatsApp-style photo statuses visible only to signed-in permitted members."
+      "description": "24-hour ephemeral WhatsApp-style photo and video statuses visible only to signed-in permitted members."
     },
     "/mchart_statuses/{statusId}/views/{viewerId}": {
       "schema": { "$ref": "#/entities/MchartStatusView" },
@@ -565,6 +694,18 @@
     "/videos/{videoId}/comments/{commentId}": {
       "schema": { "$ref": "#/entities/VideoComment" },
       "description": "Comments under a video post."
+    },
+    "/site_settings/{settingId}": {
+      "schema": { "$ref": "#/entities/SiteNavSettings" },
+      "description": "Platform navigation and visibility configuration controlled by owner."
+    },
+    "/owner_id_cards/{cardId}": {
+      "schema": { "$ref": "#/entities/OwnerCustomIdCard" },
+      "description": "Owner-only editable specimen identity card configurations."
+    },
+    "/training_certificates/{certId}": {
+      "schema": { "$ref": "#/entities/TrainingCertificate" },
+      "description": "Owner-issued A4 institutional training certificates."
     }
   }
 }

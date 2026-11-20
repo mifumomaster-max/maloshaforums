@@ -1,6 +1,11 @@
 import React, { useMemo, useState } from 'react';
 import { BookOpen, ListTree } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
+import {
+  deriveCloudinaryVideoThumbnail,
+  optimizeCloudinaryPhotoUrl,
+  optimizeCloudinaryVideoPlaybackUrl,
+} from '../services/cloudinaryService';
 import { EditorialBlock, parseEditorialBlocks } from '../utils/editorialFormatter';
 import { renderLinkedInline } from './RichText';
 
@@ -277,6 +282,53 @@ export const MakalaArticleRenderer: React.FC<MakalaArticleRendererProps> = ({
                   ))}
                 </div>
               </blockquote>
+            );
+          }
+
+          if (block.type === 'image') {
+            const showCaption = Boolean(block.caption && block.caption.toLowerCase() !== 'picha');
+            return (
+              <figure
+                key={`img-${idx}`}
+                className="my-5 overflow-hidden border border-stone-200 bg-[#FAF9F5] sm:my-6"
+              >
+                <img
+                  src={optimizeCloudinaryPhotoUrl(block.url)}
+                  alt={block.caption || tr('Picha ya makala', 'Article photo')}
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
+                  className="block max-h-[540px] w-full bg-stone-100 object-contain"
+                />
+                {showCaption && (
+                  <figcaption className="border-t border-stone-200 px-3.5 py-2 text-xs font-medium text-slate-600">
+                    {block.caption}
+                  </figcaption>
+                )}
+              </figure>
+            );
+          }
+
+          if (block.type === 'video') {
+            const poster = deriveCloudinaryVideoThumbnail(block.url);
+            return (
+              <figure
+                key={`vid-${idx}`}
+                className="my-5 overflow-hidden border border-stone-200 bg-black sm:my-6"
+              >
+                <video
+                  src={optimizeCloudinaryVideoPlaybackUrl(block.url)}
+                  poster={poster || undefined}
+                  controls
+                  playsInline
+                  preload="metadata"
+                  className="block max-h-[520px] w-full bg-black object-contain"
+                />
+                {block.caption && (
+                  <figcaption className="border-t border-stone-200 bg-[#FAF9F5] px-3.5 py-2 text-xs font-medium text-slate-600">
+                    {block.caption}
+                  </figcaption>
+                )}
+              </figure>
             );
           }
 

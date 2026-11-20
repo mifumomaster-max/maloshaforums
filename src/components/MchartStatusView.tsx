@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { User } from 'firebase/auth';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import {
@@ -6,6 +7,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Eye,
+  Film,
   Loader2,
   Lock,
   MessageCircle,
@@ -14,10 +16,17 @@ import {
   ShieldCheck,
   Trash2,
   Users,
+  Volume2,
+  VolumeX,
   X,
 } from 'lucide-react';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { optimizeCloudinaryUrl, uploadImageToCloudinary } from '../services/cloudinaryService';
+import {
+  optimizeCloudinaryUrl,
+  optimizeCloudinaryVideoPlaybackUrl,
+  uploadImageToCloudinary,
+  uploadVideoToCloudinary,
+} from '../services/cloudinaryService';
 import {
   createMchartStatus,
   deleteMchartStatus,
@@ -103,9 +112,14 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
 
   // Upload & Composer State
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const storyVideoRef = useRef<HTMLVideoElement | null>(null);
   const [pendingCropFile, setPendingCropFile] = useState<File | null>(null);
+  const [stagedMediaType, setStagedMediaType] = useState<'image' | 'video'>('image');
   const [stagedImageUrl, setStagedImageUrl] = useState('');
+  const [stagedVideoUrl, setStagedVideoUrl] = useState('');
+  const [stagedDurationSec, setStagedDurationSec] = useState(0);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [composerOpen, setComposerOpen] = useState(false);
   const [caption, setCaption] = useState('');
   const [privacyMode, setPrivacyMode] = useState<StatusPrivacyMode>('members');
@@ -118,6 +132,7 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
   const [viewerSlideIndex, setViewerSlideIndex] = useState(0);
   const [storyProgress, setStoryProgress] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
+  const [statusVideoMuted, setStatusVideoMuted] = useState(false);
   const [viewersSheetOpen, setViewersSheetOpen] = useState(false);
   const [statusViewers, setStatusViewers] = useState<MchartStatusViewItem[]>([]);
   const [loadingViewers, setLoadingViewers] = useState(false);
@@ -318,9 +333,18 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
     }
   }, [activeGroup, viewerSlideIndex, activeGroupIndex, allGroupsForNavigation]);
 
-  // Auto-advance timer for active story slide
+  const isCurrentSlideVideo =
+    currentSlide?.mediaType === 'video' && Boolean(currentSlide?.videoUrl);
+
+  // Auto-advance timer for image story slides (video slides advance onEnded)
   useEffect(() => {
-    if (!currentSlide || isPaused || viewersSheetOpen || dmReplyText.trim().length > 0) {
+    if (
+      !currentSlide ||
+      isCurrentSlideVideo ||
+      isPaused ||
+      viewersSheetOpen ||
+      dmReplyText.trim().length > 0
+    ) {
       return;
     }
     const tickMs = 60;
@@ -337,7 +361,24 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
     }, tickMs);
 
     return () => window.clearInterval(timer);
-  }, [currentSlide, isPaused, viewersSheetOpen, dmReplyText, goToNextSlide]);
+  }, [currentSlide, isCurrentSlideVideo, isPaused, viewersSheetOpen, dmReplyText, goToNextSlide]);
+
+  // Pause/resume video story when user holds screen or opens viewers/reply sheet
+  useEffect(() => {
+    const vid = storyVideoRef.current;
+    if (!vid || !isCurrentSlideVideo) return;
+    const shouldPause = isPaused || viewersSheetOpen || dmReplyText.trim().length > 0;
+    if (shouldPause) {
+      vid.pause();
+    } else {
+      void vid.play().catch(() => {
+        // Fallback if unmuted autoplay blocked by browser policy
+        vid.muted = true;
+        setStatusVideoMuted(true);
+        void vid.play().catch(() => {});
+      });
+    }
+  }, [isCurrentSlideVideo, currentSlide?.id, isPaused, viewersSheetOpen, dmReplyText]);
 
   const handleOpenAddStatus = () => {
     if (!user) {
@@ -354,15 +395,55 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
     fileInputRef.current?.click();
   };
 
-  const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+
+    const isVideo =
+      file.type.startsWith('video/') ||
+      /\.(mp4|mov|webm|m4v|3gp|mkv|avi|mpeg)$/i.test(file.name);
+
+    if (isVideo) {
+      setStagedMediaType('video');
+      setStagedImageUrl('');
+      setStagedVideoUrl('');
+      setStagedDurationSec(0);
+      setUploadProgress(0);
+      setUploadingImage(true);
+      setComposerOpen(true);
+      try {
+        const res = await uploadVideoToCloudinary(file, (pct) => setUploadProgress(pct));
+        setStagedVideoUrl(res.secureUrl);
+        setStagedImageUrl(
+          res.thumbnailUrl || 'https://res.cloudinary.com/demo/image/upload/w_720,f_jpg/sample.jpg'
+        );
+        setStagedDurationSec(res.durationSec || 0);
+      } catch (err) {
+        const msg =
+          err instanceof Error
+            ? err.message
+            : tr('Imeshindwa kupakia video ya Status.', 'Failed to upload status video.');
+        onToast(msg, 'error');
+        setComposerOpen(false);
+      } finally {
+        setUploadingImage(false);
+      }
+      return;
+    }
+
+    setStagedMediaType('image');
+    setStagedVideoUrl('');
+    setStagedDurationSec(0);
     setPendingCropFile(file);
   };
 
   const handleConfirmCroppedImage = async (resizedFile: File) => {
     setPendingCropFile(null);
+    setStagedMediaType('image');
+    setStagedVideoUrl('');
+    setStagedDurationSec(0);
+    setUploadProgress(0);
     setUploadingImage(true);
     setComposerOpen(true);
     try {
@@ -382,7 +463,9 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
 
   const handlePublishStatus = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !stagedImageUrl || publishing || uploadingImage) return;
+    const ready =
+      stagedMediaType === 'video' ? Boolean(stagedVideoUrl) : Boolean(stagedImageUrl);
+    if (!user || !ready || publishing || uploadingImage) return;
     if (privacyMode === 'selected' && selectedViewerIds.length === 0) {
       onToast(
         tr(
@@ -396,19 +479,27 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
     setPublishing(true);
     try {
       await createMchartStatus(user, userDisplayName, userPhoto, {
+        mediaType: stagedMediaType,
         imageUrl: stagedImageUrl,
+        videoUrl: stagedMediaType === 'video' ? stagedVideoUrl : '',
+        durationSec: stagedMediaType === 'video' ? stagedDurationSec : 0,
         caption,
         privacy: privacyMode,
         allowedViewerIds: privacyMode === 'selected' ? selectedViewerIds : [],
       });
       setComposerOpen(false);
+      setStagedMediaType('image');
       setStagedImageUrl('');
+      setStagedVideoUrl('');
+      setStagedDurationSec(0);
       setCaption('');
       setPrivacyMode('members');
       setSelectedViewerIds([]);
       setViewerSearch('');
       onToast(
-        tr('Status yako ya picha imechapishwa (Saa 24).', 'Your 24h photo status has been posted.')
+        stagedMediaType === 'video'
+          ? tr('Status yako ya video imechapishwa (Saa 24).', 'Your 24h video status has been posted.')
+          : tr('Status yako ya picha imechapishwa (Saa 24).', 'Your 24h photo status has been posted.')
       );
     } catch (err) {
       onToast(
@@ -499,7 +590,7 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp,image/gif"
+        accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime,video/x-m4v,video/3gpp,.mp4,.mov,.webm,.m4v,.3gp"
         onChange={handleFileSelected}
         className="hidden"
       />
@@ -510,7 +601,7 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
             <div className="flex items-center gap-2">
               <Camera className="h-4 w-4 text-[#075E54]" aria-hidden="true" />
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                {tr('Status za Picha (Saa 24)', 'Photo Statuses (24h)')}
+                {tr('Status za Picha & Video (Saa 24)', 'Photo & Video Status (24h)')}
               </h3>
               {activeStatuses.length > 0 && (
                 <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-[#075E54] tabular-nums">
@@ -726,12 +817,12 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
                   <p className="truncate text-xs text-slate-500">
                     {myStatuses.length > 0
                       ? tr(
-                          `Picha ${myStatuses.length} hewani · Bonyeza kutazama au kuona waliotazama`,
-                          `${myStatuses.length} active photo(s) · Tap to view & see viewers`
+                          `Status ${myStatuses.length} hewani · Bonyeza kutazama au kuona waliotazama`,
+                          `${myStatuses.length} active status(es) · Tap to view & see viewers`
                         )
                       : tr(
-                          'Bonyeza kuweka picha mpya ya Status (Saa 24)',
-                          'Tap to post a new 24h photo status'
+                          'Bonyeza kuweka picha au video ya Status (Saa 24)',
+                          'Tap to post a new 24h photo or video status'
                         )}
                   </p>
                 </div>
@@ -743,7 +834,7 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
                 className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl bg-[#075E54] px-3.5 py-2 text-xs font-bold text-white transition-colors hover:bg-[#064E46]"
               >
                 <Camera className="h-4 w-4 text-[#25D366]" aria-hidden="true" />
-                <span>{tr('Weka Picha', 'Add Photo')}</span>
+                <span>{tr('Weka Status', 'Add Status')}</span>
               </button>
             </div>
           </section>
@@ -891,200 +982,242 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
         onConfirm={(resizedFile) => void handleConfirmCroppedImage(resizedFile)}
       />
 
-      {/* New Status Composer Modal */}
-      {composerOpen && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label={tr('Weka Status ya Picha', 'Create Photo Status')}
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/75 p-0 sm:items-center sm:p-4"
-        >
-          <div className="flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl">
-            <div className="flex items-center justify-between bg-[#075E54] px-4 py-3 text-white">
-              <div className="flex items-center gap-2">
-                <Camera className="h-4 w-4 text-[#25D366]" aria-hidden="true" />
-                <h3 className="text-sm font-bold">
-                  {tr('Chapisha Status ya Picha (Saa 24)', 'Post 24h Photo Status')}
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setComposerOpen(false);
-                  setStagedImageUrl('');
-                  setCaption('');
-                }}
-                aria-label={tr('Funga', 'Close')}
-                className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handlePublishStatus} className="flex-1 space-y-3.5 overflow-y-auto p-4">
-              {uploadingImage ? (
-                <div className="flex h-52 flex-col items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-600">
-                  <Loader2 className="h-6 w-6 animate-spin text-[#075E54]" />
-                  <span>{tr('Inapakia picha ya Status...', 'Uploading status photo...')}</span>
+      {/* New Status Composer Modal (Portaled above MobileBottomNav with pinned submit footer) */}
+      {composerOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={tr('Weka Status ya Picha', 'Create Photo Status')}
+            className="fixed inset-0 z-[90] flex items-center justify-center bg-black/75 p-3 pb-[calc(14px+env(safe-area-inset-bottom,0px))] sm:p-4"
+          >
+            <div className="flex max-h-[84dvh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+              <div className="flex shrink-0 items-center justify-between bg-[#075E54] px-4 py-3 text-white">
+                <div className="flex items-center gap-2">
+                  {stagedMediaType === 'video' ? (
+                    <Film className="h-4 w-4 text-[#25D366]" aria-hidden="true" />
+                  ) : (
+                    <Camera className="h-4 w-4 text-[#25D366]" aria-hidden="true" />
+                  )}
+                  <h3 className="text-sm font-bold">
+                    {stagedMediaType === 'video'
+                      ? tr('Chapisha Status ya Video (Saa 24)', 'Post 24h Video Status')
+                      : tr('Chapisha Status ya Picha (Saa 24)', 'Post 24h Photo Status')}
+                  </h3>
                 </div>
-              ) : stagedImageUrl ? (
-                <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-950">
-                  <img
-                    src={stagedImageUrl}
-                    alt={tr('Hakiki ya Status', 'Status preview')}
-                    className="mx-auto max-h-64 w-full object-contain"
-                    referrerPolicy="no-referrer"
-                  />
-                </div>
-              ) : null}
-
-              <div>
-                <label className="mb-1 block text-xs font-bold text-slate-700">
-                  {tr('Maelezo mafupi kwenye picha (hiari)', 'Caption (optional)')}
-                </label>
-                <input
-                  type="text"
-                  maxLength={280}
-                  value={caption}
-                  onChange={(e) => setCaption(e.target.value)}
-                  placeholder={tr('Andika ujumbe mfupi...', 'Add a short caption...')}
-                  className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 focus:border-[#075E54] focus:bg-white focus:outline-none"
-                />
-              </div>
-
-              {/* Privacy Selector */}
-              <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <p className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
-                  <Lock className="h-3.5 w-3.5 text-[#075E54]" aria-hidden="true" />
-                  <span>{tr('Faragha ya Status (Nani Aone?)', 'Status Privacy (Who Can View?)')}</span>
-                </p>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setPrivacyMode('members')}
-                    className={`flex items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition-colors ${
-                      privacyMode === 'members'
-                        ? 'border-[#075E54] bg-[#075E54] text-white'
-                        : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
-                    }`}
-                  >
-                    <Users className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>{tr('Wanachama Wote', 'All Members')}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setPrivacyMode('selected')}
-                    className={`flex items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition-colors ${
-                      privacyMode === 'selected'
-                        ? 'border-[#075E54] bg-[#075E54] text-white'
-                        : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
-                    }`}
-                  >
-                    <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>{tr('Watu Maalum Tu', 'Selected Only')}</span>
-                  </button>
-                </div>
-
-                {privacyMode === 'selected' && (
-                  <div className="mt-2 space-y-2 border-t border-slate-200 pt-2">
-                    <input
-                      type="search"
-                      value={viewerSearch}
-                      onChange={(e) => setViewerSearch(e.target.value)}
-                      placeholder={tr('Tafuta majina ya kuwaruhusu...', 'Search members to allow...')}
-                      className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#075E54] focus:outline-none"
-                    />
-                    <div className="max-h-36 space-y-1 overflow-y-auto">
-                      {filteredMemberCandidates.length === 0 ? (
-                        <p className="py-2 text-center text-[11px] text-slate-500">
-                          {tr(
-                            'Hakuna majina yanayolingana kwa sasa.',
-                            'No matching members found right now.'
-                          )}
-                        </p>
-                      ) : (
-                        filteredMemberCandidates.slice(0, 30).map((m) => {
-                          const checked = selectedViewerIds.includes(m.uid);
-                          return (
-                            <label
-                              key={m.uid}
-                              className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-white"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => {
-                                  setSelectedViewerIds((prev) =>
-                                    checked
-                                      ? prev.filter((id) => id !== m.uid)
-                                      : prev.length < 50
-                                        ? [...prev, m.uid]
-                                        : prev
-                                  );
-                                }}
-                                className="h-4 w-4 accent-[#075E54]"
-                              />
-                              <Avatar name={m.displayName} photoURL={m.photoURL} size="sm" />
-                              <span className="truncate font-semibold text-slate-800">
-                                {m.displayName}
-                              </span>
-                            </label>
-                          );
-                        })
-                      )}
-                    </div>
-                    <p className="text-[11px] font-semibold text-[#075E54]">
-                      {tr(
-                        `Walioteuliwa: ${selectedViewerIds.length}/50`,
-                        `Selected: ${selectedViewerIds.length}/50`
-                      )}
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex justify-end gap-2 pt-1">
                 <button
                   type="button"
                   onClick={() => {
                     setComposerOpen(false);
+                    setStagedMediaType('image');
                     setStagedImageUrl('');
+                    setStagedVideoUrl('');
+                    setStagedDurationSec(0);
+                    setCaption('');
                   }}
-                  className="min-h-[42px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  aria-label={tr('Funga', 'Close')}
+                  className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
                 >
-                  {tr('Ghairi', 'Cancel')}
-                </button>
-                <button
-                  type="submit"
-                  disabled={uploadingImage || !stagedImageUrl || publishing}
-                  className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl bg-[#00A884] px-5 py-2 text-xs font-bold text-white shadow-xs hover:bg-[#008F6F] disabled:opacity-50"
-                >
-                  <Send className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>
-                    {publishing
-                      ? tr('Inachapisha...', 'Posting...')
-                      : tr('Chapisha Status', 'Post Status')}
-                  </span>
+                  <X className="h-4 w-4" />
                 </button>
               </div>
-            </form>
-          </div>
-        </div>
-      )}
 
-      {/* Fullscreen WhatsApp-Style Story Viewer */}
-      {activeGroup && currentSlide && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label={activeGroup.authorName}
-          className="fixed inset-0 z-50 flex flex-col bg-black text-white select-none"
-          onPointerDown={() => setIsPaused(true)}
-          onPointerUp={() => setIsPaused(false)}
-          onPointerCancel={() => setIsPaused(false)}
-        >
+              <form onSubmit={handlePublishStatus} className="flex min-h-0 flex-1 flex-col">
+                <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto p-4">
+                  {uploadingImage ? (
+                    <div className="flex h-48 flex-col items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-600">
+                      <Loader2 className="h-6 w-6 animate-spin text-[#075E54]" />
+                      <span>
+                        {stagedMediaType === 'video'
+                          ? tr(
+                              `Inapakia video ya Status... ${uploadProgress > 0 ? `${uploadProgress}%` : ''}`,
+                              `Uploading status video... ${uploadProgress > 0 ? `${uploadProgress}%` : ''}`
+                            )
+                          : tr('Inapakia picha ya Status...', 'Uploading status photo...')}
+                      </span>
+                    </div>
+                  ) : stagedMediaType === 'video' && stagedVideoUrl ? (
+                    <div className="overflow-hidden rounded-xl border border-slate-200 bg-black">
+                      <video
+                        src={optimizeCloudinaryVideoPlaybackUrl(stagedVideoUrl)}
+                        poster={stagedImageUrl || undefined}
+                        controls
+                        playsInline
+                        className="mx-auto max-h-52 w-full object-contain"
+                      />
+                    </div>
+                  ) : stagedImageUrl ? (
+                    <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-950">
+                      <img
+                        src={stagedImageUrl}
+                        alt={tr('Hakiki ya Status', 'Status preview')}
+                        className="mx-auto max-h-52 w-full object-contain"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                  ) : null}
+
+                  <div>
+                    <label className="mb-1 block text-xs font-bold text-slate-700">
+                      {tr('Maelezo mafupi kwenye picha (hiari)', 'Caption (optional)')}
+                    </label>
+                    <input
+                      type="text"
+                      maxLength={280}
+                      value={caption}
+                      onChange={(e) => setCaption(e.target.value)}
+                      placeholder={tr('Andika ujumbe mfupi...', 'Add a short caption...')}
+                      className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 focus:border-[#075E54] focus:bg-white focus:outline-none"
+                    />
+                  </div>
+
+                  {/* Privacy Selector */}
+                  <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <p className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
+                      <Lock className="h-3.5 w-3.5 text-[#075E54]" aria-hidden="true" />
+                      <span>{tr('Faragha ya Status (Nani Aone?)', 'Status Privacy (Who Can View?)')}</span>
+                    </p>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setPrivacyMode('members')}
+                        className={`flex items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition-colors ${
+                          privacyMode === 'members'
+                            ? 'border-[#075E54] bg-[#075E54] text-white'
+                            : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        <Users className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>{tr('Wanachama Wote', 'All Members')}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setPrivacyMode('selected')}
+                        className={`flex items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition-colors ${
+                          privacyMode === 'selected'
+                            ? 'border-[#075E54] bg-[#075E54] text-white'
+                            : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>{tr('Watu Maalum Tu', 'Selected Only')}</span>
+                      </button>
+                    </div>
+
+                    {privacyMode === 'selected' && (
+                      <div className="mt-2 space-y-2 border-t border-slate-200 pt-2">
+                        <input
+                          type="search"
+                          value={viewerSearch}
+                          onChange={(e) => setViewerSearch(e.target.value)}
+                          placeholder={tr('Tafuta majina ya kuwaruhusu...', 'Search members to allow...')}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#075E54] focus:outline-none"
+                        />
+                        <div className="max-h-36 space-y-1 overflow-y-auto">
+                          {filteredMemberCandidates.length === 0 ? (
+                            <p className="py-2 text-center text-[11px] text-slate-500">
+                              {tr(
+                                'Hakuna majina yanayolingana kwa sasa.',
+                                'No matching members found right now.'
+                              )}
+                            </p>
+                          ) : (
+                            filteredMemberCandidates.slice(0, 30).map((m) => {
+                              const checked = selectedViewerIds.includes(m.uid);
+                              return (
+                                <label
+                                  key={m.uid}
+                                  className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-white"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => {
+                                      setSelectedViewerIds((prev) =>
+                                        checked
+                                          ? prev.filter((id) => id !== m.uid)
+                                          : prev.length < 50
+                                            ? [...prev, m.uid]
+                                            : prev
+                                      );
+                                    }}
+                                    className="h-4 w-4 accent-[#075E54]"
+                                  />
+                                  <Avatar name={m.displayName} photoURL={m.photoURL} size="sm" />
+                                  <span className="truncate font-semibold text-slate-800">
+                                    {m.displayName}
+                                  </span>
+                                </label>
+                              );
+                            })
+                          )}
+                        </div>
+                        <p className="text-[11px] font-semibold text-[#075E54]">
+                          {tr(
+                            `Walioteuliwa: ${selectedViewerIds.length}/50`,
+                            `Selected: ${selectedViewerIds.length}/50`
+                          )}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Pinned Submit Footer - Always Visible Above Mobile Navigation */}
+                <div className="flex shrink-0 items-center justify-end gap-2 border-t border-slate-200 bg-white px-4 py-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setComposerOpen(false);
+                      setStagedMediaType('image');
+                      setStagedImageUrl('');
+                      setStagedVideoUrl('');
+                      setStagedDurationSec(0);
+                    }}
+                    className="min-h-[42px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    {tr('Ghairi', 'Cancel')}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={
+                      uploadingImage ||
+                      (stagedMediaType === 'video' ? !stagedVideoUrl : !stagedImageUrl) ||
+                      publishing
+                    }
+                    className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl bg-[#00A884] px-5 py-2 text-xs font-bold text-white shadow-xs hover:bg-[#008F6F] disabled:opacity-50"
+                  >
+                    <Send className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>
+                      {publishing
+                        ? tr('Inachapisha...', 'Posting...')
+                        : tr('Chapisha Status', 'Post Status')}
+                    </span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* Fullscreen WhatsApp-Style Story Viewer (Portaled above bottom navigation) */}
+      {activeGroup &&
+        currentSlide &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={activeGroup.authorName}
+            className="fixed inset-0 z-[90] flex flex-col bg-black text-white select-none"
+            onPointerDown={() => setIsPaused(true)}
+            onPointerUp={() => setIsPaused(false)}
+            onPointerCancel={() => setIsPaused(false)}
+          >
           {/* Progress Bars */}
           <div className="mx-auto flex w-full max-w-2xl gap-1.5 px-3 pt-3">
             {activeGroup.items.map((item, idx) => {
@@ -1138,9 +1271,32 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
             </div>
 
             <div className="flex items-center gap-1.5">
+              {isCurrentSlideVideo && (
+                <button
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setStatusVideoMuted((prev) => !prev);
+                  }}
+                  aria-label={
+                    statusVideoMuted
+                      ? tr('Washa sauti ya video', 'Unmute status video')
+                      : tr('Zima sauti ya video', 'Mute status video')
+                  }
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
+                >
+                  {statusVideoMuted ? (
+                    <VolumeX className="h-4 w-4" />
+                  ) : (
+                    <Volume2 className="h-4 w-4" />
+                  )}
+                </button>
+              )}
               {user && currentSlide.authorId === user.uid && (
                 <button
                   type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => {
                     e.stopPropagation();
                     handleDeleteCurrentStatus(currentSlide);
@@ -1153,6 +1309,7 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
               )}
               <button
                 type="button"
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation();
                   setViewerGroupAuthorId(null);
@@ -1166,14 +1323,37 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
             </div>
           </div>
 
-          {/* Story Image Area with Left/Right Tap Navigation */}
+          {/* Story Media Area (Photo or Video) with Left/Right Tap Navigation */}
           <div className="relative mx-auto flex min-h-0 w-full max-w-2xl flex-1 items-center justify-center overflow-hidden px-2">
-            <img
-              src={currentSlide.imageUrl}
-              alt={currentSlide.caption || activeGroup.authorName}
-              className="max-h-full max-w-full rounded-xl object-contain"
-              referrerPolicy="no-referrer"
-            />
+            {isCurrentSlideVideo && currentSlide.videoUrl ? (
+              <video
+                key={currentSlide.id}
+                ref={storyVideoRef}
+                src={optimizeCloudinaryVideoPlaybackUrl(currentSlide.videoUrl)}
+                poster={currentSlide.imageUrl || undefined}
+                autoPlay
+                playsInline
+                muted={statusVideoMuted}
+                onTimeUpdate={(e) => {
+                  const vid = e.currentTarget;
+                  if (vid.duration && Number.isFinite(vid.duration) && vid.duration > 0) {
+                    setStoryProgress(Math.min(100, (vid.currentTime / vid.duration) * 100));
+                  }
+                }}
+                onEnded={() => {
+                  setStoryProgress(100);
+                  goToNextSlide();
+                }}
+                className="max-h-full max-w-full rounded-xl object-contain"
+              />
+            ) : (
+              <img
+                src={currentSlide.imageUrl}
+                alt={currentSlide.caption || activeGroup.authorName}
+                className="max-h-full max-w-full rounded-xl object-contain"
+                referrerPolicy="no-referrer"
+              />
+            )}
 
             {/* Tap Zones */}
             <button
@@ -1329,7 +1509,8 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
               </div>
             </div>
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

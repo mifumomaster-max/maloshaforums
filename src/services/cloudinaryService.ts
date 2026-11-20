@@ -182,11 +182,28 @@ export async function uploadChatFileToCloudinary(
   };
 }
 
+export function buildExternalAttachmentUrl(
+  fileUrl: string,
+  options?: { forceDownload?: boolean; fileName?: string }
+): string {
+  const cleanUrl = (fileUrl || '').trim();
+  if (!cleanUrl) return '';
+  if (options?.forceDownload && cleanUrl.includes('res.cloudinary.com') && cleanUrl.includes('/image/upload/')) {
+    const cleanSlug = (options.fileName || 'nyaraka')
+      .replace(/\.[^.]+$/, '')
+      .replace(/[^a-zA-Z0-9_-]+/g, '_')
+      .slice(0, 60);
+    const flag = cleanSlug ? `fl_attachment:${cleanSlug}` : 'fl_attachment';
+    return cleanUrl.replace('/image/upload/', `/image/upload/${flag}/`);
+  }
+  return cleanUrl;
+}
+
 export async function downloadChatAttachmentFile(
   fileUrl: string,
   fileName = 'nyaraka.pdf',
   mimeType = ''
-): Promise<void> {
+): Promise<'blob' | 'external'> {
   const cleanUrl = (fileUrl || '').trim();
   if (!cleanUrl) {
     throw new Error('Kiungo cha faili hakipatikani.');
@@ -204,36 +221,51 @@ export async function downloadChatAttachmentFile(
       : `${baseName.replace(/\.[^.]+$/, '')}.pdf`
     : baseName;
 
-  try {
-    const res = await fetch(cleanUrl, { mode: 'cors', credentials: 'omit' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const arrayBuf = await res.arrayBuffer();
-    if (!arrayBuf || arrayBuf.byteLength === 0) {
-      throw new Error('Empty file');
+  const attachmentUrl = buildExternalAttachmentUrl(cleanUrl, {
+    forceDownload: true,
+    fileName: safeName,
+  });
+
+  const candidateUrls = [cleanUrl, attachmentUrl].filter(
+    (u, idx, arr) => Boolean(u) && arr.indexOf(u) === idx
+  );
+
+  for (const url of candidateUrls) {
+    try {
+      const res = await fetch(url, { mode: 'cors', credentials: 'omit' });
+      if (!res.ok) continue;
+      const arrayBuf = await res.arrayBuffer();
+      if (!arrayBuf || arrayBuf.byteLength === 0) continue;
+      const contentType = isPdf
+        ? 'application/pdf'
+        : mimeType || res.headers.get('content-type') || 'application/octet-stream';
+      const blob = new Blob([arrayBuf], { type: contentType });
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = safeName;
+      a.rel = 'noopener noreferrer';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+      return 'blob';
+    } catch {
+      // Try next candidate URL
     }
-    const contentType = isPdf
-      ? 'application/pdf'
-      : mimeType || res.headers.get('content-type') || 'application/octet-stream';
-    const blob = new Blob([arrayBuf], { type: contentType });
-    const blobUrl = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = blobUrl;
-    a.download = safeName;
-    a.rel = 'noopener noreferrer';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-  } catch {
-    const a = document.createElement('a');
-    a.href = cleanUrl;
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer';
-    a.download = safeName;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
   }
+
+  const a = document.createElement('a');
+  a.href = attachmentUrl || cleanUrl;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  a.download = safeName;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  return 'external';
 }
 
 const MAX_NOTE_PDF_BYTES = 15 * 1024 * 1024; // 15MB
@@ -387,7 +419,7 @@ export function needsBrowserVideoTranscode(videoUrl: string): boolean {
 
 export function optimizeCloudinaryVideoPlaybackUrl(
   videoUrl: string,
-  options?: { dataSaver?: boolean }
+  options?: { dataSaver?: boolean; skipBitrateCap?: boolean; forceH264?: boolean }
 ): string {
   const clean = (videoUrl || '').trim();
   const marker = '/video/upload/';
@@ -396,16 +428,32 @@ export function optimizeCloudinaryVideoPlaybackUrl(
   }
   const idx = clean.indexOf(marker);
   const after = clean.slice(idx + marker.length);
-  const dataSaver = Boolean(options?.dataSaver);
+  const dataSaver = options?.dataSaver === true;
   if (/^(?:[a-z_]+:[^/]+,?)+(\/|$)/i.test(after) || after.startsWith('f_')) {
     return clean;
   }
   const head = clean.slice(0, idx + marker.length);
   const mp4Tail = after.replace(/\.[a-z0-9]+(\?.*)?$/i, '.mp4');
-  if (dataSaver) {
-    return `${head}f_mp4,vc_h264,ac_aac,q_auto:eco,br_450k,w_540,c_limit/${mp4Tail}`;
+  if (options?.forceH264 || needsBrowserVideoTranscode(clean)) {
+    return dataSaver
+      ? `${head}f_mp4,vc_h264,q_auto:eco,w_540,c_limit/${mp4Tail}`
+      : `${head}f_mp4,vc_h264,q_auto:good,w_720,c_limit/${mp4Tail}`;
   }
-  return `${head}f_mp4,vc_h264,q_auto/${mp4Tail}`;
+  if (dataSaver) {
+    return `${head}q_auto:eco,w_540,c_limit/${after}`;
+  }
+  return clean;
+}
+
+const prewarmedCloudinaryUrls = new Set<string>();
+
+export function prewarmCloudinaryVideoUrl(url: string): void {
+  const clean = (url || '').trim();
+  if (!clean || !clean.startsWith('https://res.cloudinary.com/') || prewarmedCloudinaryUrls.has(clean)) {
+    return;
+  }
+  prewarmedCloudinaryUrls.add(clean);
+  void fetch(clean, { mode: 'cors', credentials: 'omit' }).catch(() => {});
 }
 
 export function optimizeCloudinaryPhotoUrl(
@@ -424,7 +472,7 @@ export function optimizeCloudinaryPhotoUrl(
   }
   const head = clean.slice(0, idx + marker.length);
   if (options?.dataSaver) {
-    return `${head}f_auto,q_auto:eco,w_540,c_limit/${after}`;
+    return `${head}f_auto,q_auto:eco,w_640,c_limit/${after}`;
   }
   return `${head}f_auto,q_auto:good,w_1080,c_limit/${after}`;
 }
@@ -730,6 +778,7 @@ export interface VideoWatermarkDownloadOptions {
   outroPublicId?: string;
   durationSec?: number;
   outroMode?: 'splice' | 'endOverlay' | 'watermarkOnly';
+  dataSaver?: boolean;
 }
 
 export function buildWatermarkedVideoDownloadUrl(
@@ -758,16 +807,23 @@ export function buildWatermarkedVideoDownloadUrl(
       .slice(0, 20) || 'video';
   const encodedBrandHandle = encodeURIComponent('@malosha forums');
   const fileSlug = `malosha-forums-${safeSlug}`;
+  const isEco = opts.dataSaver !== false;
+  const maxWidth = isEco ? 540 : 720;
+  const bitrateCap = isEco ? 'br_550k' : 'br_950k';
+  const qualityFlag = isEco ? 'q_auto:eco' : 'q_auto:good';
 
   const transforms: string[] = [];
 
+  // Cap resolution first so overlays and outro match compact dimensions without inflating file MBs
+  transforms.push(`w_${maxWidth},c_limit`);
+
   if (opts.logoPublicId && opts.logoPublicId.trim()) {
     const layerId = opts.logoPublicId.trim().replace(/\//g, ':');
-    // Circular logo with "@malosha forums" directly underneath it (subtle & translucent)
-    transforms.push(`l_${layerId},w_128,c_scale,g_north_west,x_16,y_18,o_72/fl_layer_apply`);
+    // Circular logo with "@malosha forums" directly underneath it (proportional, subtle & translucent)
+    transforms.push(`l_${layerId},w_0.18,fl_relative,g_north_west,x_14,y_16,o_74/fl_layer_apply`);
   } else {
     transforms.push(
-      `l_text:Arial_20_bold:${encodedBrandHandle},co_white,g_north_west,x_18,y_22,o_62/fl_layer_apply`
+      `l_text:Arial_18_bold:${encodedBrandHandle},co_white,g_north_west,x_16,y_18,o_65/fl_layer_apply`
     );
   }
 
@@ -775,7 +831,7 @@ export function buildWatermarkedVideoDownloadUrl(
   if (opts.outroMode === 'splice' && opts.outroPublicId && opts.outroPublicId.trim()) {
     const outroLayerId = opts.outroPublicId.trim().replace(/\//g, ':');
     transforms.push(
-      `l_${outroLayerId},w_1.0,h_1.0,c_pad,b_rgb:07182B,fl_relative,du_2.2,fl_splice/fl_layer_apply`
+      `l_${outroLayerId},w_1.0,h_1.0,c_pad,b_rgb:07182B,fl_relative,du_1.6,fl_splice/fl_layer_apply`
     );
   } else if (
     opts.outroMode === 'endOverlay' &&
@@ -785,10 +841,10 @@ export function buildWatermarkedVideoDownloadUrl(
   ) {
     const layerId = opts.logoPublicId.trim().replace(/\//g, ':');
     const startSec = Math.max(1, Math.floor((opts.durationSec || 3) - 2));
-    transforms.push(`l_${layerId},w_260,c_scale,g_center,o_95,so_${startSec}/fl_layer_apply`);
+    transforms.push(`l_${layerId},w_0.36,fl_relative,g_center,o_95,so_${startSec}/fl_layer_apply`);
   }
 
-  transforms.push(`f_mp4,vc_h264,fl_attachment:${fileSlug}`);
+  transforms.push(`f_mp4,vc_h264,${qualityFlag},${bitrateCap},fl_attachment:${fileSlug}`);
 
   return `${head}${transforms.join('/')}/${tail}`;
 }
@@ -908,6 +964,45 @@ export async function uploadAudioToCloudinary(
   };
 }
 
+async function prepareCompactFeedPhotoFile(file: File): Promise<File> {
+  const prepared = await prepareSharedImageFile(file);
+  if (prepared.type === 'image/gif') return prepared;
+  if (
+    prepared.size <= 900 * 1024 ||
+    typeof document === 'undefined' ||
+    typeof createImageBitmap === 'undefined'
+  ) {
+    return prepared;
+  }
+
+  try {
+    const bitmap = await createImageBitmap(prepared);
+    const maxDim = 1440;
+    const scale = Math.min(1, maxDim / Math.max(bitmap.width || 1, bitmap.height || 1));
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      bitmap.close();
+      return prepared;
+    }
+    ctx.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, 'image/jpeg', 0.84)
+    );
+    if (!blob || blob.size >= prepared.size) return prepared;
+    const baseName = (prepared.name || 'picha').replace(/\.[^.]+$/, '');
+    return new File([blob], `${baseName}.jpg`, { type: 'image/jpeg' });
+  } catch {
+    return prepared;
+  }
+}
+
 export async function uploadPhotoCarouselToCloudinary(
   files: File[],
   onProgress?: (percent: number) => void
@@ -919,7 +1014,7 @@ export async function uploadPhotoCarouselToCloudinary(
 
   const urls: string[] = [];
   for (let i = 0; i < limited.length; i++) {
-    const prepared = await prepareSharedImageFile(limited[i]);
+    const prepared = await prepareCompactFeedPhotoFile(limited[i]);
     const url = await uploadImageToCloudinary(prepared);
     urls.push(url);
     onProgress?.(Math.round(((i + 1) / limited.length) * 100));

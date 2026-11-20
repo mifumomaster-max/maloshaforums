@@ -63,9 +63,11 @@ import {
   markUserNotificationRead,
   seedStarterTopics,
   submitReport,
+  subscribeSiteNavSettings,
   syncUserProfile,
   toggleTopicPin,
   toggleTopicVote,
+  updateHideVideoTabForUsers,
   updatePrivatePhoneNumber,
   updateReportStatus,
   updateTopicStatus,
@@ -98,6 +100,7 @@ import { usePWAInstall } from './hooks/usePWAInstall';
 import {
   dismissPhoneNotifications,
   sendPhoneNotification,
+  updateAppBadgeCount,
 } from './services/notificationService';
 
 const CHAT_LAST_SEEN_KEY = 'malosha_chat_last_seen_ms_v1';
@@ -105,6 +108,8 @@ const NOTES_LAST_SEEN_KEY = 'malosha_notes_last_seen_ms_v1';
 const READ_NOTE_IDS_KEY = 'malosha_read_note_ids_v1';
 const BOARD_LAST_SEEN_KEY = 'malosha_board_last_seen_v1';
 const READ_TOPIC_IDS_KEY = 'malosha_read_topic_ids_v1';
+const VIDEO_LAST_SEEN_KEY = 'malosha_videos_last_seen_ms_v1';
+const ADMIN_SIGNUP_LAST_SEEN_KEY = 'malosha_admin_signup_last_seen_v1';
 
 function getStartOfTodayBoundaryMs(): number {
   const now = new Date();
@@ -130,8 +135,31 @@ function ForumShell() {
   const [videos, setVideos] = useState<VideoPost[]>([]);
   const [loadingVideos, setLoadingVideos] = useState(true);
   const [likedVideoIds, setLikedVideoIds] = useState<Set<string>>(new Set());
+  const [videosLastSeenMs, setVideosLastSeenMs] = useState<number>(() => {
+    const defaultCutoff = Date.now() - 14 * 86_400_000;
+    if (typeof window === 'undefined') return defaultCutoff;
+    try {
+      const saved = Number(window.localStorage.getItem(VIDEO_LAST_SEEN_KEY) || 0);
+      return Number.isFinite(saved) && saved > 0 ? saved : defaultCutoff;
+    } catch {
+      return defaultCutoff;
+    }
+  });
   const [reports, setReports] = useState<Report[]>([]);
   const [userNotifications, setUserNotifications] = useState<UserNotification[]>([]);
+  const [hideVideoTabForUsers, setHideVideoTabForUsers] = useState(false);
+  const [adminRecentSignups, setAdminRecentSignups] = useState<UserProfile[]>([]);
+  const [adminSignupLastSeenMs, setAdminSignupLastSeenMs] = useState<number>(() => {
+    const fallback = Date.now() - 86_400_000;
+    if (typeof window === 'undefined') return fallback;
+    try {
+      const saved = Number(window.localStorage.getItem(ADMIN_SIGNUP_LAST_SEEN_KEY) || 0);
+      return Number.isFinite(saved) && saved > 0 ? saved : fallback;
+    } catch {
+      return fallback;
+    }
+  });
+  const [openAdminMembersSignal, setOpenAdminMembersSignal] = useState(0);
 
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [loadingChat, setLoadingChat] = useState(true);
@@ -194,6 +222,7 @@ function ForumShell() {
   const [mchartNotes, setMchartNotes] = useState<MchartNote[]>([]);
   const [loadingNotes, setLoadingNotes] = useState(true);
   const [directChats, setDirectChats] = useState<DirectChatThread[]>([]);
+  const [memberDirectoryList, setMemberDirectoryList] = useState<MemberDirectoryCandidate[]>([]);
   const [activeDirectChatId, setActiveDirectChatId] = useState<string | null>(null);
   const [mchartStatuses, setMchartStatuses] = useState<MchartStatus[]>([]);
   const [loadingStatuses, setLoadingStatuses] = useState(true);
@@ -306,6 +335,8 @@ function ForumShell() {
   const [visibleTopicIds, setVisibleTopicIds] = useState<string[]>([]);
   const initialTopicsLoadedRef = useRef(false);
   const knownTopicIdsRef = useRef<Set<string>>(new Set());
+  const initialVideosLoadedRef = useRef(false);
+  const knownVideoIdsRef = useRef<Set<string>>(new Set());
   const initialChatLoadedRef = useRef(false);
   const knownChatIdsRef = useRef<Set<string>>(new Set());
   const initialNotesLoadedRef = useRef(false);
@@ -1145,12 +1176,17 @@ function ForumShell() {
     const mapDoc = (d: { id: string; data: () => Record<string, unknown> }): MchartStatus => {
       const data = d.data();
       const privacy: StatusPrivacyMode = data.privacy === 'selected' ? 'selected' : 'members';
+      const mediaType: MchartStatus['mediaType'] =
+        data.mediaType === 'video' ? 'video' : 'image';
       return {
         id: d.id,
         authorId: String(data.authorId || ''),
         authorName: String(data.authorName || 'Mwanachama'),
         authorPhoto: String(data.authorPhoto || ''),
+        mediaType,
         imageUrl: String(data.imageUrl || ''),
+        videoUrl: typeof data.videoUrl === 'string' ? data.videoUrl : '',
+        durationSec: Number(data.durationSec || 0),
         caption: String(data.caption || ''),
         privacy,
         allowedViewerIds: Array.isArray(data.allowedViewerIds)
@@ -1324,9 +1360,71 @@ function ForumShell() {
     };
   }, []);
 
+  // Real-time Active Platform Member Directory listener (for Private Chat A-Z listing & search)
+  useEffect(() => {
+    if (!authReady || !user) {
+      setMemberDirectoryList([]);
+      return;
+    }
+
+    const path = 'member_directory';
+    const q = query(
+      collection(db, path),
+      where('isActive', '==', true),
+      limit(500)
+    );
+
+    const unsub = onSnapshot(
+      q,
+      (snapshot) => {
+        const list: MemberDirectoryCandidate[] = snapshot.docs.map((d) => {
+          const data = d.data();
+          return {
+            uid: String(data.uid || d.id),
+            displayName: String(data.displayName || 'Mwanachama'),
+            photoURL: typeof data.photoURL === 'string' ? data.photoURL : '',
+            verificationBadge: normalizeVerificationBadge(data.verificationBadge),
+          };
+        });
+        setMemberDirectoryList(list);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, path);
+      }
+    );
+
+    return () => unsub();
+  }, [authReady, user]);
+
+  // Clear video unread badge when user opens Video Reels
+  useEffect(() => {
+    if (activeTab !== 'video' || selectedTopicId) return;
+    let latestMs = Date.now();
+    videos.forEach((v) => {
+      if (v.isArchived) return;
+      const ms = v.createdAt ? v.createdAt.toMillis() : 0;
+      if (ms > latestMs) latestMs = ms;
+    });
+    const nextMs = latestMs + 500;
+    setVideosLastSeenMs((prev) => {
+      if (prev >= nextMs) return prev;
+      try {
+        window.localStorage.setItem(VIDEO_LAST_SEEN_KEY, String(nextMs));
+      } catch {
+        // Ignore storage errors
+      }
+      return nextMs;
+    });
+  }, [activeTab, selectedTopicId, videos]);
+
   const memberDirectoryCandidates = useMemo<MemberDirectoryCandidate[]>(() => {
     const map = new Map<string, MemberDirectoryCandidate>();
-    const addCandidate = (uid: string, name: string, photo: string) => {
+    const addCandidate = (
+      uid: string,
+      name: string,
+      photo: string,
+      badge?: MemberDirectoryCandidate['verificationBadge']
+    ) => {
       if (!uid || (user && uid === user.uid)) return;
       const existing = map.get(uid);
       if (!existing) {
@@ -1334,6 +1432,7 @@ function ForumShell() {
           uid,
           displayName: name || 'Mwanachama',
           photoURL: photo || '',
+          ...(badge && badge !== 'none' ? { verificationBadge: badge } : {}),
         });
       } else {
         if ((!existing.photoURL || existing.photoURL === '') && photo) {
@@ -1342,9 +1441,15 @@ function ForumShell() {
         if (existing.displayName === 'Mwanachama' && name && name !== 'Mwanachama') {
           existing.displayName = name;
         }
+        if ((!existing.verificationBadge || existing.verificationBadge === 'none') && badge && badge !== 'none') {
+          existing.verificationBadge = badge;
+        }
       }
     };
 
+    memberDirectoryList.forEach((m) =>
+      addCandidate(m.uid, m.displayName, m.photoURL, m.verificationBadge)
+    );
     directChats.forEach((t) => {
       if (!user) return;
       const selfIsA = user.uid === t.participantA;
@@ -1356,9 +1461,10 @@ function ForumShell() {
     });
     chatMessages.forEach((m) => addCandidate(m.senderId, m.senderName, m.senderPhoto));
     topics.forEach((t) => addCandidate(t.authorId, t.authorName, t.authorPhoto));
+    videos.forEach((v) => addCandidate(v.authorId, v.authorName, v.authorPhoto));
 
     return Array.from(map.values());
-  }, [directChats, chatMessages, topics, user]);
+  }, [memberDirectoryList, directChats, chatMessages, topics, videos, user]);
 
   const unreadDirectCount = useMemo(() => {
     if (!user) return 0;
@@ -1389,8 +1495,19 @@ function ForumShell() {
       }).length;
     };
 
+    const unreadVideoCount =
+      activeTab === 'video' && !selectedTopicId
+        ? 0
+        : videos.filter((v) => {
+            if (v.isArchived) return false;
+            if (user?.uid && v.authorId === user.uid) return false;
+            const ms = v.createdAt ? v.createdAt.toMillis() : 0;
+            return ms > videosLastSeenMs;
+          }).length;
+
     return {
       kijiweni: countBoard('Kijiweni'),
+      video: unreadVideoCount,
       fursa: countBoard('Fursa'),
       makala: countBoard('Makala'),
       chat: unreadChatCount + unreadNotesCount + unreadDirectCount,
@@ -1399,12 +1516,203 @@ function ForumShell() {
     currentlyViewedBoard,
     boardLastSeen,
     topics,
+    activeTab,
+    selectedTopicId,
+    videos,
+    videosLastSeenMs,
     user?.uid,
     readTopicIds,
     unreadChatCount,
     unreadNotesCount,
     unreadDirectCount,
   ]);
+
+  const unreadRepliesModCount = useMemo(
+    () => userNotifications.filter((n) => !n.isRead).length,
+    [userNotifications]
+  );
+
+  // Real-time owner-controlled navigation setting (hideVideoTabForUsers)
+  useEffect(() => {
+    if (!authReady) return;
+    const unsub = subscribeSiteNavSettings((settings) => {
+      setHideVideoTabForUsers(settings.hideVideoTabForUsers);
+    });
+    return () => unsub();
+  }, [authReady]);
+
+  const hideVideoTabForCurrentUser = hideVideoTabForUsers && !isAdmin;
+
+  // Redirect non-admin users away from Video tab immediately if owner hides Video
+  useEffect(() => {
+    if (hideVideoTabForCurrentUser && activeTab === 'video' && !selectedTopicId) {
+      setActiveTab('kijiweni');
+      setSelectedCategory('Kijiweni');
+      setInitialVideoId(null);
+    }
+  }, [hideVideoTabForCurrentUser, activeTab, selectedTopicId]);
+
+  const unreadSignupCount = useMemo(() => {
+    if (!isAdmin) return 0;
+    return adminRecentSignups.filter((u) => {
+      if (user?.uid && u.uid === user.uid) return false;
+      const ms = u.createdAt ? u.createdAt.toMillis() : 0;
+      return ms > adminSignupLastSeenMs;
+    }).length;
+  }, [isAdmin, adminRecentSignups, adminSignupLastSeenMs, user?.uid]);
+
+  const markAdminSignupsSeen = useCallback(() => {
+    const now = Date.now();
+    setAdminSignupLastSeenMs(now);
+    try {
+      window.localStorage.setItem(ADMIN_SIGNUP_LAST_SEEN_KEY, String(now));
+    } catch {
+      // Ignore storage error
+    }
+  }, []);
+
+  const totalAppUnreadCount =
+    unreadCounts.kijiweni +
+    (hideVideoTabForCurrentUser ? 0 : unreadCounts.video || 0) +
+    unreadCounts.fursa +
+    unreadCounts.makala +
+    unreadCounts.chat +
+    unreadRepliesModCount +
+    unreadSignupCount;
+
+  // Sync unread count onto mobile App Icon badge (setAppBadge / clearAppBadge) & document title
+  useEffect(() => {
+    void updateAppBadgeCount(totalAppUnreadCount);
+    if (typeof document === 'undefined') return;
+    const syncBadge = () => {
+      void updateAppBadgeCount(totalAppUnreadCount);
+    };
+    document.addEventListener('visibilitychange', syncBadge);
+    return () => {
+      document.removeEventListener('visibilitychange', syncBadge);
+    };
+  }, [totalAppUnreadCount]);
+
+  // Phone + toast notification when a new video is posted by another member
+  useEffect(() => {
+    if (loadingVideos) return;
+    if (!initialVideosLoadedRef.current) {
+      knownVideoIdsRef.current = new Set(videos.map((v) => v.id));
+      initialVideosLoadedRef.current = true;
+      return;
+    }
+
+    const newestVideo = videos.find(
+      (v) =>
+        !knownVideoIdsRef.current.has(v.id) &&
+        !v.isArchived &&
+        v.authorId !== user?.uid
+    );
+    knownVideoIdsRef.current = new Set(videos.map((v) => v.id));
+
+    if (newestVideo && !hideVideoTabForCurrentUser) {
+      const isViewingVideoFeed =
+        activeTabRef.current === 'video' &&
+        !selectedTopicIdRef.current &&
+        typeof document !== 'undefined' &&
+        !document.hidden;
+
+      if (!isViewingVideoFeed) {
+        const alertTitle = tr('Video Mpya · Malosha Reels', 'New Video · Malosha Reels');
+        const alertBody =
+          newestVideo.caption.trim() ||
+          tr(
+            `${newestVideo.authorName} amepakia video mpya`,
+            `${newestVideo.authorName} posted a new video`
+          );
+        if (typeof document !== 'undefined' && !document.hidden) {
+          showToast(`${alertTitle}: ${alertBody.slice(0, 75)}`);
+        }
+        void sendPhoneNotification({
+          title: alertTitle,
+          body: alertBody.slice(0, 140),
+          url: `/?tab=video&v=${encodeURIComponent(newestVideo.id)}`,
+          tag: `malosha-video-${newestVideo.id}`,
+        });
+      }
+    }
+  }, [loadingVideos, videos, user?.uid, hideVideoTabForCurrentUser, showToast, tr]);
+
+  // Owner-Only Real-time Listener for Newly Registered Members
+  const initialAdminSignupsLoadedRef = useRef(false);
+  const knownAdminSignupIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    initialAdminSignupsLoadedRef.current = false;
+    knownAdminSignupIdsRef.current.clear();
+
+    if (!authReady || !user || !isAdmin) {
+      setAdminRecentSignups([]);
+      return;
+    }
+
+    const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'), limit(40));
+    const unsub = onSnapshot(
+      q,
+      (snapshot) => {
+        const list: UserProfile[] = snapshot.docs.map((d) => {
+          const data = d.data();
+          return {
+            uid: String(data.uid || d.id),
+            displayName: String(data.displayName || 'Mwanachama'),
+            photoURL: String(data.photoURL || ''),
+            bio: String(data.bio || ''),
+            role: data.role === 'moderator' ? 'moderator' : 'member',
+            verificationBadge: normalizeVerificationBadge(data.verificationBadge),
+            accountStatus: normalizeAccountStatus(data.accountStatus),
+            suspendedReason: typeof data.suspendedReason === 'string' ? data.suspendedReason : '',
+            suspendedRuleNumber: Number(data.suspendedRuleNumber || 0),
+            topicsCount: Number(data.topicsCount || 0),
+            repliesCount: Number(data.repliesCount || 0),
+            followersCount: Number(data.followersCount || 0),
+            createdAt: data.createdAt || null,
+            updatedAt: data.updatedAt || null,
+          };
+        });
+
+        setAdminRecentSignups(list);
+
+        if (!initialAdminSignupsLoadedRef.current) {
+          knownAdminSignupIdsRef.current = new Set(list.map((u) => u.uid));
+          initialAdminSignupsLoadedRef.current = true;
+          return;
+        }
+
+        const newlyRegistered = list.filter(
+          (u) => !knownAdminSignupIdsRef.current.has(u.uid) && u.uid !== user.uid
+        );
+        list.forEach((u) => knownAdminSignupIdsRef.current.add(u.uid));
+
+        if (newlyRegistered.length > 0) {
+          const newest = newlyRegistered[0];
+          const alertTitle = tr('Mwanachama Mpya Amejisajili', 'New Member Registered');
+          const alertBody = tr(
+            `${newest.displayName} amejiunga na Malosha Forums sasa hivi.`,
+            `${newest.displayName} just registered on Malosha Forums.`
+          );
+          if (typeof document !== 'undefined' && !document.hidden) {
+            showToast(`${alertTitle}: ${newest.displayName}`);
+          }
+          void sendPhoneNotification({
+            title: alertTitle,
+            body: alertBody,
+            url: '/?tab=safety',
+            tag: `malosha-signup-${newest.uid}`,
+          });
+        }
+      },
+      () => {
+        // Non-fatal fallback
+      }
+    );
+
+    return () => unsub();
+  }, [authReady, user, isAdmin, showToast, tr]);
 
   // Real-time Facebook-style reply & comment notifications for the signed-in user
   useEffect(() => {
@@ -1792,7 +2100,47 @@ function ForumShell() {
     showToast('Umetoka kwenye akaunti yako.');
   };
 
+  const handleToggleHideVideoTab = useCallback(async () => {
+    if (!user || !isAdmin) return;
+    const next = !hideVideoTabForUsers;
+    try {
+      await updateHideVideoTabForUsers(user.uid, next);
+      showToast(
+        next
+          ? tr(
+              'Kipengele cha Video kimefichwa kwa watumiaji wengine.',
+              'Video tab is now hidden from other users.'
+            )
+          : tr(
+              'Kipengele cha Video kimewekwa wazi kwa watumiaji wote.',
+              'Video tab is now visible to everyone.'
+            )
+      );
+    } catch (err) {
+      showToast(
+        err instanceof Error
+          ? err.message
+          : tr('Imeshindwa kubadilisha uonekano wa Video.', 'Failed to update Video visibility.'),
+        'error'
+      );
+    }
+  }, [user, isAdmin, hideVideoTabForUsers, showToast, tr]);
+
+  const handleOpenAdminMembers = useCallback(() => {
+    setAuthPromptReason(null);
+    setSelectedTopicId(null);
+    setActiveTab('safety');
+    setSelectedCategory('all');
+    setOpenAdminMembersSignal((s) => s + 1);
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'auto' });
+    }
+  }, []);
+
   const handleSelectTab = (tab: NavTab) => {
+    if (tab === 'video' && hideVideoTabForCurrentUser) {
+      return;
+    }
     setAuthPromptReason(null);
     if (tab === 'chat' && activeTab !== 'chat') {
       setMchartSubTab('direct');
@@ -2349,6 +2697,14 @@ function ForumShell() {
           userNotifications={userNotifications}
           onMarkNotificationRead={handleMarkNotificationRead}
           onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
+          hideVideoTab={hideVideoTabForCurrentUser}
+          hideVideoTabForUsers={hideVideoTabForUsers}
+          onToggleHideVideoTab={isAdmin ? handleToggleHideVideoTab : undefined}
+          recentSignups={adminRecentSignups}
+          unreadSignupCount={unreadSignupCount}
+          signupLastSeenMs={adminSignupLastSeenMs}
+          onMarkSignupsSeen={markAdminSignupsSeen}
+          onOpenAdminMembers={handleOpenAdminMembers}
         />
       </div>
 
@@ -2546,6 +2902,10 @@ function ForumShell() {
               setActiveTab('video');
             }}
             onToast={showToast}
+            hideVideoTabForUsers={hideVideoTabForUsers}
+            onToggleHideVideoTab={isAdmin ? handleToggleHideVideoTab : undefined}
+            openAdminMembersSignal={openAdminMembersSignal}
+            signupLastSeenMs={adminSignupLastSeenMs}
           />
         ) : activeTab === 'chat' ? (
           <ForumChatView
@@ -2657,9 +3017,9 @@ function ForumShell() {
         <footer className="border-t border-slate-200 bg-white py-6 pb-20 md:pb-6">
           <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 text-xs text-slate-500 sm:flex-row sm:px-6">
             <p>
-              © {new Date().getFullYear()} Malosha Forums. Kijiweni · Video ·{' '}
-              {tr('Fursa', 'Opportunities')} · {tr('Makala', 'Articles')} · Mchart ·{' '}
-              {tr('Zilizovuma', 'Trending')}.
+              © {new Date().getFullYear()} Malosha Forums. Kijiweni
+              {!hideVideoTabForCurrentUser && ' · Video'} · {tr('Fursa', 'Opportunities')} ·{' '}
+              {tr('Makala', 'Articles')} · Mchart · {tr('Zilizovuma', 'Trending')}.
             </p>
             <div className="flex flex-wrap items-center justify-center gap-5">
               <button
@@ -2669,13 +3029,15 @@ function ForumShell() {
               >
                 Kijiweni
               </button>
-              <button
-                type="button"
-                onClick={() => handleSelectTab('video')}
-                className="hover:text-slate-900 hover:underline"
-              >
-                Video
-              </button>
+              {!hideVideoTabForCurrentUser && (
+                <button
+                  type="button"
+                  onClick={() => handleSelectTab('video')}
+                  className="hover:text-slate-900 hover:underline"
+                >
+                  Video
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => handleSelectTab('fursa')}
@@ -2715,6 +3077,7 @@ function ForumShell() {
         unreadCounts={unreadCounts}
         hidden={isMchartView && mobileKeyboardOpen}
         darkTheme={isVideoView}
+        hideVideoTab={hideVideoTabForCurrentUser}
       />
 
       {!isFullStageView && (

@@ -21,7 +21,8 @@ interface UserPresenceContextValue {
   onlineCount: number;
   isUserOnline: (uid?: string | null) => boolean;
   typingUsersInMchart: UserPresence[];
-  setMchartTyping: (isTyping: boolean, replyingToName?: string) => void;
+  getDirectPartnerTyping: (partnerUid?: string | null, chatId?: string | null) => boolean;
+  setMchartTyping: (isTyping: boolean, replyingToName?: string, typingChatId?: string) => void;
   markOfflineNow: () => Promise<void>;
 }
 
@@ -30,6 +31,7 @@ const UserPresenceContext = createContext<UserPresenceContextValue>({
   onlineCount: 0,
   isUserOnline: () => false,
   typingUsersInMchart: [],
+  getDirectPartnerTyping: () => false,
   setMchartTyping: () => {},
   markOfflineNow: async () => {},
 });
@@ -53,9 +55,15 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
 }) => {
   const [rawOnlineDocs, setRawOnlineDocs] = useState<UserPresence[]>([]);
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
-  const typingStateRef = useRef<{ active: boolean; replyingToName: string; lastSentAt: number }>({
+  const typingStateRef = useRef<{
+    active: boolean;
+    replyingToName: string;
+    typingChatId: string;
+    lastSentAt: number;
+  }>({
     active: false,
     replyingToName: '',
+    typingChatId: '',
     lastSentAt: 0,
   });
   const lastParamsRef = useRef({ userUid, displayName, activeArea, isSuspended });
@@ -68,7 +76,7 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
   useEffect(() => {
     const timer = window.setInterval(() => {
       setNowMs(Date.now());
-    }, 10_000);
+    }, 5_000);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -89,9 +97,11 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
             photoURL: typeof data.photoURL === 'string' ? data.photoURL : '',
             isOnline: Boolean(data.isOnline),
             isTypingInMchart: Boolean(data.isTypingInMchart),
+            typingChatId: typeof data.typingChatId === 'string' ? data.typingChatId : '',
             replyingToName: typeof data.replyingToName === 'string' ? data.replyingToName : '',
             activeArea:
               data.activeArea === 'kijiweni' ||
+              data.activeArea === 'video' ||
               data.activeArea === 'fursa' ||
               data.activeArea === 'makala' ||
               data.activeArea === 'mchart' ||
@@ -126,12 +136,14 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
       if (!shouldBeOnline) {
         typingStateRef.current.active = false;
         typingStateRef.current.replyingToName = '';
+        typingStateRef.current.typingChatId = '';
       }
 
       void writeUserPresence(userUid, {
         displayName,
         isOnline: shouldBeOnline,
         isTypingInMchart: shouldBeOnline && typingStateRef.current.active && activeArea === 'mchart',
+        typingChatId: shouldBeOnline ? typingStateRef.current.typingChatId : '',
         replyingToName: shouldBeOnline ? typingStateRef.current.replyingToName : '',
         activeArea,
       });
@@ -149,20 +161,24 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
     const handleOnline = () => syncOnline();
     const handleOffline = () => {
       typingStateRef.current.active = false;
+      typingStateRef.current.typingChatId = '';
       void writeUserPresence(userUid, {
         displayName,
         isOnline: false,
         isTypingInMchart: false,
+        typingChatId: '',
         replyingToName: '',
         activeArea,
       });
     };
     const handlePageHide = () => {
       typingStateRef.current.active = false;
+      typingStateRef.current.typingChatId = '';
       void writeUserPresence(userUid, {
         displayName,
         isOnline: false,
         isTypingInMchart: false,
+        typingChatId: '',
         replyingToName: '',
         activeArea,
       });
@@ -185,45 +201,53 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
   }, [authReady, userUid, displayName, activeArea, isSuspended]);
 
   // Immediate Mchart typing signal setter (throttled when staying true)
-  const setMchartTyping = useCallback((isTyping: boolean, replyingToName = '') => {
-    const { userUid: uid, displayName: name, activeArea: area, isSuspended: susp } =
-      lastParamsRef.current;
-    if (!uid || susp) return;
+  const setMchartTyping = useCallback(
+    (isTyping: boolean, replyingToName = '', typingChatId = 'group') => {
+      const { userUid: uid, displayName: name, activeArea: area, isSuspended: susp } =
+        lastParamsRef.current;
+      if (!uid || susp) return;
 
-    const now = Date.now();
-    const cleanReply = isTyping ? replyingToName.trim() : '';
-    const changed =
-      typingStateRef.current.active !== isTyping ||
-      typingStateRef.current.replyingToName !== cleanReply;
+      const now = Date.now();
+      const cleanReply = isTyping ? replyingToName.trim() : '';
+      const cleanChatId = isTyping ? (typingChatId || 'group').trim() : '';
+      const changed =
+        typingStateRef.current.active !== isTyping ||
+        typingStateRef.current.replyingToName !== cleanReply ||
+        typingStateRef.current.typingChatId !== cleanChatId;
 
-    // Throttle repeated "still typing" refreshes to once per 2.5s
-    if (!changed && isTyping && now - typingStateRef.current.lastSentAt < 2500) {
-      return;
-    }
+      // Throttle repeated "still typing" refreshes to once per 2.2s
+      if (!changed && isTyping && now - typingStateRef.current.lastSentAt < 2200) {
+        return;
+      }
 
-    typingStateRef.current = {
-      active: isTyping,
-      replyingToName: cleanReply,
-      lastSentAt: now,
-    };
+      typingStateRef.current = {
+        active: isTyping,
+        replyingToName: cleanReply,
+        typingChatId: cleanChatId,
+        lastSentAt: now,
+      };
 
-    void writeUserPresence(uid, {
-      displayName: name,
-      isOnline: true,
-      isTypingInMchart: isTyping,
-      replyingToName: cleanReply,
-      activeArea: area,
-    });
-  }, []);
+      void writeUserPresence(uid, {
+        displayName: name,
+        isOnline: true,
+        isTypingInMchart: isTyping,
+        typingChatId: cleanChatId,
+        replyingToName: cleanReply,
+        activeArea: area,
+      });
+    },
+    []
+  );
 
   const markOfflineNow = useCallback(async () => {
     const { userUid: uid, displayName: name, activeArea: area } = lastParamsRef.current;
-    typingStateRef.current = { active: false, replyingToName: '', lastSentAt: 0 };
+    typingStateRef.current = { active: false, replyingToName: '', typingChatId: '', lastSentAt: 0 };
     if (!uid) return;
     await writeUserPresence(uid, {
       displayName: name,
       isOnline: false,
       isTypingInMchart: false,
+      typingChatId: '',
       replyingToName: '',
       activeArea: area,
     });
@@ -264,10 +288,23 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
     return onlineUsers.filter((p) => {
       if (!p.isTypingInMchart) return false;
       if (userUid && p.uid === userUid) return false;
+      if (p.typingChatId && p.typingChatId !== 'group') return false;
       const typedMs = p.typingUpdatedAt ? p.typingUpdatedAt.toMillis() : nowMs;
       return nowMs - typedMs <= TYPING_TTL_MS;
     });
   }, [onlineUsers, userUid, nowMs]);
+
+  const getDirectPartnerTyping = useCallback(
+    (partnerUid?: string | null, chatId?: string | null): boolean => {
+      if (!partnerUid || !chatId) return false;
+      const docMatch = onlineUsers.find((p) => p.uid === partnerUid);
+      if (!docMatch || !docMatch.isTypingInMchart) return false;
+      if (docMatch.typingChatId !== chatId) return false;
+      const typedMs = docMatch.typingUpdatedAt ? docMatch.typingUpdatedAt.toMillis() : nowMs;
+      return nowMs - typedMs <= TYPING_TTL_MS;
+    },
+    [onlineUsers, nowMs]
+  );
 
   const value = useMemo<UserPresenceContextValue>(
     () => ({
@@ -275,10 +312,19 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
       onlineCount: onlineUidSet.size,
       isUserOnline,
       typingUsersInMchart,
+      getDirectPartnerTyping,
       setMchartTyping,
       markOfflineNow,
     }),
-    [onlineUsers, onlineUidSet.size, isUserOnline, typingUsersInMchart, setMchartTyping, markOfflineNow]
+    [
+      onlineUsers,
+      onlineUidSet.size,
+      isUserOnline,
+      typingUsersInMchart,
+      getDirectPartnerTyping,
+      setMchartTyping,
+      markOfflineNow,
+    ]
   );
 
   return <UserPresenceContext.Provider value={value}>{children}</UserPresenceContext.Provider>;

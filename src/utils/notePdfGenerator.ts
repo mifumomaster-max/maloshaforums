@@ -1,4 +1,5 @@
 import { jsPDF } from 'jspdf';
+import { downloadChatAttachmentFile } from '../services/cloudinaryService';
 import { MchartNote } from '../types';
 
 function normalizePdfText(input: string): string {
@@ -24,32 +25,7 @@ export async function downloadUploadedPdfFile(
   pdfUrl: string,
   fileName = 'malosha-notes.pdf'
 ): Promise<void> {
-  const safeName = fileName.toLowerCase().endsWith('.pdf')
-    ? fileName
-    : `${fileName.replace(/\.[^.]+$/, '')}.pdf`;
-
-  try {
-    const res = await fetch(pdfUrl, { mode: 'cors' });
-    if (!res.ok) throw new Error('Fetch failed');
-    const blob = await res.blob();
-    const blobUrl = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = blobUrl;
-    a.download = safeName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.setTimeout(() => URL.revokeObjectURL(blobUrl), 4000);
-  } catch {
-    const a = document.createElement('a');
-    a.href = pdfUrl;
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer';
-    a.download = safeName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }
+  await downloadChatAttachmentFile(pdfUrl, fileName, 'application/pdf');
 }
 
 export async function downloadNoteAsPdf(note: MchartNote): Promise<void> {
@@ -267,6 +243,30 @@ export async function downloadNoteAsPdf(note: MchartNote): Promise<void> {
         doc.line(marginX, y, marginX + maxContentWidth, y);
         y += 4;
       }
+      continue;
+    }
+
+    // Standalone inline image or video media token
+    const imgTokenMatch = trimmed.match(/^!\[([^\]]*)\]\((https:\/\/[^\s)]+)\)$/i);
+    const vidTokenMatch = trimmed.match(/^@\[video(?:\|([^\]]*))?\]\((https:\/\/[^\s)]+)\)$/i);
+    if (imgTokenMatch || vidTokenMatch) {
+      const cap = normalizePdfText((imgTokenMatch ? imgTokenMatch[1] : vidTokenMatch?.[1]) || '');
+      const mediaUrl = (imgTokenMatch ? imgTokenMatch[2] : vidTokenMatch?.[2]) || '';
+      const label = vidTokenMatch
+        ? `[Video Iliyoambatanishwa${cap && cap.toLowerCase() !== 'picha' ? `: ${cap}` : ''}] ${mediaUrl}`
+        : `[Picha Iliyoambatanishwa${cap && cap.toLowerCase() !== 'picha' ? `: ${cap}` : ''}]`;
+      ensureSpace(10);
+      doc.setFont('helvetica', 'italic');
+      doc.setFontSize(9.5);
+      doc.setTextColor(7, 94, 84);
+      const mLines = doc.splitTextToSize(normalizePdfText(label), maxContentWidth) as string[];
+      for (const ml of mLines) {
+        ensureSpace(5.5);
+        doc.text(ml, marginX, y);
+        y += 5.2;
+      }
+      y += 2;
+      i++;
       continue;
     }
 

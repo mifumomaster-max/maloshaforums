@@ -8,6 +8,7 @@ import {
   getDocs,
   increment,
   limit,
+  onSnapshot,
   query,
   serverTimestamp,
   setDoc,
@@ -28,11 +29,13 @@ import {
   MemberDirectoryCandidate,
   MemberIdRecord,
   MemberIdVerificationResult,
+  OwnerCustomIdCardData,
   PresenceArea,
   ReportReason,
   StatusPrivacyMode,
   TopicCategory,
   TopicStatus,
+  TrainingCertificateData,
   UserNotificationType,
   UserProfile,
   VerificationBadgeType,
@@ -63,6 +66,34 @@ export function clearPendingRegistrationMeta(email: string): void {
   pendingRegMetaByEmail.delete(key);
 }
 
+async function upsertMemberDirectoryEntry(
+  uid: string,
+  data: {
+    displayName: string;
+    photoURL?: string;
+    verificationBadge?: VerificationBadgeType;
+    isActive?: boolean;
+  }
+): Promise<void> {
+  if (!uid || !/^[a-zA-Z0-9_-]{1,128}$/.test(uid)) return;
+  const cleanName = sanitizeTextInput(data.displayName || 'Mwanachama', 80) || 'Mwanachama';
+  const cleanPhoto = sanitizeTextInput(data.photoURL || '', 500);
+  const badge = normalizeVerificationBadge(data.verificationBadge);
+  const isActive = data.isActive !== false;
+  try {
+    await setDoc(doc(db, 'member_directory', uid), {
+      uid,
+      displayName: cleanName,
+      photoURL: cleanPhoto,
+      verificationBadge: badge,
+      isActive,
+      updatedAt: serverTimestamp(),
+    });
+  } catch {
+    // Non-fatal mirror sync
+  }
+}
+
 async function runSyncUserProfile(
   user: User,
   extra?: { displayName?: string; phoneNumber?: string }
@@ -84,6 +115,11 @@ async function runSyncUserProfile(
   const safePhone = effectivePhone ? sanitizeTextInput(effectivePhone, 30) : '';
   const isPlatformOwner = user.email === ADMIN_EMAIL && user.emailVerified;
 
+  let dirDisplayName = safeName;
+  let dirPhoto = safePhoto;
+  let dirBadge: VerificationBadgeType = isPlatformOwner ? 'owner' : 'none';
+  let dirIsActive = true;
+
   try {
     const snap = await getDoc(userRef);
     if (!snap.exists()) {
@@ -101,23 +137,43 @@ async function runSyncUserProfile(
         updatedAt: serverTimestamp(),
       });
     } else {
+      const existingData = snap.data();
       const updates: Record<string, unknown> = {};
       if (
         isPlatformOwner &&
-        (!snap.data().verificationBadge || snap.data().verificationBadge === 'none')
+        (!existingData.verificationBadge || existingData.verificationBadge === 'none')
       ) {
         updates.verificationBadge = 'owner';
       }
-      if (effectiveDisplayName && snap.data().displayName !== safeName) {
+      if (effectiveDisplayName && existingData.displayName !== safeName) {
         updates.displayName = safeName;
       }
       if (Object.keys(updates).length > 0) {
         updates.updatedAt = serverTimestamp();
         await updateDoc(userRef, updates);
       }
+      dirDisplayName =
+        (typeof updates.displayName === 'string' && updates.displayName) ||
+        (typeof existingData.displayName === 'string' && existingData.displayName) ||
+        safeName;
+      dirPhoto =
+        (typeof existingData.photoURL === 'string' ? existingData.photoURL : '') || safePhoto;
+      dirBadge = normalizeVerificationBadge(
+        (updates.verificationBadge as string) || (existingData.verificationBadge as string)
+      );
+      dirIsActive = existingData.accountStatus !== 'suspended';
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, userPath);
+  }
+
+  if (dirIsActive) {
+    await upsertMemberDirectoryEntry(user.uid, {
+      displayName: dirDisplayName,
+      photoURL: dirPhoto,
+      verificationBadge: dirBadge,
+      isActive: true,
+    });
   }
 
   try {
@@ -220,6 +276,14 @@ export async function updateUserProfile(
       bio: cleanBio,
       updatedAt: serverTimestamp(),
     });
+    const dirRef = doc(db, 'member_directory', uid);
+    const dirSnap = await getDoc(dirRef).catch(() => null);
+    if (dirSnap && dirSnap.exists()) {
+      await updateDoc(dirRef, {
+        displayName: cleanName,
+        updatedAt: serverTimestamp(),
+      }).catch(() => {});
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -255,6 +319,19 @@ export async function updateUserProfilePhoto(
       await updateDoc(doc(db, 'member_ids', cardId), updates).catch(() => {});
     }
 
+    const dirRef = doc(db, 'member_directory', uid);
+    const dirSnap = await getDoc(dirRef).catch(() => null);
+    if (dirSnap && dirSnap.exists()) {
+      const dirUpdates: Record<string, unknown> = {
+        photoURL: cleanPhoto,
+        updatedAt: serverTimestamp(),
+      };
+      if (displayName && sanitizeTextInput(displayName, 80)) {
+        dirUpdates.displayName = sanitizeTextInput(displayName, 80);
+      }
+      await updateDoc(dirRef, dirUpdates).catch(() => {});
+    }
+
     return cleanPhoto;
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
@@ -275,6 +352,14 @@ export async function updateUserVerificationBadge(
     const idSnap = await getDoc(doc(db, 'member_ids', cardId)).catch(() => null);
     if (idSnap && idSnap.exists()) {
       await updateDoc(doc(db, 'member_ids', cardId), {
+        verificationBadge: badge,
+        updatedAt: serverTimestamp(),
+      }).catch(() => {});
+    }
+    const dirRef = doc(db, 'member_directory', targetUid);
+    const dirSnap = await getDoc(dirRef).catch(() => null);
+    if (dirSnap && dirSnap.exists()) {
+      await updateDoc(dirRef, {
         verificationBadge: badge,
         updatedAt: serverTimestamp(),
       }).catch(() => {});
@@ -315,6 +400,14 @@ export async function updateUserAccountStatus(
     if (idSnap && idSnap.exists()) {
       await updateDoc(doc(db, 'member_ids', cardId), {
         accountStatus: status,
+        updatedAt: serverTimestamp(),
+      }).catch(() => {});
+    }
+    const dirRef = doc(db, 'member_directory', targetUid);
+    const dirSnap = await getDoc(dirRef).catch(() => null);
+    if (dirSnap && dirSnap.exists()) {
+      await updateDoc(dirRef, {
+        isActive: status !== 'suspended',
         updatedAt: serverTimestamp(),
       }).catch(() => {});
     }
@@ -1194,7 +1287,10 @@ export function formatRawTextAsStructuredNote(
   if (!title && cursor < lines.length) {
     const firstTrim = lines[cursor].trim();
     const isFence = firstTrim.startsWith('```') || firstTrim.startsWith('~~~');
-    if (!isFence && !isStrongSingleCodeLine(firstTrim)) {
+    const isMediaToken =
+      /^!\[[^\]]*\]\(https:\/\/[^\s)]+\)$/i.test(firstTrim) ||
+      /^@\[video(?:\|[^\]]*)?\]\(https:\/\/[^\s)]+\)$/i.test(firstTrim);
+    if (!isFence && !isMediaToken && !isStrongSingleCodeLine(firstTrim)) {
       const firstClean = firstTrim
         .replace(/^#{1,4}\s*/, '')
         .replace(/^(title|kichwa)\s*:\s*/i, '')
@@ -1236,12 +1332,16 @@ export function formatRawTextAsStructuredNote(
         /^[•·–—▪‣✓✔➢►*-]\s+/.test(nextTrim) || /^\d{1,2}[.)]\s+/.test(nextTrim);
       const isFence = nextTrim.startsWith('```') || nextTrim.startsWith('~~~');
       const isHeading = /^#{1,3}\s+/.test(nextTrim) || nextTrim.endsWith(':');
+      const isMediaToken =
+        /^!\[[^\]]*\]\(https:\/\/[^\s)]+\)$/i.test(nextTrim) ||
+        /^@\[video(?:\|[^\]]*)?\]\(https:\/\/[^\s)]+\)$/i.test(nextTrim);
       const hasMoreAfterSub = lines.slice(cursor + 1).some((l) => l.trim().length > 0);
       if (
         hasMoreAfterSub &&
         !isBulletOrNum &&
         !isFence &&
         !isHeading &&
+        !isMediaToken &&
         !isStrongSingleCodeLine(nextTrim) &&
         nextTrim.length >= 10 &&
         nextTrim.length <= 150
@@ -1269,6 +1369,21 @@ export function formatRawTextAsStructuredNote(
         formattedLines.push('');
         prevBlank = true;
       }
+      i++;
+      continue;
+    }
+
+    // 0. Preserve standalone Inline Image or Video Media Token
+    if (
+      /^!\[[^\]]*\]\(https:\/\/[^\s)]+\)$/i.test(trimmed) ||
+      /^@\[video(?:\|[^\]]*)?\]\(https:\/\/[^\s)]+\)$/i.test(trimmed)
+    ) {
+      if (formattedLines.length > 0 && formattedLines[formattedLines.length - 1] !== '') {
+        formattedLines.push('');
+      }
+      formattedLines.push(trimmed);
+      formattedLines.push('');
+      prevBlank = true;
       i++;
       continue;
     }
@@ -1437,6 +1552,8 @@ export function formatRawTextAsStructuredNote(
   body = sanitizeTextInput(body, 15000);
 
   const plainForSummary = body
+    .replace(/!\[[^\]]*\]\(https:\/\/[^\s)]+\)/gi, ' [Picha] ')
+    .replace(/@\[video(?:\|[^\]]*)?\]\(https:\/\/[^\s)]+\)/gi, ' [Video] ')
     .replace(/```[\s\S]*?```/g, ' [Code Snippet] ')
     .replace(/^#{2,3}\s+/gm, '')
     .replace(/^[-*]\s+/gm, '')
@@ -2248,6 +2365,7 @@ export async function writeUserPresence(
     photoURL?: string;
     isOnline: boolean;
     isTypingInMchart?: boolean;
+    typingChatId?: string;
     replyingToName?: string;
     activeArea?: PresenceArea;
   }
@@ -2260,8 +2378,12 @@ export async function writeUserPresence(
   const cleanReply = input.isTypingInMchart
     ? sanitizeTextInput(input.replyingToName || '', 80)
     : '';
+  const cleanTypingChatId = input.isTypingInMchart
+    ? sanitizeTextInput(input.typingChatId || 'group', 128)
+    : '';
   const area: PresenceArea =
     input.activeArea === 'kijiweni' ||
+    input.activeArea === 'video' ||
     input.activeArea === 'fursa' ||
     input.activeArea === 'makala' ||
     input.activeArea === 'mchart' ||
@@ -2276,6 +2398,7 @@ export async function writeUserPresence(
       photoURL: cleanPhoto,
       isOnline: Boolean(input.isOnline),
       isTypingInMchart: Boolean(input.isOnline && input.isTypingInMchart),
+      typingChatId: input.isOnline && input.isTypingInMchart ? cleanTypingChatId : '',
       replyingToName: cleanReply,
       activeArea: area,
       lastSeenAt: serverTimestamp(),
@@ -2629,17 +2752,33 @@ export async function createMchartStatus(
   displayName: string,
   selfPhoto: string,
   input: {
+    mediaType?: 'image' | 'video';
     imageUrl: string;
+    videoUrl?: string;
+    durationSec?: number;
     caption?: string;
     privacy: StatusPrivacyMode;
     allowedViewerIds?: string[];
   }
 ): Promise<string> {
-  const imageUrl = sanitizeTextInput(input.imageUrl || '', 500);
+  const mediaType: 'image' | 'video' = input.mediaType === 'video' ? 'video' : 'image';
+  const videoUrl = mediaType === 'video' ? sanitizeTextInput(input.videoUrl || '', 500) : '';
+  if (mediaType === 'video' && (!videoUrl.startsWith('https://') || videoUrl.length < 10)) {
+    throw new Error('Kiungo cha video ya Status hakiko sahihi.');
+  }
+
+  let imageUrl = sanitizeTextInput(input.imageUrl || '', 500);
+  if ((!imageUrl.startsWith('https://') || imageUrl.length < 10) && mediaType === 'video') {
+    imageUrl = 'https://res.cloudinary.com/demo/image/upload/w_720,f_jpg/sample.jpg';
+  }
   if (!imageUrl.startsWith('https://') || imageUrl.length < 10) {
     throw new Error('Kiungo cha picha ya Status hakiko sahihi.');
   }
 
+  const durationSec =
+    mediaType === 'video'
+      ? Math.max(0, Math.min(300, Math.round(Number(input.durationSec || 0))))
+      : 0;
   const caption = sanitizeTextInput(input.caption || '', 280);
   const privacy: StatusPrivacyMode = input.privacy === 'selected' ? 'selected' : 'members';
   const cleanedAllowed =
@@ -2664,7 +2803,9 @@ export async function createMchartStatus(
       authorId: user.uid,
       authorName: sanitizeTextInput(displayName || user.displayName || 'Mwanachama', 80) || 'Mwanachama',
       authorPhoto: sanitizeTextInput(selfPhoto || user.photoURL || '', 500),
+      mediaType,
       imageUrl,
+      ...(mediaType === 'video' ? { videoUrl, durationSec } : {}),
       caption,
       privacy,
       allowedViewerIds: cleanedAllowed,
@@ -3243,5 +3384,306 @@ export async function deleteVideoComment(videoId: string, commentId: string): Pr
   }
 }
 
+export function subscribeSiteNavSettings(
+  onUpdate: (settings: { hideVideoTabForUsers: boolean }) => void
+): () => void {
+  const settingsRef = doc(db, 'site_settings', 'navigation');
+  return onSnapshot(
+    settingsRef,
+    (snap) => {
+      if (!snap.exists()) {
+        onUpdate({ hideVideoTabForUsers: false });
+        return;
+      }
+      const data = snap.data();
+      onUpdate({
+        hideVideoTabForUsers: Boolean(data?.hideVideoTabForUsers),
+      });
+    },
+    () => {
+      onUpdate({ hideVideoTabForUsers: false });
+    }
+  );
+}
 
+export async function updateHideVideoTabForUsers(
+  ownerUid: string,
+  hideVideoTabForUsers: boolean
+): Promise<void> {
+  const path = 'site_settings/navigation';
+  try {
+    await setDoc(doc(db, 'site_settings', 'navigation'), {
+      hideVideoTabForUsers: Boolean(hideVideoTabForUsers),
+      updatedBy: ownerUid,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
 
+export async function fetchOwnerCustomIdCard(
+  cardId = 'primary'
+): Promise<OwnerCustomIdCardData | null> {
+  const path = `owner_id_cards/${cardId}`;
+  try {
+    const snap = await getDoc(doc(db, 'owner_id_cards', cardId));
+    if (!snap.exists()) return null;
+    const d = snap.data();
+    return {
+      cardId: String(d.cardId || cardId),
+      ownerUid: String(d.ownerUid || ''),
+      headerTopLeftSw: String(d.headerTopLeftSw || ''),
+      headerTopLeftEn: String(d.headerTopLeftEn || ''),
+      headerTopRightSw: String(d.headerTopRightSw || ''),
+      headerTopRightEn: String(d.headerTopRightEn || ''),
+      idNumberLabel: String(d.idNumberLabel || ''),
+      idNumber: String(d.idNumber || ''),
+      surnameLabel: String(d.surnameLabel || ''),
+      surname: String(d.surname || ''),
+      givenNamesLabel: String(d.givenNamesLabel || ''),
+      givenNames: String(d.givenNames || ''),
+      dobLabel: String(d.dobLabel || ''),
+      dateOfBirth: String(d.dateOfBirth || ''),
+      sexLabel: String(d.sexLabel || ''),
+      sex: String(d.sex || ''),
+      nationalityLabel: String(d.nationalityLabel || ''),
+      nationality: String(d.nationality || ''),
+      signatureLabel: String(d.signatureLabel || ''),
+      signatureText: String(d.signatureText || ''),
+      signaturePath: String(d.signaturePath || ''),
+      portraitUrl: String(d.portraitUrl || ''),
+      hologramPhotoUrl: String(d.hologramPhotoUrl || ''),
+      showSpecimenStamp: Boolean(d.showSpecimenStamp),
+      specimenText: String(d.specimenText || ''),
+      showRightEmblem: Boolean(d.showRightEmblem),
+      createdAt: d.createdAt || null,
+      updatedAt: d.updatedAt || null,
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+  }
+}
+
+export async function saveOwnerCustomIdCard(
+  ownerUid: string,
+  payload: Omit<OwnerCustomIdCardData, 'cardId' | 'ownerUid' | 'createdAt' | 'updatedAt'>,
+  cardId = 'primary'
+): Promise<void> {
+  const path = `owner_id_cards/${cardId}`;
+  const docRef = doc(db, 'owner_id_cards', cardId);
+
+  const cleanPayload = {
+    headerTopLeftSw: sanitizeTextInput(payload.headerTopLeftSw, 100),
+    headerTopLeftEn: sanitizeTextInput(payload.headerTopLeftEn, 100),
+    headerTopRightSw: sanitizeTextInput(payload.headerTopRightSw, 100),
+    headerTopRightEn: sanitizeTextInput(payload.headerTopRightEn, 100),
+    idNumberLabel: sanitizeTextInput(payload.idNumberLabel, 80),
+    idNumber: sanitizeTextInput(payload.idNumber, 60),
+    surnameLabel: sanitizeTextInput(payload.surnameLabel, 80),
+    surname: sanitizeTextInput(payload.surname, 80),
+    givenNamesLabel: sanitizeTextInput(payload.givenNamesLabel, 80),
+    givenNames: sanitizeTextInput(payload.givenNames, 120),
+    dobLabel: sanitizeTextInput(payload.dobLabel, 80),
+    dateOfBirth: sanitizeTextInput(payload.dateOfBirth, 60),
+    sexLabel: sanitizeTextInput(payload.sexLabel, 80),
+    sex: sanitizeTextInput(payload.sex, 30),
+    nationalityLabel: sanitizeTextInput(payload.nationalityLabel, 80),
+    nationality: sanitizeTextInput(payload.nationality, 80),
+    signatureLabel: sanitizeTextInput(payload.signatureLabel, 80),
+    signatureText: sanitizeTextInput(payload.signatureText, 80),
+    signaturePath: String(payload.signaturePath || '').slice(0, 4000),
+    portraitUrl: sanitizeTextInput(payload.portraitUrl, 500),
+    hologramPhotoUrl: sanitizeTextInput(payload.hologramPhotoUrl, 500),
+    showSpecimenStamp: Boolean(payload.showSpecimenStamp),
+    specimenText: sanitizeTextInput(payload.specimenText, 40),
+    showRightEmblem: Boolean(payload.showRightEmblem),
+  };
+
+  try {
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      await updateDoc(docRef, {
+        ...cleanPayload,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(docRef, {
+        cardId,
+        ownerUid,
+        ...cleanPayload,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function listTrainingCertificates(): Promise<TrainingCertificateData[]> {
+  const path = 'training_certificates';
+  try {
+    const snap = await getDocs(collection(db, 'training_certificates'));
+    const list: TrainingCertificateData[] = snap.docs.map((docSnap) => {
+      const d = docSnap.data();
+      return {
+        certId: String(d.certId || docSnap.id),
+        serialNumber: String(d.serialNumber || docSnap.id),
+        issuerUid: String(d.issuerUid || ''),
+        orientation: d.orientation === 'portrait' ? 'portrait' : 'landscape',
+        theme:
+          d.theme === 'emerald_gold' || d.theme === 'burgundy_gold' ? d.theme : 'navy_gold',
+        institutionName: String(d.institutionName || ''),
+        institutionSubtitle: String(d.institutionSubtitle || ''),
+        institutionLogoUrl: String(d.institutionLogoUrl || ''),
+        kickerText: String(d.kickerText || ''),
+        certificateTitle: String(d.certificateTitle || ''),
+        certificateSubtitle: String(d.certificateSubtitle || ''),
+        introLine: String(d.introLine || ''),
+        recipientUid: String(d.recipientUid || ''),
+        recipientName: String(d.recipientName || ''),
+        completionLine: String(d.completionLine || ''),
+        courseTitle: String(d.courseTitle || ''),
+        courseDetails: String(d.courseDetails || ''),
+        durationText: String(d.durationText || ''),
+        gradeText: String(d.gradeText || ''),
+        issueDateText: String(d.issueDateText || ''),
+        issueLocation: String(d.issueLocation || ''),
+        signatory1Name: String(d.signatory1Name || ''),
+        signatory1Title: String(d.signatory1Title || ''),
+        signatory1SigText: String(d.signatory1SigText || ''),
+        signatory1SigPath: String(d.signatory1SigPath || ''),
+        showSignatory2: Boolean(d.showSignatory2),
+        signatory2Name: String(d.signatory2Name || ''),
+        signatory2Title: String(d.signatory2Title || ''),
+        signatory2SigText: String(d.signatory2SigText || ''),
+        signatory2SigPath: String(d.signatory2SigPath || ''),
+        sealText: String(d.sealText || ''),
+        watermarkText: String(d.watermarkText || ''),
+        createdAt: d.createdAt || null,
+        updatedAt: d.updatedAt || null,
+      };
+    });
+    return list.sort((a, b) => {
+      const aMs = a.updatedAt ? a.updatedAt.toMillis() : 0;
+      const bMs = b.updatedAt ? b.updatedAt.toMillis() : 0;
+      return bMs - aMs;
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+export async function saveTrainingCertificate(
+  issuerUid: string,
+  payload: Omit<TrainingCertificateData, 'issuerUid' | 'createdAt' | 'updatedAt'>
+): Promise<TrainingCertificateData> {
+  const safeCertId = payload.certId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128);
+  if (!safeCertId) {
+    throw new Error('Namba ya utambulisho wa cheti si sahihi.');
+  }
+  const cleanRecipient = sanitizeTextInput(payload.recipientName, 120);
+  const cleanCourse = sanitizeTextInput(payload.courseTitle, 180);
+  if (!cleanRecipient) {
+    throw new Error('Weka jina kamili la mshiriki / mhitimu.');
+  }
+  if (!cleanCourse) {
+    throw new Error('Weka jina la mafunzo au kozi.');
+  }
+
+  const path = `training_certificates/${safeCertId}`;
+  const docRef = doc(db, 'training_certificates', safeCertId);
+
+  const cleanFields = {
+    serialNumber: sanitizeTextInput(payload.serialNumber || safeCertId, 64) || safeCertId,
+    orientation: payload.orientation === 'portrait' ? ('portrait' as const) : ('landscape' as const),
+    theme:
+      payload.theme === 'emerald_gold' || payload.theme === 'burgundy_gold'
+        ? payload.theme
+        : ('navy_gold' as const),
+    institutionName: sanitizeTextInput(payload.institutionName, 140),
+    institutionSubtitle: sanitizeTextInput(payload.institutionSubtitle, 180),
+    institutionLogoUrl: sanitizeTextInput(payload.institutionLogoUrl, 500),
+    kickerText: sanitizeTextInput(payload.kickerText, 120),
+    certificateTitle: sanitizeTextInput(payload.certificateTitle, 120),
+    certificateSubtitle: sanitizeTextInput(payload.certificateSubtitle, 140),
+    introLine: sanitizeTextInput(payload.introLine, 140),
+    recipientUid: sanitizeTextInput(payload.recipientUid, 128),
+    recipientName: cleanRecipient,
+    completionLine: sanitizeTextInput(payload.completionLine, 180),
+    courseTitle: cleanCourse,
+    courseDetails: sanitizeTextInput(payload.courseDetails, 500),
+    durationText: sanitizeTextInput(payload.durationText, 80),
+    gradeText: sanitizeTextInput(payload.gradeText, 80),
+    issueDateText: sanitizeTextInput(payload.issueDateText, 80),
+    issueLocation: sanitizeTextInput(payload.issueLocation, 100),
+    signatory1Name: sanitizeTextInput(payload.signatory1Name, 100),
+    signatory1Title: sanitizeTextInput(payload.signatory1Title, 100),
+    signatory1SigText: sanitizeTextInput(payload.signatory1SigText, 80),
+    signatory1SigPath: String(payload.signatory1SigPath || '').slice(0, 4000),
+    showSignatory2: Boolean(payload.showSignatory2),
+    signatory2Name: sanitizeTextInput(payload.signatory2Name, 100),
+    signatory2Title: sanitizeTextInput(payload.signatory2Title, 100),
+    signatory2SigText: sanitizeTextInput(payload.signatory2SigText, 80),
+    signatory2SigPath: String(payload.signatory2SigPath || '').slice(0, 4000),
+    sealText: sanitizeTextInput(payload.sealText, 80),
+    watermarkText: sanitizeTextInput(payload.watermarkText, 100),
+  };
+
+  try {
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      await updateDoc(docRef, {
+        ...cleanFields,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(docRef, {
+        certId: safeCertId,
+        issuerUid,
+        ...cleanFields,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    return {
+      certId: safeCertId,
+      issuerUid,
+      ...cleanFields,
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteTrainingCertificate(certId: string): Promise<void> {
+  const path = `training_certificates/${certId}`;
+  try {
+    await deleteDoc(doc(db, 'training_certificates', certId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function fetchForumMembersDirectory(): Promise<MemberDirectoryCandidate[]> {
+  try {
+    const snap = await getDocs(collection(db, 'users'));
+    const members: MemberDirectoryCandidate[] = snap.docs
+      .map((docSnap) => {
+        const d = docSnap.data();
+        return {
+          uid: String(d.uid || docSnap.id),
+          displayName: String(d.displayName || 'Mwanachama'),
+          photoURL: String(d.photoURL || ''),
+          verificationBadge: normalizeVerificationBadge(d.verificationBadge),
+        };
+      })
+      .sort((a, b) => a.displayName.localeCompare(b.displayName, 'sw'));
+    return members;
+  } catch {
+    return [];
+  }
+}

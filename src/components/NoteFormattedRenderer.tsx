@@ -1,6 +1,12 @@
 import React, { useState } from 'react';
 import { Check, Code2, Copy } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
+import {
+  deriveCloudinaryVideoThumbnail,
+  optimizeCloudinaryPhotoUrl,
+  optimizeCloudinaryVideoPlaybackUrl,
+} from '../services/cloudinaryService';
+import { parseStandaloneMediaToken } from '../utils/editorialFormatter';
 import { renderLinkedInline } from './RichText';
 
 interface NoteFormattedRendererProps {
@@ -170,6 +176,61 @@ export const NoteFormattedRenderer: React.FC<NoteFormattedRendererProps> = ({
           onCopied={onCopyCodeSuccess}
         />
       );
+      continue;
+    }
+
+    // Embedded inline photo or video token
+    const mediaToken = parseStandaloneMediaToken(trimmed);
+    if (mediaToken) {
+      flushBullets(idx);
+      flushNumbered(idx);
+      if (mediaToken.type === 'image') {
+        const showCaption = Boolean(
+          mediaToken.caption && mediaToken.caption.toLowerCase() !== 'picha'
+        );
+        blocks.push(
+          <figure
+            key={`note-img-${idx}`}
+            className="my-4 overflow-hidden rounded-xl border border-slate-200 bg-slate-100 shadow-xs"
+          >
+            <img
+              src={optimizeCloudinaryPhotoUrl(mediaToken.url)}
+              alt={mediaToken.caption || 'Picha ya note'}
+              loading="lazy"
+              referrerPolicy="no-referrer"
+              className="block max-h-[500px] w-full bg-slate-100 object-contain"
+            />
+            {showCaption && (
+              <figcaption className="border-t border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-600">
+                {mediaToken.caption}
+              </figcaption>
+            )}
+          </figure>
+        );
+      } else {
+        const poster = deriveCloudinaryVideoThumbnail(mediaToken.url);
+        blocks.push(
+          <figure
+            key={`note-vid-${idx}`}
+            className="my-4 overflow-hidden rounded-xl border border-slate-200 bg-black shadow-xs"
+          >
+            <video
+              src={optimizeCloudinaryVideoPlaybackUrl(mediaToken.url)}
+              poster={poster || undefined}
+              controls
+              playsInline
+              preload="metadata"
+              className="block max-h-[500px] w-full bg-black object-contain"
+            />
+            {mediaToken.caption && (
+              <figcaption className="border-t border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-600">
+                {mediaToken.caption}
+              </figcaption>
+            )}
+          </figure>
+        );
+      }
+      idx++;
       continue;
     }
 

@@ -43,6 +43,50 @@ export async function requestPhoneNotificationPermission(): Promise<PhoneNotific
   }
 }
 
+const BASE_DOCUMENT_TITLE = 'Malosha Forums — Jukwaa la Kiswahili';
+
+export async function updateAppBadgeCount(rawCount: number): Promise<void> {
+  if (typeof window === 'undefined') return;
+  const count = Number.isFinite(rawCount) ? Math.max(0, Math.min(999, Math.round(rawCount))) : 0;
+
+  if (typeof document !== 'undefined') {
+    document.title = count > 0 ? `(${count}) ${BASE_DOCUMENT_TITLE}` : BASE_DOCUMENT_TITLE;
+  }
+
+  try {
+    const nav = navigator as Navigator & {
+      setAppBadge?: (contents?: number) => Promise<void>;
+      clearAppBadge?: () => Promise<void>;
+    };
+    if (typeof nav.setAppBadge === 'function') {
+      if (count > 0) {
+        await nav.setAppBadge(count);
+      } else if (typeof nav.clearAppBadge === 'function') {
+        await nav.clearAppBadge();
+      }
+    }
+  } catch {
+    // Badging API may be restricted in non-installed contexts
+  }
+
+  try {
+    if ('serviceWorker' in navigator) {
+      if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: 'SET_BADGE', count });
+      }
+      const reg = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 600)),
+      ]);
+      if (reg?.active) {
+        reg.active.postMessage({ type: 'SET_BADGE', count });
+      }
+    }
+  } catch {
+    // Ignore SW message errors
+  }
+}
+
 export interface PhoneNotificationPayload {
   title: string;
   body: string;
@@ -62,12 +106,20 @@ export async function sendPhoneNotification(
     payload.url ||
     (payload.topicId ? `/?mada=${encodeURIComponent(payload.topicId)}` : '/');
 
-  const options: NotificationOptions = {
+  const swOptions: NotificationOptions & {
+    renotify?: boolean;
+    vibrate?: number[];
+    actions?: { action: string; title: string }[];
+  } = {
     body: payload.body,
     icon: '/pwa-192x192.png',
     badge: '/pwa-192x192.png',
     tag: payload.tag || (payload.topicId ? `malosha-topic-${payload.topicId}` : 'malosha-update'),
+    renotify: true,
+    vibrate: [180, 90, 180],
+    requireInteraction: false,
     data: { url: targetUrl },
+    actions: [{ action: 'open', title: 'Fungua' }],
   };
 
   try {
@@ -77,7 +129,7 @@ export async function sendPhoneNotification(
         new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 1500)),
       ]);
       if (registration && typeof registration.showNotification === 'function') {
-        await registration.showNotification(payload.title, options);
+        await registration.showNotification(payload.title, swOptions);
         return true;
       }
     }
@@ -86,7 +138,14 @@ export async function sendPhoneNotification(
   }
 
   try {
-    const notif = new window.Notification(payload.title, options);
+    const basicOptions: NotificationOptions = {
+      body: payload.body,
+      icon: '/pwa-192x192.png',
+      badge: '/pwa-192x192.png',
+      tag: swOptions.tag,
+      data: { url: targetUrl },
+    };
+    const notif = new window.Notification(payload.title, basicOptions);
     notif.onclick = () => {
       window.focus();
       if (payload.topicId || payload.url) {

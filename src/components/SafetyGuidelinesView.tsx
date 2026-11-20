@@ -73,6 +73,8 @@ import { ImageResizeModal } from './ImageResizeModal';
 import { MemberIdCard } from './MemberIdCard';
 import { MemberIdVerifier } from './MemberIdVerifier';
 import { ModerationView } from './ModerationView';
+import { OwnerEditableIdCard } from './OwnerEditableIdCard';
+import { TrainingCertificateStudio } from './TrainingCertificateStudio';
 import { VerificationBadge } from './VerificationBadge';
 
 interface SafetyGuidelinesViewProps {
@@ -106,6 +108,10 @@ interface SafetyGuidelinesViewProps {
   onOpenTopic: (topicId: string) => void;
   onOpenVideo?: (videoId: string) => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
+  hideVideoTabForUsers?: boolean;
+  onToggleHideVideoTab?: () => void | Promise<void>;
+  openAdminMembersSignal?: number;
+  signupLastSeenMs?: number;
 }
 
 const BADGE_LEGEND_ORDER: VerificationBadgeType[] = [
@@ -143,6 +149,10 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
   onOpenTopic,
   onOpenVideo,
   onToast,
+  hideVideoTabForUsers = false,
+  onToggleHideVideoTab,
+  openAdminMembersSignal = 0,
+  signupLastSeenMs = 0,
 }) => {
   const { lang, setLang, tr, formatTime, getReportReasonLabel, getBadgeLabel, getBadgeDescription } =
     useLanguage();
@@ -193,6 +203,16 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
       setProfileTab('profile');
     }
   }, [isAdmin, onPublishPosterTopic]);
+
+  useEffect(() => {
+    if (openAdminMembersSignal > 0 && isAdmin) {
+      setProfileTab('profile');
+      setOpenAccordions((prev) => ({
+        ...prev,
+        admin_moderation: true,
+      }));
+    }
+  }, [openAdminMembersSignal, isAdmin]);
 
   const hasPasswordProvider = useMemo(
     () => userProviders.includes('password') || passwordLinkedNow,
@@ -938,6 +958,55 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
                   <MemberIdCard
                     profile={userProfile}
                     isAdmin={isAdmin}
+                    onToast={onToast}
+                  />
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* Accordion 1B (Owner Only): Second Editable Specimen ID Card */}
+          {userUid && isAdmin && userProfile && (
+            <section className="overflow-hidden rounded-xl border border-sky-200 bg-white">
+              <button
+                type="button"
+                aria-expanded={Boolean(openAccordions.owner_custom_id)}
+                onClick={() => toggleAccordion('owner_custom_id')}
+                className="flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-sky-50/40 sm:px-5"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-sky-50 text-[#1245A8] ring-1 ring-sky-200">
+                    <CreditCard className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0">
+                    <h2 className="truncate font-display text-sm font-bold text-slate-900 sm:text-base">
+                      {tr(
+                        'Kitambulisho cha Pili (Mmiliki — Kinachohaririwa)',
+                        'Second Editable ID Card (Owner Only)'
+                      )}
+                    </h2>
+                    <p className="truncate text-xs text-slate-500">
+                      {tr(
+                        'Hariri picha, majina, namba, saini, na vichwa vyote kisha pakua PNG',
+                        'Edit all fields, portrait, hologram, signature & headers, then export PNG'
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <ChevronDown
+                  className={`h-5 w-5 shrink-0 text-slate-500 transition-transform duration-200 ${
+                    openAccordions.owner_custom_id ? 'rotate-180 text-[#0E2640]' : ''
+                  }`}
+                  aria-hidden="true"
+                />
+              </button>
+
+              {openAccordions.owner_custom_id && (
+                <div className="border-t border-slate-100 p-4 sm:p-5">
+                  <OwnerEditableIdCard
+                    ownerUid={userUid}
+                    ownerPhotoUrl={userProfile.photoURL}
+                    ownerDisplayName={userProfile.displayName}
                     onToast={onToast}
                   />
                 </div>
@@ -1981,6 +2050,54 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
             </section>
           )}
 
+          {/* Accordion 7B (Owner): A4 Institutional Training Certificate Studio */}
+          {userUid && isAdmin && (
+            <section className="overflow-hidden rounded-xl border border-amber-200 bg-white">
+              <button
+                type="button"
+                aria-expanded={Boolean(openAccordions.admin_training_certificates)}
+                onClick={() => toggleAccordion('admin_training_certificates')}
+                className="flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-amber-50/40 sm:px-5"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-[#B48224] ring-1 ring-amber-200">
+                    <Award className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0">
+                    <h2 className="truncate font-display text-sm font-bold text-slate-900 sm:text-base">
+                      {tr(
+                        'Tengeneza Cheti cha Mafunzo (A4 · Mmiliki)',
+                        'A4 Training Certificate Studio (Owner)'
+                      )}
+                    </h2>
+                    <p className="truncate text-xs text-slate-500">
+                      {tr(
+                        'Tengeneza vyeti vya kiofisi vya A4 vyenye watermark, pakua PDF au picha (PNG)',
+                        'Issue institutional A4 certificates with watermarks, download PDF or PNG'
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <ChevronDown
+                  className={`h-5 w-5 shrink-0 text-slate-500 transition-transform duration-200 ${
+                    openAccordions.admin_training_certificates ? 'rotate-180 text-[#0E2640]' : ''
+                  }`}
+                  aria-hidden="true"
+                />
+              </button>
+
+              {openAccordions.admin_training_certificates && (
+                <div className="border-t border-slate-100 p-4 sm:p-5">
+                  <TrainingCertificateStudio
+                    ownerUid={userUid}
+                    ownerDisplayName={userProfile?.displayName}
+                    onToast={onToast}
+                  />
+                </div>
+              )}
+            </section>
+          )}
+
           {/* Accordion 8 (Owner): Anti-Fake Member ID Checker */}
           {userUid && isAdmin && (
             <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
@@ -2065,6 +2182,9 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
                     onOpenTopic={onOpenTopic}
                     onOpenVideo={onOpenVideo}
                     onToast={onToast}
+                    hideVideoTabForUsers={hideVideoTabForUsers}
+                    onToggleHideVideoTab={onToggleHideVideoTab}
+                    signupLastSeenMs={signupLastSeenMs}
                   />
                 </div>
               )}

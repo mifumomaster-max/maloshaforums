@@ -1,4 +1,10 @@
 import React from 'react';
+import {
+  deriveCloudinaryVideoThumbnail,
+  optimizeCloudinaryPhotoUrl,
+  optimizeCloudinaryVideoPlaybackUrl,
+} from '../services/cloudinaryService';
+import { parseStandaloneMediaToken } from '../utils/editorialFormatter';
 
 interface RichTextProps {
   content: string;
@@ -259,6 +265,57 @@ export const RichText: React.FC<RichTextProps> = ({ content, className = '' }) =
     flushQuote(index);
 
     if (trimmed === '') {
+      return;
+    }
+
+    const mediaToken = parseStandaloneMediaToken(trimmed);
+    if (mediaToken) {
+      if (mediaToken.type === 'image') {
+        const showCaption = Boolean(
+          mediaToken.caption && mediaToken.caption.toLowerCase() !== 'picha'
+        );
+        blocks.push(
+          <figure
+            key={`rt-img-${index}`}
+            className="my-3.5 overflow-hidden rounded-xl border border-slate-200 bg-slate-100"
+          >
+            <img
+              src={optimizeCloudinaryPhotoUrl(mediaToken.url)}
+              alt={mediaToken.caption || 'Picha'}
+              loading="lazy"
+              referrerPolicy="no-referrer"
+              className="block max-h-[480px] w-full bg-slate-100 object-contain"
+            />
+            {showCaption && (
+              <figcaption className="border-t border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
+                {mediaToken.caption}
+              </figcaption>
+            )}
+          </figure>
+        );
+      } else {
+        const poster = deriveCloudinaryVideoThumbnail(mediaToken.url);
+        blocks.push(
+          <figure
+            key={`rt-vid-${index}`}
+            className="my-3.5 overflow-hidden rounded-xl border border-slate-200 bg-black"
+          >
+            <video
+              src={optimizeCloudinaryVideoPlaybackUrl(mediaToken.url)}
+              poster={poster || undefined}
+              controls
+              playsInline
+              preload="metadata"
+              className="block max-h-[480px] w-full bg-black object-contain"
+            />
+            {mediaToken.caption && (
+              <figcaption className="border-t border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
+                {mediaToken.caption}
+              </figcaption>
+            )}
+          </figure>
+        );
+      }
       return;
     }
 

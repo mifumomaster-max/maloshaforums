@@ -5,6 +5,7 @@ import {
   BookOpen,
   Check,
   CheckCheck,
+  Copy,
   Download,
   ExternalLink,
   FileSpreadsheet,
@@ -709,7 +710,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
       window.clearTimeout(typingIdleTimerRef.current);
       typingIdleTimerRef.current = null;
     }
-    setMchartTyping(false);
+    setMchartTyping(false, '', 'group');
     window.requestAnimationFrame(() => scrollToBottom(true));
     inputRef.current?.focus();
 
@@ -1452,6 +1453,51 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => {
+                                    const payloadText =
+                                      msg.text.trim() ||
+                                      msg.attachmentName ||
+                                      msg.attachmentUrl;
+                                    if (!payloadText) return;
+                                    const doCopy = async () => {
+                                      try {
+                                        if (navigator.clipboard?.writeText) {
+                                          await navigator.clipboard.writeText(payloadText);
+                                          return true;
+                                        }
+                                      } catch {
+                                        // fallback
+                                      }
+                                      try {
+                                        const ta = document.createElement('textarea');
+                                        ta.value = payloadText;
+                                        ta.setAttribute('readonly', '');
+                                        ta.style.position = 'fixed';
+                                        ta.style.opacity = '0';
+                                        document.body.appendChild(ta);
+                                        ta.select();
+                                        const ok = document.execCommand('copy');
+                                        document.body.removeChild(ta);
+                                        return ok;
+                                      } catch {
+                                        return false;
+                                      }
+                                    };
+                                    void doCopy().then((ok) => {
+                                      if (ok) {
+                                        onToast(tr('Ujumbe umenakiliwa!', 'Message copied!'));
+                                      }
+                                    });
+                                  }}
+                                  title={tr('Nakili ujumbe huu', 'Copy this message')}
+                                  aria-label={tr('Nakili ujumbe', 'Copy')}
+                                  className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-black/5 hover:text-[#075E54]"
+                                >
+                                  <Copy className="h-3 w-3" aria-hidden="true" />
+                                  <span>{tr('Nakili', 'Copy')}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
                                     if (!user) {
                                       onSignIn('chat');
                                       return;
@@ -1769,13 +1815,13 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                       typingIdleTimerRef.current = null;
                     }
                     if (nextVal.trim().length > 0) {
-                      setMchartTyping(true, replyTo?.senderName || '');
+                      setMchartTyping(true, replyTo?.senderName || '', 'group');
                       typingIdleTimerRef.current = window.setTimeout(() => {
-                        setMchartTyping(false);
+                        setMchartTyping(false, '', 'group');
                         typingIdleTimerRef.current = null;
                       }, 4200);
                     } else {
-                      setMchartTyping(false);
+                      setMchartTyping(false, '', 'group');
                     }
                   }}
                   onKeyDown={(e) => {

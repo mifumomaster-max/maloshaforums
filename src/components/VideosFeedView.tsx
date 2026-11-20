@@ -77,6 +77,7 @@ import {
   needsBrowserVideoTranscode,
   optimizeCloudinaryPhotoUrl,
   optimizeCloudinaryVideoPlaybackUrl,
+  prewarmCloudinaryVideoUrl,
   uploadAudioToCloudinary,
   uploadPhotoCarouselToCloudinary,
   uploadVideoToCloudinary,
@@ -236,6 +237,55 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
   const slideRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const videoRefCallbacksRef = useRef<Map<string, (el: HTMLVideoElement | null) => void>>(new Map());
+  const audioRefCallbacksRef = useRef<Map<string, (el: HTMLAudioElement | null) => void>>(new Map());
+  const slideRefCallbacksRef = useRef<Map<string, (el: HTMLDivElement | null) => void>>(new Map());
+
+  const getVideoRefCallback = useCallback((videoId: string) => {
+    let cb = videoRefCallbacksRef.current.get(videoId);
+    if (!cb) {
+      cb = (el: HTMLVideoElement | null) => {
+        if (el) {
+          videoRefs.current[videoId] = el;
+        } else {
+          delete videoRefs.current[videoId];
+        }
+      };
+      videoRefCallbacksRef.current.set(videoId, cb);
+    }
+    return cb;
+  }, []);
+
+  const getAudioRefCallback = useCallback((videoId: string) => {
+    let cb = audioRefCallbacksRef.current.get(videoId);
+    if (!cb) {
+      cb = (el: HTMLAudioElement | null) => {
+        if (el) {
+          audioRefs.current[videoId] = el;
+        } else {
+          delete audioRefs.current[videoId];
+        }
+      };
+      audioRefCallbacksRef.current.set(videoId, cb);
+    }
+    return cb;
+  }, []);
+
+  const getSlideRefCallback = useCallback((videoId: string) => {
+    let cb = slideRefCallbacksRef.current.get(videoId);
+    if (!cb) {
+      cb = (el: HTMLDivElement | null) => {
+        if (el) {
+          slideRefs.current[videoId] = el;
+        } else {
+          delete slideRefs.current[videoId];
+        }
+      };
+      slideRefCallbacksRef.current.set(videoId, cb);
+    }
+    return cb;
+  }, []);
+
   const lastTapRef = useRef<{ id: string; time: number } | null>(null);
   const singleTapTimerRef = useRef<number | null>(null);
   const touchSwipeStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -249,6 +299,10 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
   const [justPublishedId, setJustPublishedId] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const [muted, setMuted] = useState(false);
+  const mutedRef = useRef(false);
+  const [needsSoundTapPrompt, setNeedsSoundTapPrompt] = useState(false);
+  const needsSoundTapPromptRef = useRef(false);
+  const soundUnlockedOnPointerDownRef = useRef(false);
   const [pausedByTap, setPausedByTap] = useState(false);
   const pausedByTapRef = useRef(false);
   const [fitMode, setFitMode] = useState<'cover' | 'contain'>('contain');
@@ -314,6 +368,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
   const [stalledPlayPromptId, setStalledPlayPromptId] = useState<string | null>(null);
   const [endedOutroVideoId, setEndedOutroVideoId] = useState<string | null>(null);
   const [transcodeToggledVideoIds, setTranscodeToggledVideoIds] = useState<Record<string, boolean>>({});
+  const [hevcForceH264Ids, setHevcForceH264Ids] = useState<Record<string, boolean>>({});
   const scrollRafRef = useRef<number | null>(null);
   const outroTimerRef = useRef<number | null>(null);
   const activeIndexRef = useRef(0);
@@ -323,6 +378,12 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
   useEffect(() => {
     pausedByTapRef.current = pausedByTap;
   }, [pausedByTap]);
+  useEffect(() => {
+    mutedRef.current = muted;
+  }, [muted]);
+  useEffect(() => {
+    needsSoundTapPromptRef.current = needsSoundTapPrompt;
+  }, [needsSoundTapPrompt]);
 
   const [photoSlideByVideoId, setPhotoSlideByVideoId] = useState<Record<string, number>>({});
   const [progressById, setProgressById] = useState<Record<string, { current: number; duration: number }>>({});
@@ -364,6 +425,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
   // Live edit state inside Settings drawer for post owner
   const [editCaption, setEditCaption] = useState('');
   const [editSoundName, setEditSoundName] = useState('');
+  const [editRemoveAudio, setEditRemoveAudio] = useState(false);
   const [editAllowComments, setEditAllowComments] = useState(true);
   const [editAllowDownload, setEditAllowDownload] = useState(true);
   const [editAllowLikes, setEditAllowLikes] = useState(true);
@@ -444,6 +506,22 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
         );
         return;
       }
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+        previewAudioRef.current.removeAttribute('src');
+        previewAudioRef.current.load();
+      }
+      if (audioFileInputRef.current) audioFileInputRef.current.value = '';
+      setSelectedVideoFile(null);
+      setVideoPreviewUrl('');
+      setVideoPreviewError(false);
+      setSelectedPhotos([]);
+      setStudioPhotoPreviewIdx(0);
+      setSelectedAudioFile(null);
+      setReusedAudioUrl('');
+      setAudioPreviewUrl('');
+      setAudioPreviewPlaying(false);
+      setSoundInput('');
       setUploadOpen(true);
     }
   }, [uploadModalSignal, user, isSuspended, isAdmin, onSignIn, onToast, tr]);
@@ -464,6 +542,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     if (!activeSettingsVideo) return;
     setEditCaption(activeSettingsVideo.caption || '');
     setEditSoundName(activeSettingsVideo.soundName || '');
+    setEditRemoveAudio(false);
     setEditAllowComments(activeSettingsVideo.allowComments !== false);
     setEditAllowDownload(activeSettingsVideo.allowDownload !== false);
     setEditAllowLikes(activeSettingsVideo.allowLikes !== false);
@@ -657,13 +736,61 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     setSettingsVideoId(null);
   }, []);
 
-  const tryPlayMediaElement = useCallback(async (el: HTMLMediaElement, videoId: string) => {
+  const tryPlayMediaElement = useCallback(async (el: HTMLMediaElement, videoId: string, retryDepth = 0) => {
     if (pausedByTapRef.current) return;
+    if (!el.paused && !el.ended && el.readyState >= 2) {
+      setStalledPlayPromptId((curr) => (curr === videoId ? null : curr));
+      setBufferingVideoId((curr) => (curr === videoId ? null : curr));
+      return;
+    }
+    if (el.error || el.networkState === 3) {
+      el.load();
+    }
     try {
       await el.play();
       setStalledPlayPromptId((curr) => (curr === videoId ? null : curr));
-    } catch {
-      // Never force-mute automatically; only show play prompt so a user tap plays with sound
+      setBufferingVideoId((curr) => (curr === videoId ? null : curr));
+    } catch (err) {
+      const errName = err instanceof Error ? err.name : '';
+      if (errName === 'AbortError') {
+        if (retryDepth < 2) {
+          window.setTimeout(() => {
+            if (!pausedByTapRef.current && videoRefs.current[videoId] === el) {
+              void tryPlayMediaElement(el, videoId, retryDepth + 1);
+            }
+          }, 120);
+        }
+        return;
+      }
+
+      // If browser blocked unmuted autoplay on initial load, start muted right away so video moves instead of freezing like a photo, and prompt 1 tap for sound
+      if (!el.muted) {
+        el.muted = true;
+        if (!mutedRef.current) {
+          needsSoundTapPromptRef.current = true;
+          setNeedsSoundTapPrompt(true);
+        }
+        try {
+          await el.play();
+          setBufferingVideoId((curr) => (curr === videoId ? null : curr));
+          setStalledPlayPromptId((curr) => (curr === videoId ? null : curr));
+          return;
+        } catch (mutedErr) {
+          const mutedErrName = mutedErr instanceof Error ? mutedErr.name : '';
+          if (mutedErrName === 'AbortError') {
+            if (retryDepth < 2) {
+              window.setTimeout(() => {
+                if (!pausedByTapRef.current && videoRefs.current[videoId] === el) {
+                  void tryPlayMediaElement(el, videoId, retryDepth + 1);
+                }
+              }, 120);
+            }
+            return;
+          }
+        }
+      }
+
+      setBufferingVideoId((curr) => (curr === videoId ? null : curr));
       setStalledPlayPromptId(videoId);
     }
   }, []);
@@ -729,6 +856,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     (explicitNext?: boolean) => {
       const next = typeof explicitNext === 'boolean' ? explicitNext : !dataSaverMode;
       setDataSaverMode(next);
+      setTranscodeToggledVideoIds({});
       try {
         window.localStorage.setItem(DATA_SAVER_VIDEO_KEY, String(next));
       } catch {
@@ -891,7 +1019,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     Object.entries(videoRefs.current).forEach(([vidId, el]) => {
       if (!el) return;
       if (vidId === activeVideoId) {
-        el.muted = muted || Boolean(activePost?.audioUrl);
+        el.muted = muted || needsSoundTapPromptRef.current || Boolean(activePost?.audioUrl);
         el.playbackRate = playbackSpeed;
         if (!pausedByTap && !uploadOpen && !settingsOpen) {
           void tryPlayMediaElement(el, vidId);
@@ -906,7 +1034,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     Object.entries(audioRefs.current).forEach(([vidId, el]) => {
       if (!el) return;
       if (vidId === activeVideoId) {
-        el.muted = muted;
+        el.muted = muted || needsSoundTapPromptRef.current;
         el.playbackRate = playbackSpeed;
         if (!pausedByTap && !uploadOpen && !settingsOpen) {
           void tryPlayMediaElement(el, vidId);
@@ -927,35 +1055,119 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     playbackSpeed,
     dataSaverMode,
     transcodeToggledVideoIds,
+    hevcForceH264Ids,
     tryPlayMediaElement,
   ]);
 
-  // Release inactive slide media streams & clear any pending outro timer when switching activeVideoId
+  // First tap or key press anywhere automatically restores full sound when browser blocked initial unmuted autoplay
+  useEffect(() => {
+    if (!needsSoundTapPrompt || muted || !activeVideoId) return;
+    const unlockSoundOnGesture = () => {
+      soundUnlockedOnPointerDownRef.current = true;
+      window.setTimeout(() => {
+        soundUnlockedOnPointerDownRef.current = false;
+      }, 350);
+      setNeedsSoundTapPrompt(false);
+      const vidEl = videoRefs.current[activeVideoId];
+      const audEl = audioRefs.current[activeVideoId];
+      if (vidEl) {
+        vidEl.muted = Boolean(activePost?.audioUrl);
+        if (vidEl.paused && !pausedByTapRef.current) {
+          void vidEl.play().catch(() => {});
+        }
+      }
+      if (audEl) {
+        audEl.muted = false;
+        if (audEl.paused && !pausedByTapRef.current) {
+          void audEl.play().catch(() => {});
+        }
+      }
+    };
+
+    window.addEventListener('pointerdown', unlockSoundOnGesture, { capture: true, once: true });
+    window.addEventListener('keydown', unlockSoundOnGesture, { capture: true, once: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlockSoundOnGesture, true);
+      window.removeEventListener('keydown', unlockSoundOnGesture, true);
+    };
+  }, [needsSoundTapPrompt, muted, activeVideoId, activePost?.audioUrl]);
+
+  // Pause inactive slide media streams & clear any pending outro timer when switching activeVideoId
   useEffect(() => {
     if (outroTimerRef.current) {
       window.clearTimeout(outroTimerRef.current);
       outroTimerRef.current = null;
     }
     setEndedOutroVideoId(null);
-    return () => {
-      if (outroTimerRef.current) {
-        window.clearTimeout(outroTimerRef.current);
-        outroTimerRef.current = null;
-      }
-      Object.entries(videoRefs.current).forEach(([vidId, el]) => {
-        if (vidId !== activeVideoId || !el) return;
-        el.pause();
-        el.removeAttribute('src');
-        el.load();
-      });
-      Object.entries(audioRefs.current).forEach(([vidId, el]) => {
-        if (vidId !== activeVideoId || !el) return;
-        el.pause();
-        el.removeAttribute('src');
-        el.load();
-      });
-    };
+
+    // Pause any non-active video/audio elements without touching the newly active slide's src
+    Object.entries(videoRefs.current).forEach(([vidId, el]) => {
+      if (vidId === activeVideoId || !el) return;
+      el.pause();
+    });
+    Object.entries(audioRefs.current).forEach(([vidId, el]) => {
+      if (vidId === activeVideoId || !el) return;
+      el.pause();
+      el.currentTime = 0;
+    });
   }, [activeVideoId]);
+
+  // Progress watchdog: if an active video is frozen at 0:00 (e.g., uncached 200 accept-ranges:none transcode or HEVC hvc1 codec), fall back automatically to fast 206 stream or H.264
+  useEffect(() => {
+    if (!activePost || activePost.mediaType === 'photo' || pausedByTap || uploadOpen || settingsOpen) {
+      return;
+    }
+    const vidId = activePost.id;
+    const rawUrl = activePost.videoUrl || '';
+    const elStart = videoRefs.current[vidId];
+    const startTime = elStart?.currentTime || 0;
+
+    const timer = window.setTimeout(() => {
+      const el = videoRefs.current[vidId];
+      if (!el || pausedByTapRef.current) return;
+
+      const progressed = el.currentTime - startTime > 0.08 || (el.readyState >= 3 && !el.paused);
+      const hasZeroVideoDimensions = el.duration > 0 && el.videoWidth === 0 && el.videoHeight === 0;
+
+      if (progressed && !hasZeroVideoDimensions) {
+        setBufferingVideoId((curr) => (curr === vidId ? null : curr));
+        return;
+      }
+
+      if (hasZeroVideoDimensions && !hevcForceH264Ids[vidId]) {
+        setHevcForceH264Ids((prev) => ({ ...prev, [vidId]: true }));
+        return;
+      }
+
+      if (dataSaverMode && !transcodeToggledVideoIds[vidId] && !needsBrowserVideoTranscode(rawUrl)) {
+        const ecoUrl = optimizeCloudinaryVideoPlaybackUrl(rawUrl, { dataSaver: true });
+        prewarmCloudinaryVideoUrl(ecoUrl);
+        setTranscodeToggledVideoIds((prev) => ({ ...prev, [vidId]: true }));
+        return;
+      }
+
+      if (!hevcForceH264Ids[vidId]) {
+        setHevcForceH264Ids((prev) => ({ ...prev, [vidId]: true }));
+        return;
+      }
+
+      // Already exhausted fallbacks — try explicit play or show subtle tap-to-play overlay
+      if (el.paused) {
+        void tryPlayMediaElement(el, vidId);
+      }
+    }, 2200);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    activePost,
+    pausedByTap,
+    uploadOpen,
+    settingsOpen,
+    dataSaverMode,
+    transcodeToggledVideoIds,
+    hevcForceH264Ids,
+    tryPlayMediaElement,
+  ]);
 
   // Auto-advance slides for Photo Carousel posts (or single-photo posts when Auto-Next is ON)
   useEffect(() => {
@@ -1175,9 +1387,16 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
           if (vidEl) vidEl.currentTime = 0;
         }
         setStalledPlayPromptId(null);
+        setNeedsSoundTapPrompt(false);
         if (vidEl) {
+          if (vidEl.error || vidEl.networkState === 3) {
+            vidEl.load();
+          }
           vidEl.muted = muted || Boolean(vid.audioUrl);
-          void vidEl.play().catch(() => {});
+          void vidEl.play().catch((err) => {
+            if (err instanceof Error && err.name === 'AbortError') return;
+            setStalledPlayPromptId(vid.id);
+          });
         }
         if (audEl) {
           audEl.muted = muted;
@@ -1265,6 +1484,12 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
         return;
       }
 
+      // If user just tapped to unlock sound from the muted autoplay fallback, keep video playing!
+      if (soundUnlockedOnPointerDownRef.current) {
+        soundUnlockedOnPointerDownRef.current = false;
+        return;
+      }
+
       // Resume immediately if stalled or paused or outro showing (never force-mute!)
       if (vidEl && (vidEl.paused || pausedByTapRef.current || endedOutroVideoId === video.id)) {
         if (singleTapTimerRef.current) {
@@ -1279,9 +1504,13 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
           setEndedOutroVideoId(null);
           vidEl.currentTime = 0;
         }
+        if (vidEl.error || vidEl.networkState === 3) {
+          vidEl.load();
+        }
         pausedByTapRef.current = false;
         setPausedByTap(false);
         setStalledPlayPromptId(null);
+        setNeedsSoundTapPrompt(false);
         vidEl.muted = muted || Boolean(video.audioUrl);
         void vidEl.play().catch(() => {});
         if (audEl) {
@@ -1508,6 +1737,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
               outroPublicId: outroPid,
               durationSec: measuredDuration,
               outroMode: 'splice',
+              dataSaver: dataSaverMode,
             })
           : '',
         logoPid && measuredDuration >= 3
@@ -1515,14 +1745,17 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
               logoPublicId: logoPid,
               durationSec: measuredDuration,
               outroMode: 'endOverlay',
+              dataSaver: dataSaverMode,
             })
           : '',
         buildWatermarkedVideoDownloadUrl(video.videoUrl, video.authorName, {
           logoPublicId: logoPid,
           outroMode: 'watermarkOnly',
+          dataSaver: dataSaverMode,
         }),
         buildWatermarkedVideoDownloadUrl(video.videoUrl, video.authorName, {
           outroMode: 'watermarkOnly',
+          dataSaver: dataSaverMode,
         }),
       ].filter((u, idx, arr) => Boolean(u) && arr.indexOf(u) === idx);
 
@@ -1563,11 +1796,17 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
         a.remove();
       }
 
+      const dlMb = chosenBlob ? `${(chosenBlob.size / (1024 * 1024)).toFixed(1)} MB` : '';
       onToast(
-        tr(
-          'Video imepakuliwa na watermark ya @malosha forums & lebo ya mwisho!',
-          'Video downloaded with @malosha forums watermark & outro label!'
-        )
+        dlMb
+          ? tr(
+              `Video imepakuliwa (${dlMb}) ikiwa na ubora mzuri, logo ya @malosha forums & lebo ya mwisho!`,
+              `Downloaded (${dlMb}) in compact HD with @malosha forums watermark & end label!`
+            )
+          : tr(
+              'Video imepakuliwa ikiwa na ubora mzuri, watermark ya @malosha forums & lebo ya mwisho!',
+              'Video downloaded in compact HD with @malosha forums watermark & outro label!'
+            )
       );
     } catch (err) {
       onToast(
@@ -1698,9 +1937,17 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
 
     setSavingSettings(true);
     try {
+      const nextSoundName = editRemoveAudio
+        ? editSoundName.trim() === activeSettingsVideo.soundName
+          ? activeSettingsVideo.mediaType === 'photo'
+            ? `Picha - ${activeSettingsVideo.authorName}`
+            : `Sauti Halisi - ${activeSettingsVideo.authorName}`
+          : editSoundName.trim() || `Sauti Halisi - ${activeSettingsVideo.authorName}`
+        : editSoundName;
       await updateVideoSettings(activeSettingsVideo.id, {
         caption: editCaption,
-        soundName: editSoundName,
+        soundName: nextSoundName,
+        ...(editRemoveAudio ? { audioUrl: '' } : {}),
         isArchived: editIsPrivate,
         allowComments: editAllowComments,
         allowDownload: editAllowDownload,
@@ -1829,14 +2076,22 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
   };
 
   const handleClearSelectedAudio = () => {
-    if (previewAudioRef.current) previewAudioRef.current.pause();
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current.removeAttribute('src');
+      previewAudioRef.current.load();
+    }
     if (audioPreviewUrl && audioPreviewUrl.startsWith('blob:')) {
       URL.revokeObjectURL(audioPreviewUrl);
+    }
+    if (audioFileInputRef.current) {
+      audioFileInputRef.current.value = '';
     }
     setSelectedAudioFile(null);
     setReusedAudioUrl('');
     setAudioPreviewUrl('');
     setAudioPreviewPlaying(false);
+    setSoundInput('');
   };
 
   const toggleStudioAudioPreview = () => {
@@ -1875,14 +2130,20 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     setUploadOpen(true);
   };
 
-  const closeUploadModal = () => {
-    if (uploading) return;
-    if (previewAudioRef.current) previewAudioRef.current.pause();
+  const resetStudioUploadState = () => {
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current.removeAttribute('src');
+      previewAudioRef.current.load();
+    }
     if (videoPreviewUrl) URL.revokeObjectURL(videoPreviewUrl);
     selectedPhotos.forEach((p) => URL.revokeObjectURL(p.previewUrl));
     if (audioPreviewUrl && audioPreviewUrl.startsWith('blob:')) {
       URL.revokeObjectURL(audioPreviewUrl);
     }
+    if (videoFileInputRef.current) videoFileInputRef.current.value = '';
+    if (photoFilesInputRef.current) photoFilesInputRef.current.value = '';
+    if (audioFileInputRef.current) audioFileInputRef.current.value = '';
     setSelectedVideoFile(null);
     setVideoPreviewUrl('');
     setVideoPreviewError(false);
@@ -1898,6 +2159,11 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
     setTagsInput('');
     setUploadPct(0);
     setUploadStageLabel('');
+  };
+
+  const closeUploadModal = () => {
+    if (uploading) return;
+    resetStudioUploadState();
     setUploadOpen(false);
   };
 
@@ -2106,6 +2372,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                   onToast(tr('Akaunti yako imefungwa.', 'Your account is closed.'), 'error');
                   return;
                 }
+                resetStudioUploadState();
                 setUploadOpen(true);
               }}
               title={tr('Pakia video au picha', 'Upload video or photo')}
@@ -2116,7 +2383,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
             </button>
           </div>
 
-          <div className="pointer-events-auto flex min-w-0 flex-1 items-center justify-center gap-3.5 overflow-x-auto px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="pointer-events-auto flex min-w-0 flex-1 items-center justify-start gap-2.5 overflow-x-auto px-1 sm:justify-center sm:gap-3.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {(
               [
                 { id: 'mix', label: tr('Mix', 'Mix') },
@@ -2155,8 +2422,8 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                     setActiveIndex(0);
                     feedScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
                   }}
-                  className={`relative flex flex-col items-center py-1 text-[13px] whitespace-nowrap drop-shadow transition-colors sm:text-sm ${
-                    active ? 'font-extrabold text-white' : 'font-semibold text-white/60 hover:text-white/90'
+                  className={`relative flex shrink-0 flex-col items-center py-1 text-[12px] whitespace-nowrap drop-shadow transition-colors sm:text-sm ${
+                    active ? 'font-extrabold text-white' : 'font-semibold text-white/65 hover:text-white/90'
                   }`}
                 >
                   <span className="relative inline-flex items-center">
@@ -2178,7 +2445,37 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
             })}
           </div>
 
-          <div className="pointer-events-auto flex shrink-0 items-center gap-2">
+          <div className="pointer-events-auto flex shrink-0 items-center gap-1 sm:gap-1.5">
+            <button
+              type="button"
+              onClick={() => handleToggleDataSaver()}
+              title={
+                dataSaverMode
+                  ? tr('Okoa MB Imewashwa — Gusa kuweka HD', 'Data Saver ON — Tap for HD')
+                  : tr('Ubora wa HD — Gusa Kuokoa MB', 'HD Quality — Tap to Save MBs')
+              }
+              aria-label={
+                dataSaverMode
+                  ? tr('Okoa MB Imewashwa', 'Data Saver ON')
+                  : tr('Okoa MB Imezimwa', 'Data Saver OFF')
+              }
+              className="relative flex h-8 w-8 items-center justify-center drop-shadow transition-transform active:scale-90"
+            >
+              <Wifi
+                className={`h-4.5 w-4.5 ${
+                  dataSaverMode ? 'text-emerald-400' : 'text-white/80 hover:text-white'
+                }`}
+                aria-hidden="true"
+              />
+              <span
+                className={`absolute right-0.5 bottom-0.5 text-[7px] leading-none font-black ${
+                  dataSaverMode ? 'text-emerald-300' : 'text-white/75'
+                }`}
+              >
+                {dataSaverMode ? 'MB' : 'HD'}
+              </span>
+            </button>
+
             {activePost && !(activePost.mediaType === 'photo' && !activePost.audioUrl) && (
               <>
                 <button
@@ -2197,7 +2494,15 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => setMuted((m) => !m)}
+                  onClick={() => {
+                    const nextMuted = !muted;
+                    setMuted(nextMuted);
+                    setNeedsSoundTapPrompt(false);
+                    const vidEl = videoRefs.current[activePost.id];
+                    const audEl = audioRefs.current[activePost.id];
+                    if (vidEl) vidEl.muted = nextMuted || Boolean(activePost.audioUrl);
+                    if (audEl) audEl.muted = nextMuted;
+                  }}
                   title={muted ? tr('Washa Sauti', 'Unmute') : tr('Zima Sauti', 'Mute')}
                   aria-label={muted ? tr('Washa Sauti', 'Unmute') : tr('Zima Sauti', 'Mute')}
                   className="flex h-8 w-8 items-center justify-center drop-shadow transition-transform active:scale-90"
@@ -2311,6 +2616,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                   onSignIn();
                   return;
                 }
+                resetStudioUploadState();
                 setUploadOpen(true);
               }}
               className="inline-flex min-h-[44px] items-center gap-2 rounded-full bg-gradient-to-r from-[#FE2C55] to-[#E11D48] px-6 py-2.5 text-sm font-extrabold text-white shadow-lg transition-transform hover:scale-105"
@@ -2369,9 +2675,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
             return (
               <div
                 key={video.id}
-                ref={(el) => {
-                  slideRefs.current[video.id] = el;
-                }}
+                ref={getSlideRefCallback(video.id)}
                 data-video-id={video.id}
                 className="relative flex h-full w-full snap-start snap-always items-center justify-center overflow-hidden bg-black"
               >
@@ -2452,10 +2756,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                       {video.audioUrl && (
                         <audio
                           key={`audio-${video.id}`}
-                          ref={(el) => {
-                            if (el) audioRefs.current[video.id] = el;
-                            else delete audioRefs.current[video.id];
-                          }}
+                          ref={getAudioRefCallback(video.id)}
                           src={video.audioUrl}
                           autoPlay={!pausedByTap && !uploadOpen}
                           loop
@@ -2517,44 +2818,64 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                   ) : (
                     <>
                       {(() => {
-                        const preferTranscodeFirst = dataSaverMode || needsBrowserVideoTranscode(video.videoUrl);
-                        const useTranscodedUrl = transcodeToggledVideoIds[video.id]
-                          ? !preferTranscodeFirst
-                          : preferTranscodeFirst;
-                        const playableVideoUrl = useTranscodedUrl
+                        const forceH264 = Boolean(hevcForceH264Ids[video.id]);
+                        const useOptimizedStream =
+                          forceH264 ||
+                          ((dataSaverMode || needsBrowserVideoTranscode(video.videoUrl)) &&
+                            !transcodeToggledVideoIds[video.id]);
+                        const fallbackStreamUrl = needsBrowserVideoTranscode(video.videoUrl)
                           ? optimizeCloudinaryVideoPlaybackUrl(video.videoUrl, {
-                              dataSaver: dataSaverMode,
+                              dataSaver: false,
+                              forceH264: true,
                             })
                           : video.videoUrl;
+                        const playableVideoUrl = useOptimizedStream
+                          ? optimizeCloudinaryVideoPlaybackUrl(video.videoUrl, {
+                              dataSaver: dataSaverMode,
+                              forceH264,
+                            })
+                          : fallbackStreamUrl;
                         return (
                           <video
-                            key={`${video.id}-${useTranscodedUrl ? (dataSaverMode ? 'eco' : 'opt') : 'raw'}`}
-                            ref={(el) => {
-                              if (el) videoRefs.current[video.id] = el;
-                              else delete videoRefs.current[video.id];
-                            }}
+                            key={`${video.id}-${forceH264 ? 'h264' : useOptimizedStream ? (dataSaverMode ? 'eco' : 'opt') : 'raw'}`}
+                            ref={getVideoRefCallback(video.id)}
                             src={playableVideoUrl}
                             poster={video.thumbnailUrl || undefined}
                             autoPlay={!pausedByTap && !uploadOpen && !settingsOpen}
                             playsInline
                             loop={false}
-                            preload={dataSaverMode ? 'metadata' : 'auto'}
-                            muted={muted || Boolean(video.audioUrl)}
-                            onLoadStart={() => setBufferingVideoId(video.id)}
+                            preload="auto"
+                            muted={muted || needsSoundTapPrompt || Boolean(video.audioUrl)}
+                            onLoadStart={() => {
+                              if (isActive && !pausedByTapRef.current) {
+                                setBufferingVideoId(video.id);
+                              }
+                            }}
+                            onLoadedMetadata={(e) => {
+                              const el = e.currentTarget;
+                              if (el.duration > 0 && el.videoWidth === 0 && el.videoHeight === 0 && !hevcForceH264Ids[video.id]) {
+                                setHevcForceH264Ids((prev) => ({ ...prev, [video.id]: true }));
+                                return;
+                              }
+                              setBufferingVideoId((curr) => (curr === video.id ? null : curr));
+                            }}
                             onLoadedData={(e) => {
                               setBufferingVideoId((curr) => (curr === video.id ? null : curr));
-                              if (isActive && !pausedByTapRef.current && !uploadOpen && !settingsOpen) {
+                              if (isActive && e.currentTarget.paused && !pausedByTapRef.current && !uploadOpen && !settingsOpen) {
                                 void tryPlayMediaElement(e.currentTarget, video.id);
                               }
                             }}
                             onCanPlay={(e) => {
                               setBufferingVideoId((curr) => (curr === video.id ? null : curr));
-                              if (isActive && !pausedByTapRef.current && !uploadOpen && !settingsOpen) {
+                              if (isActive && e.currentTarget.paused && !pausedByTapRef.current && !uploadOpen && !settingsOpen) {
                                 void tryPlayMediaElement(e.currentTarget, video.id);
                               }
                             }}
+                            onCanPlayThrough={() => {
+                              setBufferingVideoId((curr) => (curr === video.id ? null : curr));
+                            }}
                             onWaiting={() => {
-                              if (isActive && !pausedByTap) setBufferingVideoId(video.id);
+                              if (isActive && !pausedByTapRef.current) setBufferingVideoId(video.id);
                             }}
                             onPlaying={() => {
                               setBufferingVideoId((curr) => (curr === video.id ? null : curr));
@@ -2562,16 +2883,13 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                               setEndedOutroVideoId((curr) => (curr === video.id ? null : curr));
                             }}
                             onError={() => {
-                              const altUrl = useTranscodedUrl
-                                ? video.videoUrl
-                                : optimizeCloudinaryVideoPlaybackUrl(video.videoUrl, {
-                                    dataSaver: dataSaverMode,
-                                  });
-                              if (!transcodeToggledVideoIds[video.id] && altUrl !== playableVideoUrl) {
+                              if (!transcodeToggledVideoIds[video.id] && fallbackStreamUrl !== playableVideoUrl) {
                                 setTranscodeToggledVideoIds((prev) => ({
                                   ...prev,
                                   [video.id]: true,
                                 }));
+                              } else if (!hevcForceH264Ids[video.id]) {
+                                setHevcForceH264Ids((prev) => ({ ...prev, [video.id]: true }));
                               } else {
                                 setBufferingVideoId((curr) => (curr === video.id ? null : curr));
                                 setStalledPlayPromptId(video.id);
@@ -2602,6 +2920,9 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                             }}
                             onTimeUpdate={(e) => {
                               const el = e.currentTarget;
+                              if ((!el.paused && el.readyState >= 2) || el.currentTime > 0.05) {
+                                setBufferingVideoId((curr) => (curr === video.id ? null : curr));
+                              }
                               setProgressById((prev) => ({
                                 ...prev,
                                 [video.id]: {
@@ -2621,10 +2942,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                       {video.audioUrl && (
                         <audio
                           key={`audio-${video.id}`}
-                          ref={(el) => {
-                            if (el) audioRefs.current[video.id] = el;
-                            else delete audioRefs.current[video.id];
-                          }}
+                          ref={getAudioRefCallback(video.id)}
                           src={video.audioUrl}
                           autoPlay={!pausedByTap && !uploadOpen && !settingsOpen}
                           loop
@@ -2716,6 +3034,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
+                        setNeedsSoundTapPrompt(false);
                         if (pausedByTapRef.current) {
                           handleTogglePlayPause(video);
                         } else {
@@ -2723,6 +3042,9 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                           const audEl = audioRefs.current[video.id];
                           setStalledPlayPromptId(null);
                           if (vidEl) {
+                            if (vidEl.error || vidEl.networkState === 3) {
+                              vidEl.load();
+                            }
                             vidEl.muted = muted || Boolean(video.audioUrl);
                             void vidEl.play().catch(() => {});
                           }
@@ -2738,6 +3060,36 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                       <Play className="ml-1 h-14 w-14 fill-white/80 text-white/80 drop-shadow-[0_4px_16px_rgba(0,0,0,0.75)] transition-transform active:scale-95" aria-hidden="true" />
                     </button>
                   )}
+
+                  {/* Quick One-Tap Sound Unlock Banner When Browser Autoplay Policy Blocked Initial Sound */}
+                  {isActive &&
+                    !isSilentPhoto &&
+                    needsSoundTapPrompt &&
+                    !muted &&
+                    !pausedByTap &&
+                    endedOutroVideoId !== video.id && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setNeedsSoundTapPrompt(false);
+                          const vidEl = videoRefs.current[video.id];
+                          const audEl = audioRefs.current[video.id];
+                          if (vidEl) {
+                            vidEl.muted = Boolean(video.audioUrl);
+                            if (vidEl.paused) void vidEl.play().catch(() => {});
+                          }
+                          if (audEl) {
+                            audEl.muted = false;
+                            if (audEl.paused) void audEl.play().catch(() => {});
+                          }
+                        }}
+                        className="absolute top-16 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-md bg-black/75 px-3 py-1.5 text-[11px] font-bold text-white shadow-lg ring-1 ring-white/25 backdrop-blur-md transition-transform hover:scale-105 active:scale-95"
+                      >
+                        <Volume2 className="h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />
+                        <span>{tr('Gusa popote kuwasha sauti', 'Tap anywhere for sound')}</span>
+                      </button>
+                    )}
 
                   {/* Double-Tap Heart Animation */}
                   {heartBurst && heartBurst.id === video.id && (
@@ -3756,6 +4108,37 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                     />
                   </div>
 
+                  {activeSettingsVideo.audioUrl && (
+                    <div className="flex items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50/75 px-3 py-2.5">
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-slate-900">
+                          {editRemoveAudio
+                            ? tr('Muziki wa ziada utaondolewa ukihifadhi', 'Attached music will be removed on save')
+                            : tr('Chapisho hili lina muziki ulioambatanishwa', 'This post has attached music')}
+                        </p>
+                        <p className="truncate text-[11px] text-slate-600">
+                          {activeSettingsVideo.soundName}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setEditRemoveAudio((r) => !r)}
+                        className={`inline-flex min-h-[34px] shrink-0 items-center gap-1 rounded-lg px-3 text-xs font-bold ${
+                          editRemoveAudio
+                            ? 'bg-slate-200 text-slate-800 hover:bg-slate-300'
+                            : 'bg-red-600 text-white hover:bg-red-700'
+                        }`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>
+                          {editRemoveAudio
+                            ? tr('Rejesha', 'Undo')
+                            : tr('Ondoa Muziki', 'Remove Music')}
+                        </span>
+                      </button>
+                    </div>
+                  )}
+
                   <div className="space-y-2.5 divide-y divide-slate-200/70 rounded-xl bg-white p-3 ring-1 ring-slate-200">
                     <label className="flex cursor-pointer items-center justify-between pt-0.5">
                       <span className="text-xs font-bold text-slate-800">
@@ -4148,6 +4531,19 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                         </p>
                       </div>
                     )}
+                    {selectedVideoFile && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 bg-slate-950/90 px-3 py-2 text-[11px] text-slate-300">
+                        <span className="font-semibold text-white">
+                          {(selectedVideoFile.size / (1024 * 1024)).toFixed(2)} MB
+                        </span>
+                        <span className="text-emerald-300">
+                          {tr(
+                            'Itabanwa kiotomatiki kuokoa MB bila kupoteza ubora',
+                            'Auto-optimized to save MBs without losing quality'
+                          )}
+                        </span>
+                      </div>
+                    )}
                     {!uploading && (
                       <button
                         type="button"
@@ -4268,91 +4664,123 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                 </div>
               )}
 
-              {/* Attach Music / Audio Section */}
+              {/* Attach Music / Audio Section (Scoped Strictly to This Post Only) */}
               <div className="space-y-2.5 rounded-xl border border-slate-200 bg-slate-50 p-3.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Music2 className="h-4 w-4 text-[#FE2C55]" aria-hidden="true" />
-                    <span className="text-xs font-extrabold text-slate-900">
-                      {tr('Ambatanisha Muziki / Sauti (Si lazima)', 'Attach Music / Sound (Optional)')}
-                    </span>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <Music2 className="h-4 w-4 shrink-0 text-[#FE2C55]" aria-hidden="true" />
+                      <span className="text-xs font-extrabold text-slate-900">
+                        {tr('Muziki / Sauti ya Chapisho Hili (Si lazima)', 'Post Music / Sound (Optional)')}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-[10.5px] text-slate-500">
+                      {tr(
+                        'Muziki utakaouchagua hapa utatumika kwenye chapisho hili pekee.',
+                        'Music attached here plays only on this post.'
+                      )}
+                    </p>
                   </div>
                   <button
                     type="button"
                     disabled={uploading}
                     onClick={() => audioFileInputRef.current?.click()}
-                    className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg bg-[#0E2640] px-3 text-[11px] font-bold text-white hover:bg-[#1D4E89] disabled:opacity-50"
+                    className="inline-flex min-h-[34px] shrink-0 items-center gap-1.5 rounded-lg bg-[#0E2640] px-3 text-[11px] font-bold text-white hover:bg-[#1D4E89] disabled:opacity-50"
                   >
                     <Upload className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>{tr('Pakia MP3/Sauti', 'Upload Audio')}</span>
+                    <span>
+                      {audioPreviewUrl
+                        ? tr('Badilisha Muziki', 'Change Audio')
+                        : tr('Pakia MP3/Sauti', 'Upload Audio')}
+                    </span>
                   </button>
                 </div>
 
                 {audioPreviewUrl ? (
-                  <div className="flex items-center justify-between gap-2 rounded-xl bg-white p-2.5 ring-1 ring-slate-200">
-                    <audio
-                      ref={previewAudioRef}
-                      src={audioPreviewUrl}
-                      onEnded={() => setAudioPreviewPlaying(false)}
-                      className="sr-only"
-                    />
-                    <button
-                      type="button"
-                      onClick={toggleStudioAudioPreview}
-                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#FE2C55] text-white"
-                      aria-label={audioPreviewPlaying ? tr('Simamisha', 'Pause') : tr('Cheza', 'Play')}
-                    >
-                      {audioPreviewPlaying ? (
-                        <Pause className="h-4 w-4" aria-hidden="true" />
-                      ) : (
-                        <Play className="ml-0.5 h-4 w-4" aria-hidden="true" />
-                      )}
-                    </button>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs font-bold text-slate-900">
-                        {selectedAudioFile?.name || soundInput || tr('Sauti Iliyochaguliwa', 'Selected Audio')}
-                      </p>
-                      <p className="text-[10.5px] text-emerald-700">
-                        {tr('Tayari kucheza kwenye chapisho', 'Ready to play on post')}
-                      </p>
-                    </div>
-                    {!uploading && (
+                  <div className="space-y-2 rounded-xl bg-white p-2.5 ring-1 ring-emerald-200">
+                    <div className="flex items-center justify-between gap-2">
+                      <audio
+                        ref={previewAudioRef}
+                        src={audioPreviewUrl}
+                        onEnded={() => setAudioPreviewPlaying(false)}
+                        className="sr-only"
+                      />
                       <button
                         type="button"
-                        onClick={handleClearSelectedAudio}
-                        aria-label={tr('Ondoa muziki', 'Remove audio')}
-                        className="flex h-8 w-8 items-center justify-center rounded-full text-slate-400 hover:bg-red-50 hover:text-red-600"
+                        onClick={toggleStudioAudioPreview}
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#FE2C55] text-white"
+                        aria-label={audioPreviewPlaying ? tr('Simamisha', 'Pause') : tr('Cheza', 'Play')}
                       >
-                        <X className="h-4 w-4" aria-hidden="true" />
+                        {audioPreviewPlaying ? (
+                          <Pause className="h-4 w-4" aria-hidden="true" />
+                        ) : (
+                          <Play className="ml-0.5 h-4 w-4" aria-hidden="true" />
+                        )}
                       </button>
-                    )}
-                  </div>
-                ) : reusableCommunityTracks.length > 0 ? (
-                  <div className="space-y-1.5">
-                    <p className="text-[11px] font-medium text-slate-500">
-                      {tr('Au chagua wimbo uliotumiwa kwenye Malosha Reels:', 'Or pick a sound from feed:')}
-                    </p>
-                    <div className="flex gap-1.5 overflow-x-auto pb-1">
-                      {reusableCommunityTracks.map((track) => (
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs font-bold text-slate-900">
+                          {selectedAudioFile?.name || soundInput || tr('Sauti Iliyochaguliwa', 'Selected Audio')}
+                        </p>
+                        <p className="text-[10.5px] font-semibold text-emerald-700">
+                          {tr('Imeambatanishwa kwa chapisho hili pekee', 'Attached to this post only')}
+                        </p>
+                      </div>
+                      {!uploading && (
                         <button
-                          key={track.audioUrl}
                           type="button"
-                          onClick={() => handleSelectReusableTrack(track)}
-                          className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 ring-1 ring-slate-200 hover:border-[#FE2C55] hover:text-[#FE2C55]"
+                          onClick={handleClearSelectedAudio}
+                          aria-label={tr('Ondoa muziki', 'Remove music')}
+                          className="inline-flex min-h-[34px] shrink-0 items-center gap-1 rounded-lg bg-red-50 px-2.5 text-[11px] font-bold text-red-700 ring-1 ring-red-200 hover:bg-red-100"
                         >
-                          <Disc3 className="h-3.5 w-3.5 text-[#FE2C55]" aria-hidden="true" />
-                          <span className="max-w-[140px] truncate">{track.soundName}</span>
+                          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                          <span>{tr('Ondoa Muziki', 'Remove')}</span>
                         </button>
-                      ))}
+                      )}
                     </div>
                   </div>
                 ) : (
-                  <p className="text-[11px] text-slate-500">
-                    {tr(
-                      'Chagua wimbo (MP3, M4A, WAV, AAC) kutoka kwenye simu yako uambatanishe na picha au video.',
-                      'Select an MP3, M4A, WAV, or AAC audio file from your device.'
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between rounded-lg bg-white px-3 py-2 text-[11px] text-slate-600 ring-1 ring-slate-200">
+                      <span>
+                        {uploadMediaType === 'video'
+                          ? tr('Hakuna muziki wa ziada — video itacheza na sauti yake halisi.', 'No extra music — video keeps its original audio.')
+                          : tr('Hakuna muziki ulioambatanishwa (picha pekee).', 'No music attached (silent photos).')}
+                      </span>
+                      {soundInput.trim() && !uploading && (
+                        <button
+                          type="button"
+                          onClick={handleClearSelectedAudio}
+                          className="ml-2 shrink-0 font-bold text-red-600 hover:underline"
+                        >
+                          {tr('Futa Jina', 'Clear')}
+                        </button>
+                      )}
+                    </div>
+
+                    {reusableCommunityTracks.length > 0 && (
+                      <div className="space-y-1.5">
+                        <p className="text-[11px] font-medium text-slate-500">
+                          {tr(
+                            'Au chagua wimbo hapa chini ukiutaka (si lazima):',
+                            'Or tap a sound below if you want to reuse it (optional):'
+                          )}
+                        </p>
+                        <div className="flex gap-1.5 overflow-x-auto pb-1">
+                          {reusableCommunityTracks.map((track) => (
+                            <button
+                              key={track.audioUrl}
+                              type="button"
+                              onClick={() => handleSelectReusableTrack(track)}
+                              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 ring-1 ring-slate-200 hover:ring-[#FE2C55] hover:text-[#FE2C55]"
+                            >
+                              <Disc3 className="h-3.5 w-3.5 text-[#FE2C55]" aria-hidden="true" />
+                              <span className="max-w-[140px] truncate">{track.soundName}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     )}
-                  </p>
+                  </div>
                 )}
               </div>
 

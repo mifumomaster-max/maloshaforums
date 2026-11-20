@@ -6,6 +6,7 @@ import {
   FileText,
   Globe,
   Loader2,
+  Share2,
   Type,
   ZoomIn,
   ZoomOut,
@@ -217,6 +218,7 @@ export const MobilePdfNoteReader: React.FC<MobilePdfNoteReaderProps> = ({
 
   const [cloudinaryPageUrls, setCloudinaryPageUrls] = useState<string[]>([]);
   const [blobPreviewUrl, setBlobPreviewUrl] = useState('');
+  const [cachedPdfBlob, setCachedPdfBlob] = useState<Blob | null>(null);
   const [readerMode, setReaderMode] = useState<'pages' | 'text' | 'embed'>('pages');
   const [zoom, setZoom] = useState(1);
   const [textFontStep, setTextFontStep] = useState<'sm' | 'md' | 'lg'>('md');
@@ -243,6 +245,8 @@ export const MobilePdfNoteReader: React.FC<MobilePdfNoteReaderProps> = ({
     setLoadError(false);
     setExtractedPages([]);
     setCloudinaryPageUrls([]);
+    setCachedPdfBlob(null);
+    setBlobPreviewUrl('');
     setPdfDoc(null);
     setNumPages(0);
     setReaderMode('pages');
@@ -257,6 +261,7 @@ export const MobilePdfNoteReader: React.FC<MobilePdfNoteReaderProps> = ({
 
         const blob = new Blob([arrayBuf], { type: 'application/pdf' });
         createdBlobUrl = URL.createObjectURL(blob);
+        setCachedPdfBlob(blob);
         setBlobPreviewUrl(createdBlobUrl);
 
         loadingTask = pdfjsLib.getDocument({
@@ -480,6 +485,61 @@ export const MobilePdfNoteReader: React.FC<MobilePdfNoteReaderProps> = ({
               {tr(`Kurasa ${numPages}`, `${numPages} pages`)}
             </span>
           )}
+
+          {blobPreviewUrl ? (
+            <a
+              href={blobPreviewUrl}
+              download={fileName.toLowerCase().endsWith('.pdf') ? fileName : `${fileName}.pdf`}
+              className="inline-flex min-h-[34px] items-center gap-1 rounded-lg bg-[#075E54] px-2.5 text-[11px] font-bold text-white hover:bg-[#064E46]"
+            >
+              <Download className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>{tr('Pakua', 'Save')}</span>
+            </a>
+          ) : (
+            <button
+              type="button"
+              onClick={onDownload}
+              className="inline-flex min-h-[34px] items-center gap-1 rounded-lg bg-[#075E54] px-2.5 text-[11px] font-bold text-white hover:bg-[#064E46]"
+            >
+              <Download className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>{tr('Pakua', 'Save')}</span>
+            </button>
+          )}
+
+          <a
+            href={blobPreviewUrl || pdfUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 text-[11px] font-bold text-slate-800 hover:bg-slate-50"
+          >
+            <ExternalLink className="h-3.5 w-3.5 text-[#0E2640]" aria-hidden="true" />
+            <span>{tr('Soma Nje', 'Open Outside')}</span>
+          </a>
+
+          {cachedPdfBlob &&
+            typeof navigator !== 'undefined' &&
+            typeof navigator.share === 'function' && (
+              <button
+                type="button"
+                onClick={() => {
+                  const safePdfName = fileName.toLowerCase().endsWith('.pdf')
+                    ? fileName
+                    : `${fileName}.pdf`;
+                  const pdfFile = new File([cachedPdfBlob], safePdfName, {
+                    type: 'application/pdf',
+                  });
+                  if (typeof navigator.canShare === 'function' && navigator.canShare({ files: [pdfFile] })) {
+                    void navigator.share({ files: [pdfFile], title: safePdfName }).catch(() => {});
+                  } else {
+                    void navigator.share({ title: safePdfName, url: pdfUrl }).catch(() => {});
+                  }
+                }}
+                className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 text-[11px] font-bold text-[#075E54] hover:bg-emerald-100"
+              >
+                <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>{tr('Hifadhi / Tuma', 'Save / Share')}</span>
+              </button>
+            )}
         </div>
       </div>
 

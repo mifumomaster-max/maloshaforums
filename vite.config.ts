@@ -73,9 +73,9 @@ export default defineConfig(() => {
         workbox: {
           importScripts: ['/sw-notifications.js'],
           globPatterns: ['**/*.{js,mjs,css,html,ico,svg,woff,woff2}', 'pwa-*.png', 'apple-touch-icon.png'],
-          maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+          maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
           navigateFallback: '/index.html',
-          navigateFallbackDenylist: [/^\/share-target/],
+          navigateFallbackDenylist: [/^\/share-target/, /^\/robots\.txt$/],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/res\.cloudinary\.com\/.*/i,

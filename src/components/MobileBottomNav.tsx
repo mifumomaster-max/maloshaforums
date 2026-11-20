@@ -10,6 +10,7 @@ interface MobileBottomNavProps {
   unreadChatCount?: number;
   hidden?: boolean;
   darkTheme?: boolean;
+  hideVideoTab?: boolean;
 }
 
 export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
@@ -19,6 +20,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   unreadChatCount = 0,
   hidden = false,
   darkTheme = false,
+  hideVideoTab = false,
 }) => {
   const { tr } = useLanguage();
 
@@ -32,7 +34,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
     chat: unreadChatCount,
   };
 
-  const items: {
+  const allItems: {
     id: NavTab;
     iconSection: NavIconSection;
     label: string;
@@ -83,6 +85,8 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
     },
   ];
 
+  const items = hideVideoTab ? allItems.filter((item) => item.id !== 'video') : allItems;
+
   return (
     <nav
       aria-label={tr('Urambazaji wa simu', 'Mobile navigation')}
@@ -92,7 +96,11 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
           : 'border-slate-200/90 bg-white/95 shadow-[0_-4px_16px_rgba(15,23,42,0.08)]'
       }`}
     >
-      <div className="grid h-[58px] grid-cols-6 items-center">
+      <div
+        className={`grid h-[58px] items-center ${
+          items.length === 5 ? 'grid-cols-5' : 'grid-cols-6'
+        }`}
+      >
         {items.map((item) => {
           const active = activeTab === item.id;
           const showBadge = item.unread > 0 && !active;

@@ -5,7 +5,32 @@ export type EditorialBlock =
   | { type: 'bullets'; items: string[] }
   | { type: 'numbered'; items: { num: string; text: string }[] }
   | { type: 'quote'; lines: string[] }
+  | { type: 'image'; url: string; caption?: string }
+  | { type: 'video'; url: string; caption?: string }
   | { type: 'divider' };
+
+export type StandaloneMediaToken =
+  | { type: 'image'; url: string; caption: string }
+  | { type: 'video'; url: string; caption: string };
+
+export function parseStandaloneMediaToken(trimmed: string): StandaloneMediaToken | null {
+  const clean = trimmed.trim();
+  const imgMatch = clean.match(/^!\[([^\]]*)\]\((https:\/\/[^\s)]+)\)$/i);
+  if (imgMatch) {
+    const rawCap = (imgMatch[1] || '').trim();
+    const caption = /^(picha|image|photo)$/i.test(rawCap) ? '' : rawCap;
+    return { type: 'image', url: imgMatch[2].trim(), caption };
+  }
+  const vidMatch = clean.match(/^@\[video(?:\|([^\]]*))?\]\((https:\/\/[^\s)]+)\)$/i);
+  if (vidMatch) {
+    return {
+      type: 'video',
+      url: vidMatch[2].trim(),
+      caption: (vidMatch[1] || '').trim(),
+    };
+  }
+  return null;
+}
 
 function slugifyHeading(text: string, index: number): string {
   const base = text
@@ -216,6 +241,26 @@ export function parseEditorialBlocks(rawBody: string): EditorialBlock[] {
       continue;
     }
 
+    // Standalone Inline Image or Video Media Block
+    const mediaToken = parseStandaloneMediaToken(trimmed);
+    if (mediaToken) {
+      flushAllListsAndQuotes();
+      if (mediaToken.type === 'image') {
+        blocks.push({
+          type: 'image',
+          url: mediaToken.url,
+          ...(mediaToken.caption ? { caption: mediaToken.caption } : {}),
+        });
+      } else {
+        blocks.push({
+          type: 'video',
+          url: mediaToken.url,
+          ...(mediaToken.caption ? { caption: mediaToken.caption } : {}),
+        });
+      }
+      continue;
+    }
+
     // Horizontal rule
     if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
       flushAllListsAndQuotes();
@@ -345,6 +390,10 @@ export function autoFormatScholarlyText(rawBody: string): string {
       chunks.push(block.items.map((item) => `${item.num}. ${item.text}`).join('\n'));
     } else if (block.type === 'quote') {
       chunks.push(block.lines.map((l) => `> ${l}`).join('\n'));
+    } else if (block.type === 'image') {
+      chunks.push(`![${block.caption || 'Picha'}](${block.url})`);
+    } else if (block.type === 'video') {
+      chunks.push(block.caption ? `@[video|${block.caption}](${block.url})` : `@[video](${block.url})`);
     } else if (block.type === 'divider') {
       chunks.push('---');
     } else {
@@ -372,6 +421,8 @@ export function extractEditorialPreview(rawBody: string): {
 
   const cleanInline = (s: string) =>
     s
+      .replace(/!\[[^\]]*\]\(https:\/\/[^\s)]+\)/gi, '')
+      .replace(/@\[video(?:\|[^\]]*)?\]\(https:\/\/[^\s)]+\)/gi, '')
       .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
       .replace(/[*`]/g, '')
       .replace(/\s+/g, ' ')

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  AtSign,
   Bold,
   Eye,
   Heading2,
@@ -21,6 +22,11 @@ import { parseTagsInput } from '../utils/formatters';
 import { useLanguage } from '../context/LanguageContext';
 import { Avatar } from './Avatar';
 import { ImageResizeModal } from './ImageResizeModal';
+import {
+  InlineMediaInsertModal,
+  InsertedInlineMedia,
+  computeTextAfterInlineMediaInsert,
+} from './InlineMediaInsertModal';
 import { MakalaArticleRenderer } from './MakalaArticleRenderer';
 import { AuthorVerificationBadge } from './VerificationBadge';
 
@@ -65,6 +71,10 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
   const [showPresets, setShowPresets] = useState(false);
   const [previewFailed, setPreviewFailed] = useState(false);
   const [bodyPreviewMode, setBodyPreviewMode] = useState(false);
+  const [inlineMediaPicker, setInlineMediaPicker] = useState<{
+    atIndex: number;
+    replaceAt: boolean;
+  } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
@@ -100,6 +110,7 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
     setShowPresets(false);
     setPreviewFailed(false);
     setBodyPreviewMode(false);
+    setInlineMediaPicker(null);
     setError('');
     onExpandedChange(false);
   };
@@ -127,6 +138,43 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
       el.focus();
       const cursor = start + insertion.length;
       el.setSelectionRange(cursor, cursor);
+    });
+  };
+
+  const handleBodyChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const nextVal = e.target.value;
+    const cursor = e.target.selectionStart ?? nextVal.length;
+    const wasAtTyped =
+      nextVal.length > body.length &&
+      nextVal.length - body.length <= 2 &&
+      cursor > 0 &&
+      nextVal[cursor - 1] === '@';
+
+    setBody(nextVal);
+    if (wasAtTyped) {
+      setInlineMediaPicker({ atIndex: cursor - 1, replaceAt: true });
+    }
+  };
+
+  const handleInsertInlineMedia = (media: InsertedInlineMedia) => {
+    const picker = inlineMediaPicker ?? {
+      atIndex: bodyTextareaRef.current?.selectionStart ?? body.length,
+      replaceAt: false,
+    };
+    const { nextText, nextCursor } = computeTextAfterInlineMediaInsert(
+      body,
+      picker.atIndex,
+      picker.replaceAt,
+      media
+    );
+    setBody(nextText);
+    setInlineMediaPicker(null);
+    setBodyPreviewMode(false);
+    window.requestAnimationFrame(() => {
+      const el = bodyTextareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(nextCursor, nextCursor);
     });
   };
 
@@ -518,6 +566,23 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
             </button>
             <button
               type="button"
+              onClick={() =>
+                setInlineMediaPicker({
+                  atIndex: bodyTextareaRef.current?.selectionStart ?? body.length,
+                  replaceAt: false,
+                })
+              }
+              title={tr(
+                'Weka picha au video mahali hapa (au andika @)',
+                'Insert photo or video at cursor (or type @)'
+              )}
+              className="inline-flex min-h-[30px] items-center gap-1 border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-bold text-[#0E2640] hover:border-[#B80000] hover:bg-amber-100"
+            >
+              <AtSign className="h-3.5 w-3.5 text-[#B80000]" aria-hidden="true" />
+              <span>{tr('Picha / Video', 'Photo / Video')}</span>
+            </button>
+            <button
+              type="button"
               onClick={handleAutoFormatBody}
               className="ml-auto inline-flex min-h-[30px] items-center gap-1 bg-[#0E2640] px-2.5 py-1 text-[11px] font-bold text-white hover:bg-[#163A5F]"
             >
@@ -542,10 +607,10 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
               rows={8}
               maxLength={8000}
               value={body}
-              onChange={(e) => setBody(e.target.value)}
+              onChange={handleBodyChange}
               placeholder={tr(
-                'Anza na aya ya muhtasari (lead), kisha tumia ## Vichwa, ### Vichwa Vidogo, - Orodha, na > Nukuu — au paste kisha bonyeza "Panga Kisomi"...',
-                'Start with a strong lead paragraph, then use ## Headings, ### Subtitles, - Bullets, and > Quotes — or paste and click "Auto-Format"...'
+                'Anza na aya ya muhtasari (lead), andika @ popote kupakia picha au video katikati ya makala, au tumia ## Vichwa, - Orodha, na > Nukuu...',
+                'Start with a lead paragraph, type @ anywhere to insert a photo or video inline, or use ## Headings, - Bullets, and > Quotes...'
               )}
               className="w-full resize-y border border-slate-300 bg-[#F9FAFB] p-3.5 text-sm leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-[#B80000] focus:bg-white focus:outline-none"
             />
@@ -612,6 +677,13 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
         file={pendingImageFile}
         onCancel={() => setPendingImageFile(null)}
         onConfirm={(resizedFile) => void handleConfirmResizedImage(resizedFile)}
+      />
+
+      <InlineMediaInsertModal
+        isOpen={inlineMediaPicker !== null}
+        onClose={() => setInlineMediaPicker(null)}
+        onInsert={handleInsertInlineMedia}
+        onToast={onToast}
       />
     </section>
   );

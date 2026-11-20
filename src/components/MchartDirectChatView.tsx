@@ -15,6 +15,7 @@ import {
   BookOpen,
   Check,
   CheckCheck,
+  Copy,
   Download,
   ExternalLink,
   Eye,
@@ -33,6 +34,7 @@ import {
   Smile,
   Trash2,
   UserPlus,
+  Users,
   X,
 } from 'lucide-react';
 import { db, handleFirestoreError, OperationType } from '../firebase';
@@ -174,6 +176,33 @@ interface MchartDirectInboxProps {
   }) => void;
 }
 
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  const clean = text.trim();
+  if (!clean) return false;
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(clean);
+      return true;
+    }
+  } catch {
+    // Fallback below
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = clean;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 export const MchartDirectInbox: React.FC<MchartDirectInboxProps> = ({
   user,
   userDisplayName,
@@ -191,7 +220,7 @@ export const MchartDirectInbox: React.FC<MchartDirectInboxProps> = ({
   onRequestConfirm,
 }) => {
   const { tr, formatTime } = useLanguage();
-  const { isUserOnline } = useUserPresence();
+  const { isUserOnline, getDirectPartnerTyping } = useUserPresence();
   const [search, setSearch] = useState('');
   const [pickerOpen, setPickerOpen] = useState(false);
   const [memberSearch, setMemberSearch] = useState('');
@@ -225,18 +254,48 @@ export const MchartDirectInbox: React.FC<MchartDirectInboxProps> = ({
     return set;
   }, [threads, user]);
 
+  const allMembersAZ = useMemo(() => {
+    return memberCandidates
+      .filter((m) => !user || m.uid !== user.uid)
+      .slice()
+      .sort((a, b) =>
+        a.displayName.localeCompare(b.displayName, undefined, { sensitivity: 'base' })
+      );
+  }, [memberCandidates, user]);
+
+  const directoryMatchesAZ = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return allMembersAZ;
+    return allMembersAZ.filter((m) => m.displayName.toLowerCase().includes(q));
+  }, [allMembersAZ, search]);
+
+  const groupedDirectoryAZ = useMemo(() => {
+    const groups: { letter: string; members: MemberDirectoryCandidate[] }[] = [];
+    const byLetter = new Map<string, MemberDirectoryCandidate[]>();
+    directoryMatchesAZ.forEach((m) => {
+      const first = (m.displayName.trim().charAt(0) || '#').toUpperCase();
+      const letter = /^[A-Z]$/.test(first) ? first : '#';
+      const arr = byLetter.get(letter);
+      if (arr) arr.push(m);
+      else byLetter.set(letter, [m]);
+    });
+    const keys = Array.from(byLetter.keys()).sort((a, b) => {
+      if (a === '#') return 1;
+      if (b === '#') return -1;
+      return a.localeCompare(b);
+    });
+    keys.forEach((letter) => {
+      const members = byLetter.get(letter) || [];
+      groups.push({ letter, members });
+    });
+    return groups;
+  }, [directoryMatchesAZ]);
+
   const filteredCandidates = useMemo(() => {
     const q = memberSearch.trim().toLowerCase();
-    return memberCandidates
-      .filter((m) => (!user || m.uid !== user.uid))
-      .filter((m) => !q || m.displayName.toLowerCase().includes(q))
-      .sort((a, b) => {
-        const aOnline = isUserOnline(a.uid) ? 1 : 0;
-        const bOnline = isUserOnline(b.uid) ? 1 : 0;
-        if (aOnline !== bOnline) return bOnline - aOnline;
-        return a.displayName.localeCompare(b.displayName);
-      });
-  }, [memberCandidates, user, memberSearch, isUserOnline]);
+    if (!q) return allMembersAZ;
+    return allMembersAZ.filter((m) => m.displayName.toLowerCase().includes(q));
+  }, [allMembersAZ, memberSearch]);
 
   const handleDirectLookup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -405,16 +464,16 @@ export const MchartDirectInbox: React.FC<MchartDirectInboxProps> = ({
               </button>
             </form>
 
-            <div className="max-h-64 divide-y divide-slate-100 overflow-y-auto">
+            <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto">
               {filteredCandidates.length === 0 ? (
                 <p className="px-4 py-6 text-center text-xs text-slate-500">
                   {tr(
-                    'Hakuna mwanachama aliyeonekana bado. Unaweza kuandika namba yake ya MLF hapo juu.',
+                    'Hakuna mwanachama aliyepatikana kwa jina hilo. Unaweza kuandika namba yake ya MLF hapo juu.',
                     'No matching active members found. You can look up a member by their MLF card ID above.'
                   )}
                 </p>
               ) : (
-                filteredCandidates.slice(0, 40).map((m) => {
+                filteredCandidates.map((m) => {
                   const online = isUserOnline(m.uid);
                   const alreadyChatted = existingPartnerUids.has(m.uid);
                   const busy = startingUid === m.uid;
@@ -503,6 +562,7 @@ export const MchartDirectInbox: React.FC<MchartDirectInboxProps> = ({
             <div className="divide-y divide-slate-100">
               {sortedThreads.map((thread) => {
                 const partner = getPartnerFromThread(thread, user.uid);
+                const partnerTyping = getDirectPartnerTyping(partner.uid, thread.chatId);
                 return (
                   <button
                     key={thread.chatId}
@@ -531,15 +591,21 @@ export const MchartDirectInbox: React.FC<MchartDirectInboxProps> = ({
                       </div>
 
                       <div className="mt-0.5 flex items-center justify-between gap-2">
-                        <p className="truncate text-xs text-slate-600">
-                          {thread.lastSenderId === user.uid ? (
-                            <span className="font-semibold text-[#075E54]">
-                              {tr('Wewe: ', 'You: ')}
-                            </span>
-                          ) : null}
-                          {thread.lastMessageText ||
-                            tr('Anza kuandika ujumbe wenu wa kwanza...', 'Start your conversation...')}
-                        </p>
+                        {partnerTyping ? (
+                          <p className="truncate text-xs font-bold italic text-[#00A884]">
+                            {tr('anaandika...', 'typing...')}
+                          </p>
+                        ) : (
+                          <p className="truncate text-xs text-slate-600">
+                            {thread.lastSenderId === user.uid ? (
+                              <span className="font-semibold text-[#075E54]">
+                                {tr('Wewe: ', 'You: ')}
+                              </span>
+                            ) : null}
+                            {thread.lastMessageText ||
+                              tr('Anza kuandika ujumbe wenu wa kwanza...', 'Start your conversation...')}
+                          </p>
+                        )}
                         {partner.unreadCount > 0 && (
                           <span className="flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-[#25D366] px-1.5 text-[10px] font-extrabold text-[#064E46] tabular-nums">
                             {partner.unreadCount > 99 ? '99+' : partner.unreadCount}
@@ -550,6 +616,97 @@ export const MchartDirectInbox: React.FC<MchartDirectInboxProps> = ({
                   </button>
                 );
               })}
+            </div>
+          )}
+        </section>
+
+        {/* Full WhatsApp-Style A-Z Member Contacts Directory */}
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+          <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/70 px-4 py-2.5">
+            <div className="flex items-center gap-2">
+              <Users className="h-3.5 w-3.5 text-[#075E54]" aria-hidden="true" />
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                {search.trim()
+                  ? tr('Wanachama Waliopatikana (A–Z)', 'Matching Members (A–Z)')
+                  : tr('Wanachama Wote Jukwaani (A–Z)', 'All Platform Members (A–Z)')}{' '}
+                ({directoryMatchesAZ.length})
+              </h3>
+            </div>
+            <span className="text-[11px] font-medium text-slate-400">
+              {tr('Gusa jina kuanza DM', 'Tap name to message')}
+            </span>
+          </div>
+
+          {groupedDirectoryAZ.length === 0 ? (
+            <p className="px-4 py-6 text-center text-xs text-slate-500">
+              {search.trim()
+                ? tr(
+                    `Hakuna mwanachama aliyepatikana kwa jina "${search.trim()}".`,
+                    `No member found matching "${search.trim()}".`
+                  )
+                : tr(
+                    'Orodha ya wanachama inapakia...',
+                    'Loading platform members...'
+                  )}
+            </p>
+          ) : (
+            <div className="max-h-[420px] overflow-y-auto">
+              {groupedDirectoryAZ.map((group) => (
+                <div key={group.letter}>
+                  <div className="sticky top-0 z-10 border-y border-slate-100 bg-slate-50/95 px-4 py-1 text-[11px] font-extrabold tracking-wider text-[#075E54] backdrop-blur-xs">
+                    {group.letter}
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {group.members.map((m) => {
+                      const online = isUserOnline(m.uid);
+                      const alreadyChatted = existingPartnerUids.has(m.uid);
+                      const busy = startingUid === m.uid;
+                      return (
+                        <button
+                          key={m.uid}
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            setStartingUid(m.uid);
+                            void onStartPrivateChatWith(m).finally(() => {
+                              setStartingUid(null);
+                            });
+                          }}
+                          className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left transition-colors hover:bg-emerald-50/40 disabled:opacity-60"
+                        >
+                          <div className="flex min-w-0 items-center gap-3">
+                            <Avatar
+                              name={m.displayName}
+                              photoURL={m.photoURL}
+                              uid={m.uid}
+                              showOnlineIndicator
+                              size="sm"
+                            />
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span className="truncate text-sm font-bold text-slate-900">
+                                  {m.displayName}
+                                </span>
+                                <AuthorVerificationBadge uid={m.uid} size="xs" />
+                              </div>
+                              <p className="text-[11px] text-slate-500">
+                                {online
+                                  ? tr('Mtandaoni sasa', 'Online now')
+                                  : alreadyChatted
+                                    ? tr('Mna mazungumzo ya siri tayari', 'Existing private chat')
+                                    : tr('Mwanachama wa Malosha', 'Malosha member')}
+                              </p>
+                            </div>
+                          </div>
+                          <span className="shrink-0 rounded-lg bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-[#075E54] ring-1 ring-emerald-200/80">
+                            {busy ? '...' : tr('Chati', 'Chat')}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </section>
@@ -586,7 +743,9 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
   onRequestConfirm,
 }) => {
   const { lang, tr } = useLanguage();
+  const { setMchartTyping, getDirectPartnerTyping } = useUserPresence();
   const partner = getPartnerFromThread(thread, user.uid);
+  const isPartnerTyping = getDirectPartnerTyping(partner.uid, thread.chatId);
 
   const [messages, setMessages] = useState<DirectChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -618,8 +777,20 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const attachMenuRef = useRef<HTMLDivElement>(null);
   const emojiRef = useRef<HTMLDivElement>(null);
+  const autoViewOnceRef = useRef(false);
+  const typingIdleTimerRef = useRef<number | null>(null);
   const initialScrolledRef = useRef(false);
   const prevNewestIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (typingIdleTimerRef.current !== null) {
+        window.clearTimeout(typingIdleTimerRef.current);
+        typingIdleTimerRef.current = null;
+      }
+      setMchartTyping(false, '', thread.chatId);
+    };
+  }, [thread.chatId, setMchartTyping]);
 
   // Real-time messages subscription strictly filtered to participant UID (zero composite index needed)
   useEffect(() => {
@@ -800,13 +971,17 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
   const uploadResolvedFile = async (file: File) => {
     setAttachMenuOpen(false);
     setUploading(true);
+    const shouldDefaultViewOnce = autoViewOnceRef.current;
+    autoViewOnceRef.current = false;
     try {
       const uploaded = await uploadChatFileToCloudinary(file);
       setPendingAttachment(uploaded);
-      setViewOnceDraft(false);
+      setViewOnceDraft(uploaded.attachmentType === 'image' && shouldDefaultViewOnce);
       onToast(
         uploaded.attachmentType === 'image'
-          ? tr('Picha iko tayari kutumwa.', 'Photo ready to send.')
+          ? shouldDefaultViewOnce
+            ? tr('Picha ya Mara Moja (1x) iko tayari kutumwa.', 'View-Once (1x) photo ready.')
+            : tr('Picha iko tayari kutumwa.', 'Photo ready to send.')
           : tr('Nyaraka iko tayari kutumwa.', 'Document ready to send.')
       );
       inputRef.current?.focus();
@@ -889,6 +1064,11 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
     setViewOnceDraft(false);
     setReplyTo(null);
     setEmojiOpen(false);
+    if (typingIdleTimerRef.current !== null) {
+      window.clearTimeout(typingIdleTimerRef.current);
+      typingIdleTimerRef.current = null;
+    }
+    setMchartTyping(false, '', thread.chatId);
 
     window.requestAnimationFrame(() => {
       if (scrollBoxRef.current) {
@@ -968,11 +1148,24 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
               <AuthorVerificationBadge uid={partner.uid} size="xs" />
             </div>
             <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
-              <OnlineStatusPill uid={partner.uid} />
-              <span className="inline-flex items-center gap-1 text-emerald-700">
-                <Lock className="h-3 w-3" aria-hidden="true" />
-                <span>{tr('Mazungumzo ya Siri (Nyinyi 2 tu)', 'Private (You 2 only)')}</span>
-              </span>
+              {isPartnerTyping ? (
+                <span className="inline-flex items-center gap-1.5 font-bold text-[#00A884]">
+                  <span className="inline-flex gap-0.5" aria-hidden="true">
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#00A884] [animation-delay:-0.3s]" />
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#00A884] [animation-delay:-0.15s]" />
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#00A884]" />
+                  </span>
+                  <span>{tr('anaandika...', 'typing...')}</span>
+                </span>
+              ) : (
+                <>
+                  <OnlineStatusPill uid={partner.uid} />
+                  <span className="inline-flex items-center gap-1 text-emerald-700">
+                    <Lock className="h-3 w-3" aria-hidden="true" />
+                    <span>{tr('Mazungumzo ya Siri (Nyinyi 2 tu)', 'Private (You 2 only)')}</span>
+                  </span>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -1285,18 +1478,39 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
 
                         <div className="mt-1 flex items-center justify-end gap-2 text-[10px] text-slate-500">
                           {!msg.isDeleted && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setReplyTo(msg);
-                                inputRef.current?.focus();
-                              }}
-                              aria-label={tr('Jibu ujumbe huu', 'Reply to this message')}
-                              className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-black/5 hover:text-[#075E54]"
-                            >
-                              <ReplyIcon className="h-3 w-3" aria-hidden="true" />
-                              <span>{tr('Jibu', 'Reply')}</span>
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const payloadText =
+                                    msg.text.trim() ||
+                                    msg.attachmentName ||
+                                    msg.attachmentUrl;
+                                  void copyTextToClipboard(payloadText).then((ok) => {
+                                    if (ok) {
+                                      onToast(tr('Ujumbe umenakiliwa!', 'Message copied!'));
+                                    }
+                                  });
+                                }}
+                                aria-label={tr('Nakili ujumbe', 'Copy message')}
+                                className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-black/5 hover:text-[#075E54]"
+                              >
+                                <Copy className="h-3 w-3" aria-hidden="true" />
+                                <span>{tr('Nakili', 'Copy')}</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setReplyTo(msg);
+                                  inputRef.current?.focus();
+                                }}
+                                aria-label={tr('Jibu ujumbe huu', 'Reply to this message')}
+                                className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-black/5 hover:text-[#075E54]"
+                              >
+                                <ReplyIcon className="h-3 w-3" aria-hidden="true" />
+                                <span>{tr('Jibu', 'Reply')}</span>
+                              </button>
+                            </>
                           )}
                           {canDelete && (
                             <button
@@ -1324,6 +1538,26 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
                   </React.Fragment>
                 );
               })}
+            </div>
+          )}
+
+          {/* Live Partner Typing Bubble */}
+          {isPartnerTyping && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="mt-2.5 flex items-end justify-start gap-2"
+            >
+              <div className="inline-flex items-center gap-2 rounded-2xl rounded-tl-xs border border-emerald-200 bg-white px-3.5 py-2 shadow-xs">
+                <span className="inline-flex items-center gap-1" aria-hidden="true">
+                  <span className="h-2 w-2 animate-bounce rounded-full bg-[#00A884] [animation-delay:-0.3s]" />
+                  <span className="h-2 w-2 animate-bounce rounded-full bg-[#00A884] [animation-delay:-0.15s]" />
+                  <span className="h-2 w-2 animate-bounce rounded-full bg-[#00A884]" />
+                </span>
+                <span className="text-xs font-semibold text-[#075E54]">
+                  {tr(`${partner.name} anaandika...`, `${partner.name} is typing...`)}
+                </span>
+              </div>
             </div>
           )}
         </div>
@@ -1511,10 +1745,13 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
               </button>
 
               {attachMenuOpen && (
-                <div className="absolute bottom-13 left-0 z-30 w-52 overflow-hidden rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl">
+                <div className="absolute bottom-13 left-0 z-30 w-60 overflow-hidden rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl">
                   <button
                     type="button"
-                    onClick={() => imageInputRef.current?.click()}
+                    onClick={() => {
+                      autoViewOnceRef.current = false;
+                      imageInputRef.current?.click();
+                    }}
                     className="flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-xs font-semibold text-slate-800 hover:bg-emerald-50"
                   >
                     <span className="flex h-8 w-8 items-center justify-center rounded-full bg-purple-100 text-purple-700">
@@ -1523,6 +1760,24 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
                     <div>
                       <p>{tr('Picha (Photo)', 'Photo / Image')}</p>
                       <p className="text-[10px] font-normal text-slate-500">JPG, PNG, WEBP</p>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      autoViewOnceRef.current = true;
+                      imageInputRef.current?.click();
+                    }}
+                    className="flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-xs font-semibold text-[#064E46] hover:bg-emerald-50"
+                  >
+                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-[#075E54]">
+                      <EyeOff className="h-4 w-4" aria-hidden="true" />
+                    </span>
+                    <div>
+                      <p>{tr('Picha ya Mara Moja (1x)', 'View-Once Photo (1x)')}</p>
+                      <p className="text-[10px] font-normal text-emerald-700">
+                        {tr('Inajifunga baada ya kutazamwa', 'Locks after viewing once')}
+                      </p>
                     </div>
                   </button>
                   <button
@@ -1548,7 +1803,23 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
                 rows={1}
                 maxLength={2000}
                 value={draft}
-                onChange={(e) => setDraft(e.target.value)}
+                onChange={(e) => {
+                  const nextVal = e.target.value;
+                  setDraft(nextVal);
+                  if (typingIdleTimerRef.current !== null) {
+                    window.clearTimeout(typingIdleTimerRef.current);
+                    typingIdleTimerRef.current = null;
+                  }
+                  if (nextVal.trim().length > 0) {
+                    setMchartTyping(true, replyTo?.senderName || '', thread.chatId);
+                    typingIdleTimerRef.current = window.setTimeout(() => {
+                      setMchartTyping(false, '', thread.chatId);
+                      typingIdleTimerRef.current = null;
+                    }, 4200);
+                  } else {
+                    setMchartTyping(false, '', thread.chatId);
+                  }
+                }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey && window.innerWidth >= 768) {
                     e.preventDefault();
