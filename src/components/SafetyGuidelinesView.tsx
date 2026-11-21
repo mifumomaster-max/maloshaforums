@@ -24,11 +24,13 @@ import {
   EyeOff,
   Globe,
   Heart,
+  Images,
   KeyRound,
   LayoutTemplate,
   Loader2,
   Lock,
   MessageCircle,
+  PenTool,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
@@ -69,11 +71,13 @@ import {
 } from '../types';
 import { Avatar, OnlineStatusPill } from './Avatar';
 import { BreakingNewsPosterStudio } from './BreakingNewsPosterStudio';
+import { EditorialCartoonStudio } from './EditorialCartoonStudio';
 import { ImageResizeModal } from './ImageResizeModal';
 import { MemberIdCard } from './MemberIdCard';
 import { MemberIdVerifier } from './MemberIdVerifier';
 import { ModerationView } from './ModerationView';
 import { OwnerEditableIdCard } from './OwnerEditableIdCard';
+import { OwnerPrivatePhotoVault } from './OwnerPrivatePhotoVault';
 import { TrainingCertificateStudio } from './TrainingCertificateStudio';
 import { VerificationBadge } from './VerificationBadge';
 
@@ -184,8 +188,23 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
   const [passwordSuccess, setPasswordSuccess] = useState('');
   const [copiedUid, setCopiedUid] = useState(false);
   const [passwordLinkedNow, setPasswordLinkedNow] = useState(false);
-  const [profileTab, setProfileTab] = useState<'profile' | 'poster'>('profile');
+  const [profileTab, setProfileTab] = useState<'profile' | 'poster' | 'cartoon'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = window.localStorage.getItem('malosha_owner_profile_tab');
+      if (saved === 'poster' || saved === 'cartoon' || saved === 'profile') {
+        return saved;
+      }
+    }
+    return 'profile';
+  });
   const [openAccordions, setOpenAccordions] = useState<Record<string, boolean>>({});
+
+  const selectProfileTab = (next: 'profile' | 'poster' | 'cartoon') => {
+    setProfileTab(next);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('malosha_owner_profile_tab', next);
+    }
+  };
 
   const toggleAccordion = (key: string) => {
     setOpenAccordions((prev) => ({
@@ -201,8 +220,13 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
   useEffect(() => {
     if (!isAdmin || !onPublishPosterTopic) {
       setProfileTab('profile');
+    } else if (typeof window !== 'undefined' && openAdminMembersSignal === 0) {
+      const saved = window.localStorage.getItem('malosha_owner_profile_tab');
+      if (saved === 'poster' || saved === 'cartoon' || saved === 'profile') {
+        setProfileTab(saved);
+      }
     }
-  }, [isAdmin, onPublishPosterTopic]);
+  }, [isAdmin, onPublishPosterTopic, openAdminMembersSignal]);
 
   useEffect(() => {
     if (openAdminMembersSignal > 0 && isAdmin) {
@@ -699,18 +723,18 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
           )}
         </div>
 
-        {/* Dedicated 2-Tab Bar Separating Profile/Management From Owner Poster Template Studio */}
+        {/* Dedicated 3-Tab Bar Separating Profile/Management, Poster Studio & DW-Style Cartoon Studio */}
         {userUid && isAdmin && onPublishPosterTopic && (
           <div
             role="tablist"
             aria-label={tr('Sehemu za Wasifu wa Mmiliki', 'Owner Profile Sections')}
-            className="mt-5 grid grid-cols-2 gap-2 rounded-xl border border-slate-200 bg-slate-100/90 p-1.5"
+            className="mt-5 grid grid-cols-1 gap-2 rounded-xl border border-slate-200 bg-slate-100/90 p-1.5 sm:grid-cols-3"
           >
             <button
               type="button"
               role="tab"
               aria-selected={profileTab === 'profile'}
-              onClick={() => setProfileTab('profile')}
+              onClick={() => selectProfileTab('profile')}
               className={`flex min-h-[42px] items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-bold transition-all sm:text-sm ${
                 profileTab === 'profile'
                   ? 'bg-[#0E2640] text-white shadow-sm'
@@ -725,7 +749,7 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
               type="button"
               role="tab"
               aria-selected={profileTab === 'poster'}
-              onClick={() => setProfileTab('poster')}
+              onClick={() => selectProfileTab('poster')}
               className={`flex min-h-[42px] items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-bold transition-all sm:text-sm ${
                 profileTab === 'poster'
                   ? 'bg-gradient-to-r from-[#B91C1C] to-[#991B1B] text-white shadow-sm'
@@ -734,6 +758,21 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
             >
               <LayoutTemplate className="h-4 w-4 shrink-0" aria-hidden="true" />
               <span className="truncate">{tr('Studio ya Poster', 'Poster Studio')}</span>
+            </button>
+
+            <button
+              type="button"
+              role="tab"
+              aria-selected={profileTab === 'cartoon'}
+              onClick={() => selectProfileTab('cartoon')}
+              className={`flex min-h-[42px] items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-bold transition-all sm:text-sm ${
+                profileTab === 'cartoon'
+                  ? 'bg-gradient-to-r from-[#B45309] to-[#D97706] text-white shadow-sm'
+                  : 'text-slate-700 hover:bg-white/75 hover:text-slate-900'
+              }`}
+            >
+              <PenTool className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span className="truncate">{tr('Studio ya Katuni', 'Cartoon Studio')}</span>
             </button>
           </div>
         )}
@@ -747,6 +786,16 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
             if (onSelectBoard) onSelectBoard(board);
           }}
           onToast={onToast}
+        />
+      ) : userUid && isAdmin && onPublishPosterTopic && profileTab === 'cartoon' ? (
+        <EditorialCartoonStudio
+          onPublishToPlatform={onPublishPosterTopic}
+          onOpenPublishedTopic={onOpenTopic}
+          onNavigateBoard={(board) => {
+            if (onSelectBoard) onSelectBoard(board);
+          }}
+          onToast={onToast}
+          defaultSignature={userProfile?.displayName || 'Mifumo Master'}
         />
       ) : (
         <div className="space-y-3">
@@ -2377,6 +2426,53 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
               </div>
             )}
           </section>
+
+          {/* Accordion 12 (Owner): Private Personal Photo Vault (Bottom of Profile below 13 Rules) */}
+          {userUid && isAdmin && (
+            <section className="overflow-hidden rounded-xl border border-emerald-200 bg-white">
+              <button
+                type="button"
+                aria-expanded={Boolean(openAccordions.admin_private_photos)}
+                onClick={() => toggleAccordion('admin_private_photos')}
+                className="flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-emerald-50/40 sm:px-5"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">
+                    <Images className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0">
+                    <h2 className="truncate font-display text-sm font-bold text-slate-900 sm:text-base">
+                      {tr(
+                        'Kabati la Picha Binafsi (Mmiliki Pekee)',
+                        'Owner Private Photo Vault (Owner Only)'
+                      )}
+                    </h2>
+                    <p className="truncate text-xs text-slate-500">
+                      {tr(
+                        'Mafile ya siri (PIN), 0 MB cache, mpangilio wa Google Photos & upakiaji wenye asilimia unaoendelea simu ikizima',
+                        'Locked secret folders, 0 MB cache, Google Photos grid & resumable upload queue'
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <ChevronDown
+                  className={`h-5 w-5 shrink-0 text-slate-500 transition-transform duration-200 ${
+                    openAccordions.admin_private_photos ? 'rotate-180 text-[#0E2640]' : ''
+                  }`}
+                  aria-hidden="true"
+                />
+              </button>
+
+              {openAccordions.admin_private_photos && (
+                <div className="border-t border-slate-100 p-4 sm:p-5">
+                  <OwnerPrivatePhotoVault
+                    ownerUid={userUid}
+                    onToast={onToast}
+                  />
+                </div>
+              )}
+            </section>
+          )}
         </div>
       )}
     </div>

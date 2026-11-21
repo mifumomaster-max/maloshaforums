@@ -269,16 +269,6 @@ export const TopicList: React.FC<TopicListProps> = ({
     [topics]
   );
 
-  const trendingPreview = useMemo(() => {
-    return [...topics]
-      .sort((a, b) => {
-        const scoreA = a.upvotesCount * 2 + a.repliesCount;
-        const scoreB = b.upvotesCount * 2 + b.repliesCount;
-        return scoreB - scoreA;
-      })
-      .slice(0, 4);
-  }, [topics]);
-
   const filteredTopics = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
 
@@ -318,13 +308,6 @@ export const TopicList: React.FC<TopicListProps> = ({
       t.lastActivityAt ? t.lastActivityAt.toMillis() : getCreatedMillis(t);
 
     return [...list].sort((a, b) => {
-      if (activeTab === 'trending') {
-        const scoreA = a.upvotesCount * 2 + a.repliesCount;
-        const scoreB = b.upvotesCount * 2 + b.repliesCount;
-        if (scoreB !== scoreA) return scoreB - scoreA;
-        return getActivityMillis(b) - getActivityMillis(a);
-      }
-
       if (sortMode === 'votes') {
         if (b.upvotesCount !== a.upvotesCount) {
           return b.upvotesCount - a.upvotesCount;
@@ -379,21 +362,14 @@ export const TopicList: React.FC<TopicListProps> = ({
 
   const pageHeading = activeBoardMeta
     ? getBoardLabel(activeBoardMeta.id)
-    : activeTab === 'trending'
-      ? tr('Zilizovuma', 'Trending')
-      : tr('Ukumbi wa Mijadala', 'Community Forums');
+    : tr('Ukumbi wa Mijadala', 'Community Forums');
 
   const pageSubheading = activeBoardMeta
     ? getBoardDescription(activeBoardMeta.id)
-    : activeTab === 'trending'
-      ? tr(
-          'Mada zinazovuma zaidi kutoka Kijiweni, Fursa, na Makala kulingana na mapendekezo na maoni.',
-          'Most active discussions across Kijiweni, Opportunities, and Articles based on likes and comments.'
-        )
-      : tr(
-          'Karibu Malosha Forums — Kijiweni, Fursa za Vijana, Makala za Uchambuzi, na Zilizovuma.',
-          'Welcome to Malosha Forums — Kijiweni, Youth Opportunities, Articles & Analysis, and Trending.'
-        );
+    : tr(
+        'Karibu Malosha Forums — Kijiweni, Fursa za Vijana, Makala za Uchambuzi, na Mpoll.',
+        'Welcome to Malosha Forums — Kijiweni, Youth Opportunities, Articles & Analysis, and Mpoll.'
+      );
 
   const handleBoardSelect = (board: PrimaryBoard | 'all') => {
     if (board === 'all') {
@@ -488,7 +464,7 @@ export const TopicList: React.FC<TopicListProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-            {(effectiveCategory !== 'all' || activeTab === 'trending') && (
+            {effectiveCategory !== 'all' && (
               <button
                 type="button"
                 onClick={() => handleBoardSelect('all')}
@@ -614,34 +590,32 @@ export const TopicList: React.FC<TopicListProps> = ({
               />
             </div>
 
-            {activeTab !== 'trending' && (
-              <div
-                role="group"
-                aria-label={tr('Mpangilio wa mada', 'Topic sorting')}
-                className="grid grid-cols-3 rounded-lg border border-slate-300 bg-white p-1 sm:inline-flex shrink-0"
-              >
-                {(
-                  [
-                    { id: 'newest', label: tr('Mpya Zaidi', 'Newest') },
-                    { id: 'votes', label: tr('Pendwa Zaidi', 'Most Liked') },
-                    { id: 'oldest', label: tr('Zilizotangulia', 'Earlier') },
-                  ] as { id: SortMode; label: string }[]
-                ).map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => onChangeSort(opt.id)}
-                    className={`min-h-[36px] rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 sm:px-3 ${
-                      sortMode === opt.id
-                        ? 'bg-[#1D4E89] text-white'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            )}
+            <div
+              role="group"
+              aria-label={tr('Mpangilio wa mada', 'Topic sorting')}
+              className="grid grid-cols-3 rounded-lg border border-slate-300 bg-white p-1 sm:inline-flex shrink-0"
+            >
+              {(
+                [
+                  { id: 'newest', label: tr('Mpya Zaidi', 'Newest') },
+                  { id: 'votes', label: tr('Pendwa Zaidi', 'Most Liked') },
+                  { id: 'oldest', label: tr('Zilizotangulia', 'Earlier') },
+                ] as { id: SortMode; label: string }[]
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => onChangeSort(opt.id)}
+                  className={`min-h-[36px] rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 sm:px-3 ${
+                    sortMode === opt.id
+                      ? 'bg-[#1D4E89] text-white'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Mobile Quick Filter Row */}
@@ -692,16 +666,21 @@ export const TopicList: React.FC<TopicListProps> = ({
               type="button"
               onClick={() => {
                 onSelectCategory('all');
-                onSelectTab('trending');
+                onSelectTab('votes');
               }}
               className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium whitespace-nowrap shrink-0 ${
-                activeTab === 'trending'
+                activeTab === 'votes'
                   ? 'border-[#163A5F] bg-[#163A5F] text-white'
                   : 'border-slate-300 bg-white text-slate-700'
               }`}
             >
-              <NavSectionIcon section="trending" className="h-4 w-4 shrink-0" />
-              <span>{tr('Zilizovuma', 'Trending')}</span>
+              <NavSectionIcon section="votes" className="h-4 w-4 shrink-0" />
+              <span>Mpoll</span>
+              {(unreadCounts?.votes || 0) > 0 && activeTab !== 'votes' && (
+                <span className="flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-[#E11D48] px-1 text-[10px] font-bold leading-none text-white tabular-nums">
+                  {(unreadCounts?.votes || 0) > 99 ? '99+' : unreadCounts?.votes}
+                </span>
+              )}
             </button>
           </div>
 
@@ -1257,21 +1236,23 @@ export const TopicList: React.FC<TopicListProps> = ({
                 type="button"
                 onClick={() => {
                   onSelectCategory('all');
-                  onSelectTab('trending');
+                  onSelectTab('votes');
                 }}
                 className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-xs transition-colors ${
-                  activeTab === 'trending'
+                  activeTab === 'votes'
                     ? 'bg-sky-50 font-semibold text-[#163A5F]'
                     : 'text-slate-700 hover:bg-slate-50'
                 }`}
               >
                 <span className="flex items-center gap-2">
-                  <NavSectionIcon section="trending" className="h-4 w-4 shrink-0" />
-                  <span>{tr('Zilizovuma', 'Trending')}</span>
+                  <NavSectionIcon section="votes" className="h-4 w-4 shrink-0" />
+                  <span>Mpoll</span>
                 </span>
-                <span className="font-mono tabular-nums text-slate-500">
-                  {trendingPreview.length}
-                </span>
+                {(unreadCounts?.votes || 0) > 0 && (
+                  <span className="flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-[#E11D48] px-1 text-[10px] font-bold leading-none text-white tabular-nums">
+                    {(unreadCounts?.votes || 0) > 99 ? '99+' : unreadCounts?.votes}
+                  </span>
+                )}
               </button>
             </div>
 
@@ -1292,45 +1273,6 @@ export const TopicList: React.FC<TopicListProps> = ({
               </div>
             )}
           </div>
-
-          {trendingPreview.length > 0 && (
-            <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-              <div className="flex items-center justify-between bg-[#163A5F] px-4 py-2.5 text-white">
-                <h3 className="text-xs font-semibold tracking-wide uppercase">
-                  {tr('Zilizovuma', 'Trending')}
-                </h3>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onSelectCategory('all');
-                    onSelectTab('trending');
-                  }}
-                  className="text-[11px] text-sky-200 hover:text-white hover:underline"
-                >
-                  {tr('Ona Zote', 'See All')}
-                </button>
-              </div>
-              <div className="divide-y divide-slate-100">
-                {trendingPreview.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => onOpenTopic(item.id)}
-                    className="block w-full px-4 py-3 text-left transition-colors hover:bg-slate-50"
-                  >
-                    <p className="line-clamp-2 text-xs font-semibold text-[#163A5F] hover:underline">
-                      {item.title}
-                    </p>
-                    <p className="mt-1 text-[11px] text-slate-500 tabular-nums">
-                      {getBoardLabel(normalizeBoardCategory(item.category))} ·{' '}
-                      {tr('Maoni', 'Replies')} {item.repliesCount} · {tr('Penda', 'Likes')}{' '}
-                      {item.upvotesCount}
-                    </p>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
 
           <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
             <div className="bg-[#163A5F] px-4 py-2.5 text-white">

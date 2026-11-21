@@ -6,8 +6,6 @@ import {
   CheckCheck,
   ChevronRight,
   CornerDownRight,
-  Eye,
-  EyeOff,
   Globe,
   Lock,
   LogOut,
@@ -65,8 +63,6 @@ interface HeaderProps {
   onMarkNotificationRead?: (notificationId: string) => void | Promise<void>;
   onMarkAllNotificationsRead?: (notificationIds: string[]) => void | Promise<void>;
   hideVideoTab?: boolean;
-  hideVideoTabForUsers?: boolean;
-  onToggleHideVideoTab?: () => void | Promise<void>;
   recentSignups?: UserProfile[];
   unreadSignupCount?: number;
   signupLastSeenMs?: number;
@@ -120,8 +116,6 @@ export const Header: React.FC<HeaderProps> = ({
   onMarkNotificationRead,
   onMarkAllNotificationsRead,
   hideVideoTab = false,
-  hideVideoTabForUsers = false,
-  onToggleHideVideoTab,
   recentSignups = [],
   unreadSignupCount = 0,
   signupLastSeenMs = 0,
@@ -396,10 +390,10 @@ export const Header: React.FC<HeaderProps> = ({
       badgeTone: 'green',
     },
     {
-      id: 'trending',
-      iconSection: 'trending',
-      label: tr('Zilizovuma', 'Trending'),
-      unread: 0,
+      id: 'votes',
+      iconSection: 'votes',
+      label: 'Mpoll',
+      unread: counts.votes || 0,
       badgeTone: 'crimson',
     },
   ];
@@ -555,46 +549,8 @@ export const Header: React.FC<HeaderProps> = ({
           })}
         </nav>
 
-        {/* Zone 2B: Owner Top Video Visibility Switch + Centered Notification Bell */}
+        {/* Zone 2B: Centered Notification Bell */}
         <div className="flex flex-1 items-center justify-center gap-2 md:flex-none md:mr-3 lg:mr-5">
-          {isAdmin && onToggleHideVideoTab && (
-            <button
-              type="button"
-              onClick={() => void onToggleHideVideoTab()}
-              title={
-                hideVideoTabForUsers
-                  ? tr(
-                      'Kipengele cha Video kimefichwa kwa watumiaji wengine (Gusa kukiweka wazi)',
-                      'Video tab is hidden from other users (Tap to show)'
-                    )
-                  : tr(
-                      'Ficha kipengele cha Video kwa watumiaji wengine',
-                      'Hide Video tab from other users'
-                    )
-              }
-              aria-pressed={hideVideoTabForUsers}
-              className={`inline-flex h-9 items-center gap-1.5 rounded-xl border px-2.5 text-[11px] font-bold transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300 ${
-                hideVideoTabForUsers
-                  ? 'border-rose-400/70 bg-rose-600/90 text-white shadow-sm hover:bg-rose-600'
-                  : 'border-white/20 bg-white/10 text-amber-200 hover:bg-white/20 hover:text-white'
-              }`}
-            >
-              {hideVideoTabForUsers ? (
-                <EyeOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              ) : (
-                <Eye className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              )}
-              <span className="hidden sm:inline">
-                {hideVideoTabForUsers
-                  ? tr('Video: Imefichwa', 'Video: Hidden')
-                  : tr('Ficha Video', 'Hide Video')}
-              </span>
-              <span className="sm:hidden">
-                {hideVideoTabForUsers ? tr('Imefichwa', 'Hidden') : 'Video'}
-              </span>
-            </button>
-          )}
-
           {/* Notification Bell (Facebook-Style Replies + News Alerts + Owner Signups) */}
           <div className="relative" ref={notifRef}>
             <button

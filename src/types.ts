@@ -347,7 +347,7 @@ export function normalizeAccountStatus(val: unknown): AccountStatus {
   return val === 'suspended' ? 'suspended' : 'active';
 }
 
-export type AuthPromptReason = 'comment' | 'like' | 'post' | 'chat';
+export type AuthPromptReason = 'comment' | 'like' | 'post' | 'chat' | 'vote';
 
 export interface UserProfile {
   uid: string;
@@ -605,7 +605,7 @@ export interface MemberIdVerificationResult {
   source: 'registry' | 'users_fallback' | 'none';
 }
 
-export type PresenceArea = 'kijiweni' | 'video' | 'fursa' | 'makala' | 'mchart' | 'profile' | 'forum';
+export type PresenceArea = 'kijiweni' | 'video' | 'fursa' | 'makala' | 'mchart' | 'votes' | 'profile' | 'forum';
 
 export interface UserPresence {
   uid: string;
@@ -784,7 +784,7 @@ export type NavTab =
   | 'fursa'
   | 'makala'
   | 'chat'
-  | 'trending'
+  | 'votes'
   | 'safety'
   | 'auth';
 export type SortMode = 'newest' | 'votes' | 'oldest';
@@ -821,6 +821,7 @@ export interface NavUnreadCounts {
   fursa: number;
   makala: number;
   chat: number;
+  votes?: number;
 }
 
 export interface DirectChatThread {
@@ -1036,5 +1037,125 @@ export interface TrainingCertificateData {
   watermarkText: string;
   createdAt?: Timestamp | null;
   updatedAt?: Timestamp | null;
+}
+
+export interface OwnerPrivatePhoto {
+  photoId: string;
+  ownerUid: string;
+  fileHash: string;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  width: number;
+  height: number;
+  imageUrl: string;
+  album: string;
+  caption: string;
+  createdAt?: Timestamp | null;
+  updatedAt?: Timestamp | null;
+}
+
+export interface OwnerPhotoFolder {
+  folderId: string;
+  ownerUid: string;
+  name: string;
+  parentId: string;
+  pinHash: string;
+  createdAt?: Timestamp | null;
+  updatedAt?: Timestamp | null;
+}
+
+export const POLL_CATEGORIES = [
+  'Jamii',
+  'Siasa',
+  'Uongozi',
+  'Biashara',
+  'Teknolojia',
+  'Elimu',
+  'Michezo',
+  'Mengineyo',
+] as const;
+
+export type PollCategory = (typeof POLL_CATEGORIES)[number];
+export type PollQuestionType = 'single' | 'multiple' | 'yes_no' | 'rating' | 'open_opinion';
+export type PollStyle =
+  | 'standard'
+  | 'social_x'
+  | 'whatsapp'
+  | 'candidate_election'
+  | 'school_election'
+  | 'local_govt'
+  | 'open_opinion';
+export type PollStatus = 'open' | 'closed' | 'draft';
+export type PollResultsVisibility = 'always' | 'after_vote' | 'after_close' | 'owner_only';
+
+export interface PollOption {
+  id: string;
+  label: string;
+  subtitle?: string;
+  imageUrl?: string;
+  color?: string;
+}
+
+export interface Poll {
+  id: string;
+  pollId: string;
+  question: string;
+  description: string;
+  imageUrl?: string;
+  category: PollCategory;
+  questionType: PollQuestionType;
+  pollStyle: PollStyle;
+  institutionName: string;
+  options: PollOption[];
+  optionIds: string[];
+  maxChoices: number;
+  status: PollStatus;
+  resultsVisibility: PollResultsVisibility;
+  allowVoteChange: boolean;
+  anonymousMode: boolean;
+  showVoterCount: boolean;
+  allowShare: boolean;
+  isPinned: boolean;
+  hasDeadline: boolean;
+  endsAt: Timestamp | null;
+  totalBallots: number;
+  commentsCount: number;
+  createdBy: string;
+  createdByName: string;
+  createdByPhoto: string;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export interface PollComment {
+  id: string;
+  pollId: string;
+  authorId: string;
+  authorName: string;
+  authorPhoto: string;
+  body: string;
+  parentCommentId: string;
+  likesCount: number;
+  isDeleted: boolean;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export interface PollTally {
+  pollId: string;
+  optionId: string;
+  votesCount: number;
+  updatedAt: Timestamp | null;
+}
+
+export interface PollBallot {
+  pollId: string;
+  userId: string;
+  voterName: string;
+  voterPhoto: string;
+  selectedOptionIds: string[];
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
 }
 

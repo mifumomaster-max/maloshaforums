@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { User } from 'firebase/auth';
 import {
   Timestamp,
@@ -1580,7 +1581,7 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
       </div>
 
       {/* Composer Footer */}
-      <footer className="shrink-0 border-t border-slate-200 bg-[#F0F2F5] px-2.5 py-2 sm:px-4 sm:py-2.5">
+      <footer className="shrink-0 border-t border-slate-200 bg-[#F0F2F5] px-2.5 py-2 pb-2.5 sm:px-4 sm:py-2.5">
         {replyTo && (
           <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border-l-4 border-[#075E54] bg-white px-3 py-2 shadow-xs">
             <div className="min-w-0">
@@ -1606,14 +1607,21 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
         )}
 
         {pendingAttachment && (
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-[#BFD7F2] bg-white px-3 py-2 shadow-xs">
-            <div className="flex min-w-0 items-center gap-2.5">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#BFD7F2] bg-white px-3 py-2 shadow-xs">
+            <div className="flex min-w-0 flex-1 items-center gap-2.5">
               {pendingAttachment.attachmentType === 'image' ? (
-                <img
-                  src={optimizeCloudinaryUrl(pendingAttachment.url, 160)}
-                  alt=""
-                  className="h-11 w-11 shrink-0 rounded-lg object-cover"
-                />
+                <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-lg border border-slate-200">
+                  <img
+                    src={optimizeCloudinaryUrl(pendingAttachment.url, 160)}
+                    alt=""
+                    className={`h-full w-full object-cover ${viewOnceDraft ? 'blur-[2px] brightness-75' : ''}`}
+                  />
+                  {viewOnceDraft && (
+                    <span className="absolute inset-0 flex items-center justify-center text-[10px] font-extrabold text-white">
+                      1x
+                    </span>
+                  )}
+                </div>
               ) : (
                 <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-[#E9F1FA] text-[#1D4E89]">
                   <FileText className="h-5 w-5" />
@@ -1623,19 +1631,21 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
                 <p className="truncate text-xs font-bold text-slate-900">
                   {pendingAttachment.fileName}
                 </p>
-                <p className="text-[11px] text-emerald-700">
+                <p className="text-[11px] font-semibold text-emerald-700">
                   {formatFileSize(pendingAttachment.fileSize)} ·{' '}
-                  {tr('Tayari kutumwa', 'Ready to send')}
+                  {viewOnceDraft
+                    ? tr('🔒 Mara 1 (1x) — Tayari kutumwa', '🔒 View Once (1x) — Ready')
+                    : tr('Tayari kutumwa', 'Ready to send')}
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5 shrink-0">
               {pendingAttachment.attachmentType === 'image' && (
                 <button
                   type="button"
                   onClick={() => setViewOnceDraft((prev) => !prev)}
                   aria-pressed={viewOnceDraft}
-                  className={`inline-flex min-h-[34px] items-center gap-1.5 rounded-xl border px-2.5 py-1 text-[11px] font-bold transition-colors ${
+                  className={`inline-flex min-h-[34px] items-center gap-1 rounded-xl border px-2.5 py-1 text-[11px] font-bold transition-colors ${
                     viewOnceDraft
                       ? 'border-[#075E54] bg-[#075E54] text-white'
                       : 'border-slate-300 bg-slate-50 text-slate-700 hover:bg-slate-100'
@@ -1646,9 +1656,18 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
                   ) : (
                     <Eye className="h-3.5 w-3.5 text-[#075E54]" aria-hidden="true" />
                   )}
-                  <span>{tr('Tazama Mara Moja (1x)', 'View Once (1x)')}</span>
+                  <span>1x</span>
                 </button>
               )}
+              <button
+                type="button"
+                onClick={() => void handleSend()}
+                disabled={uploading}
+                className="inline-flex min-h-[34px] items-center gap-1 rounded-xl bg-[#00A884] px-3 py-1 text-[11px] font-extrabold text-white shadow-xs hover:bg-[#008F6F]"
+              >
+                <Send className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>{tr('Tuma', 'Send')}</span>
+              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -1844,119 +1863,155 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
       </footer>
 
       {/* Protected View-Once Fullscreen Modal (No Download, Locked Immediately) */}
-      {viewOnceModal && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          onContextMenu={(e) => e.preventDefault()}
-          className="fixed inset-0 z-50 flex flex-col items-center justify-between bg-black p-4 text-white select-none"
-        >
-          <div className="flex w-full max-w-3xl items-center justify-between gap-3 pt-1">
-            <div className="flex items-center gap-2 rounded-full bg-amber-500/20 px-3 py-1.5 text-xs font-bold text-amber-200">
-              <EyeOff className="h-4 w-4 shrink-0 text-amber-300" aria-hidden="true" />
-              <span>
-                {tr(
-                  'Picha ya Mara Moja (1x) — Ukifunga haitafunguliwa tena',
-                  'View-Once Photo (1x) — Locks permanently when closed'
-                )}
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setViewOnceModal(null)}
-              aria-label={tr('Funga picha', 'Close view-once photo')}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25"
-            >
-              <X className="h-5 w-5" />
-            </button>
-          </div>
-
-          <div className="flex min-h-0 w-full max-w-3xl flex-1 items-center justify-center py-4">
-            <img
-              src={viewOnceModal.url}
-              alt={viewOnceModal.name}
-              draggable={false}
-              onContextMenu={(e) => e.preventDefault()}
-              className="pointer-events-none max-h-[78vh] max-w-full rounded-xl object-contain select-none"
-              referrerPolicy="no-referrer"
-            />
-          </div>
-
-          {viewOnceModal.text && (
-            <p className="mb-2 max-w-xl rounded-xl bg-white/10 px-4 py-2 text-center text-sm text-white">
-              {viewOnceModal.text}
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* Image Lightbox */}
-      {lightboxImage && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setLightboxImage(null)}
-          className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/90 p-4"
-        >
+      {viewOnceModal &&
+        typeof document !== 'undefined' &&
+        createPortal(
           <div
-            onClick={(e) => e.stopPropagation()}
-            className="flex w-full max-w-4xl items-center justify-between pb-3 text-white"
+            role="dialog"
+            aria-modal="true"
+            onContextMenu={(e) => e.preventDefault()}
+            className="fixed inset-0 z-[90] flex flex-col items-center justify-between bg-black p-4 pb-[max(1rem,env(safe-area-inset-bottom))] text-white select-none"
           >
-            <p className="truncate text-sm font-semibold">{lightboxImage.name}</p>
-            <div className="flex items-center gap-2">
-              <a
-                href={lightboxImage.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                download={lightboxImage.name}
-                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-white/15 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/25"
-              >
-                <ExternalLink className="h-4 w-4" />
-                <span>{tr('Pakua', 'Download')}</span>
-              </a>
+            <div className="flex w-full max-w-3xl items-center justify-between gap-3 pt-1">
+              <div className="flex items-center gap-2 rounded-full bg-amber-500/20 px-3 py-1.5 text-xs font-bold text-amber-200">
+                <EyeOff className="h-4 w-4 shrink-0 text-amber-300" aria-hidden="true" />
+                <span>
+                  {tr(
+                    'Picha ya Mara Moja (1x) — Ukifunga haitafunguliwa tena',
+                    'View-Once Photo (1x) — Locks permanently when closed'
+                  )}
+                </span>
+              </div>
               <button
                 type="button"
-                onClick={() => setLightboxImage(null)}
-                aria-label={tr('Funga picha', 'Close image')}
-                className="flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25"
+                onClick={() => setViewOnceModal(null)}
+                aria-label={tr('Funga picha', 'Close view-once photo')}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
-          </div>
-          <img
-            src={lightboxImage.url}
-            alt={lightboxImage.name}
-            onClick={(e) => e.stopPropagation()}
-            className="max-h-[82vh] max-w-full rounded-xl object-contain"
-          />
-        </div>
-      )}
 
-      {/* In-App PDF Viewer + Download Modal */}
-      {activePdfDoc && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label={activePdfDoc.name}
-          onClick={() => setActivePdfDoc(null)}
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/75 p-0 backdrop-blur-xs md:items-center md:p-4"
-        >
+            <div className="flex min-h-0 w-full max-w-3xl flex-1 items-center justify-center py-4">
+              <img
+                src={viewOnceModal.url}
+                alt={viewOnceModal.name}
+                draggable={false}
+                onContextMenu={(e) => e.preventDefault()}
+                className="pointer-events-none max-h-[78vh] max-w-full rounded-xl object-contain select-none"
+                referrerPolicy="no-referrer"
+              />
+            </div>
+
+            {viewOnceModal.text && (
+              <p className="mb-2 max-w-xl rounded-xl bg-white/10 px-4 py-2 text-center text-sm text-white">
+                {viewOnceModal.text}
+              </p>
+            )}
+          </div>,
+          document.body
+        )}
+
+      {/* Image Lightbox */}
+      {lightboxImage &&
+        typeof document !== 'undefined' &&
+        createPortal(
           <div
-            onClick={(e) => e.stopPropagation()}
-            className="flex h-[90dvh] w-full max-w-3xl flex-col overflow-hidden rounded-t-3xl bg-[#F4F7FA] text-slate-900 shadow-2xl md:h-[86dvh] md:rounded-2xl"
+            role="dialog"
+            aria-modal="true"
+            onClick={() => setLightboxImage(null)}
+            className="fixed inset-0 z-[90] flex flex-col items-center justify-center bg-black/90 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
           >
-            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-[#075E54] px-4 py-3 text-white">
-              <div className="flex min-w-0 items-center gap-2.5">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-red-600 text-[10px] font-extrabold text-white">
-                  PDF
-                </span>
-                <p className="truncate text-xs font-bold sm:text-sm">{activePdfDoc.name}</p>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="flex w-full max-w-4xl items-center justify-between pb-3 text-white"
+            >
+              <p className="truncate text-sm font-semibold">{lightboxImage.name}</p>
+              <div className="flex items-center gap-2">
+                <a
+                  href={lightboxImage.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  download={lightboxImage.name}
+                  className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-white/15 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/25"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  <span>{tr('Pakua', 'Download')}</span>
+                </a>
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={() => setLightboxImage(null)}
+                  aria-label={tr('Funga picha', 'Close image')}
+                  className="flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+            <img
+              src={lightboxImage.url}
+              alt={lightboxImage.name}
+              onClick={(e) => e.stopPropagation()}
+              className="max-h-[82vh] max-w-full rounded-xl object-contain"
+            />
+          </div>,
+          document.body
+        )}
+
+      {/* In-App PDF Viewer + Download Modal */}
+      {activePdfDoc &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={activePdfDoc.name}
+            onClick={() => setActivePdfDoc(null)}
+            className="fixed inset-0 z-[90] flex items-end justify-center bg-black/75 p-0 backdrop-blur-xs md:items-center md:p-4"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="flex h-[90dvh] w-full max-w-3xl flex-col overflow-hidden rounded-t-3xl bg-[#F4F7FA] text-slate-900 shadow-2xl pb-[max(0.5rem,env(safe-area-inset-bottom))] md:pb-0 md:h-[86dvh] md:rounded-2xl"
+            >
+              <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-[#075E54] px-4 py-3 text-white">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-red-600 text-[10px] font-extrabold text-white">
+                    PDF
+                  </span>
+                  <p className="truncate text-xs font-bold sm:text-sm">{activePdfDoc.name}</p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void downloadChatAttachmentFile(
+                        activePdfDoc.url,
+                        activePdfDoc.name,
+                        'application/pdf'
+                      ).then(() =>
+                        onToast(tr('PDF imepakuliwa kwenye simu yako!', 'PDF saved to your device!'))
+                      );
+                    }}
+                    className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl bg-[#25D366] px-3 text-xs font-extrabold text-[#064E46] hover:brightness-105"
+                  >
+                    <Download className="h-4 w-4" aria-hidden="true" />
+                    <span>{tr('Pakua Simu', 'Save PDF')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActivePdfDoc(null)}
+                    aria-label={tr('Funga PDF', 'Close PDF')}
+                    className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25"
+                  >
+                    <X className="h-5 w-5" aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6 sm:px-5">
+                <MobilePdfNoteReader
+                  pdfUrl={activePdfDoc.url}
+                  fileName={activePdfDoc.name}
+                  onDownload={() => {
                     void downloadChatAttachmentFile(
                       activePdfDoc.url,
                       activePdfDoc.name,
@@ -1965,39 +2020,12 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
                       onToast(tr('PDF imepakuliwa kwenye simu yako!', 'PDF saved to your device!'))
                     );
                   }}
-                  className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl bg-[#25D366] px-3 text-xs font-extrabold text-[#064E46] hover:brightness-105"
-                >
-                  <Download className="h-4 w-4" aria-hidden="true" />
-                  <span>{tr('Pakua Simu', 'Save PDF')}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActivePdfDoc(null)}
-                  aria-label={tr('Funga PDF', 'Close PDF')}
-                  className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25"
-                >
-                  <X className="h-5 w-5" aria-hidden="true" />
-                </button>
+                />
               </div>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6 sm:px-5">
-              <MobilePdfNoteReader
-                pdfUrl={activePdfDoc.url}
-                fileName={activePdfDoc.name}
-                onDownload={() => {
-                  void downloadChatAttachmentFile(
-                    activePdfDoc.url,
-                    activePdfDoc.name,
-                    'application/pdf'
-                  ).then(() =>
-                    onToast(tr('PDF imepakuliwa kwenye simu yako!', 'PDF saved to your device!'))
-                  );
-                }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
 
       <ImageResizeModal
         file={pendingCropImage}

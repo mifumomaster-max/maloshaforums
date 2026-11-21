@@ -435,13 +435,20 @@ export const AuthView: React.FC<AuthViewProps> = ({
                     ? tr('Tengeneza Akaunti ili Upende (Like)', 'Create an Account to Like')
                     : promptReason === 'chat'
                       ? tr('Tengeneza Akaunti ili Ushiriki Mchart', 'Create an Account to Join Mchart')
-                      : tr('Tengeneza Akaunti ili Uchapishie Mada', 'Create an Account to Post')}
+                      : promptReason === 'vote'
+                        ? tr('Jisajili au Endelea na Google ili Upige Kura (Mpoll)', 'Register or Continue with Google to Vote (Mpoll)')
+                        : tr('Tengeneza Akaunti ili Uchapishie Mada', 'Create an Account to Post')}
               </p>
               <p className="mt-0.5">
-                {tr(
-                  'Unaweza kuendelea na Google papo hapo au kujisajili kawaida kwa kujaza Jina, Namba ya Simu, Email na Nenosiri hapa chini.',
-                  'You can continue with Google immediately or register below using your Name, Phone Number, Email, and Password.'
-                )}
+                {promptReason === 'vote'
+                  ? tr(
+                      'Umeona maelezo yote ya kura. Ili kura yako ihesabiwe kwa usalama (kura 1 kwa kila mtu), bofya "Endelea na Google" hapa chini au jisajili, kisha utarudishwa moja kwa moja kwenye Mpoll.',
+                      'You have seen all poll details. To cast a verified vote (1 vote per person), tap "Continue with Google" below or register, and you will return straight to Mpoll.'
+                    )
+                  : tr(
+                      'Unaweza kuendelea na Google papo hapo au kujisajili kawaida kwa kujaza Jina, Namba ya Simu, Email na Nenosiri hapa chini.',
+                      'You can continue with Google immediately or register below using your Name, Phone Number, Email, and Password.'
+                    )}
               </p>
             </div>
           )}

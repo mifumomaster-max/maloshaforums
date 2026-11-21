@@ -600,6 +600,148 @@
         "showSignatory2", "signatory2Name", "signatory2Title", "signatory2SigText", "signatory2SigPath",
         "sealText", "watermarkText", "createdAt", "updatedAt"
       ]
+    },
+    "OwnerPrivatePhoto": {
+      "title": "OwnerPrivatePhoto",
+      "description": "Owner-only private personal photo vault backup record with SHA-256 content deduplication.",
+      "type": "object",
+      "properties": {
+        "photoId": { "type": "string", "minLength": 43, "maxLength": 43, "pattern": "^ph_[a-f0-9]{40}$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fileHash": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]{64}$" },
+        "fileName": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "mimeType": { "type": "string", "maxLength": 60 },
+        "fileSize": { "type": "integer" },
+        "width": { "type": "integer" },
+        "height": { "type": "integer" },
+        "imageUrl": { "type": "string", "minLength": 10, "maxLength": 500 },
+        "album": { "type": "string", "maxLength": 40 },
+        "caption": { "type": "string", "maxLength": 240 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "photoId", "ownerUid", "fileHash", "fileName", "mimeType",
+        "fileSize", "width", "height", "imageUrl", "album", "caption",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "OwnerPhotoFolder": {
+      "title": "OwnerPhotoFolder",
+      "description": "Owner-only nested private photo vault folders with optional SHA-256 PIN protection.",
+      "type": "object",
+      "properties": {
+        "folderId": { "type": "string", "minLength": 1, "maxLength": 40, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "parentId": { "type": "string", "maxLength": 40 },
+        "pinHash": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["folderId", "ownerUid", "name", "parentId", "pinHash", "createdAt", "updatedAt"]
+    },
+    "Poll": {
+      "title": "Poll",
+      "description": "Owner-managed community poll, social vote, or candidate election with configurable styles, security settings, and visibility.",
+      "type": "object",
+      "properties": {
+        "pollId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdByName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "createdByPhoto": { "type": "string", "maxLength": 500 },
+        "question": { "type": "string", "minLength": 4, "maxLength": 300 },
+        "description": { "type": "string", "maxLength": 1500 },
+        "imageUrl": { "type": "string", "maxLength": 500 },
+        "category": {
+          "type": "string",
+          "enum": ["Siasa", "Jamii", "Biashara", "Teknolojia", "Elimu", "Michezo", "Uongozi", "Mengineyo"]
+        },
+        "pollStyle": {
+          "type": "string",
+          "enum": ["standard", "social_x", "whatsapp", "candidate_election", "school_election", "local_govt", "open_opinion"]
+        },
+        "institutionName": { "type": "string", "maxLength": 120 },
+        "questionType": {
+          "type": "string",
+          "enum": ["single", "multiple", "yes_no", "rating", "open_opinion"]
+        },
+        "options": { "type": "array", "description": "0 options for open_opinion discussion questions, or 2 to 12 poll option/candidate objects ({ id, label, color, imageUrl, subtitle })." },
+        "optionIds": { "type": "array", "description": "Matching option ID strings for rule validation (empty for open_opinion)." },
+        "maxChoices": { "type": "integer" },
+        "status": { "type": "string", "enum": ["open", "closed", "draft"] },
+        "resultsVisibility": { "type": "string", "enum": ["always", "after_vote", "after_close", "owner_only"] },
+        "allowVoteChange": { "type": "boolean" },
+        "anonymousMode": { "type": "boolean" },
+        "showVoterCount": { "type": "boolean" },
+        "allowShare": { "type": "boolean" },
+        "isPinned": { "type": "boolean" },
+        "hasDeadline": { "type": "boolean" },
+        "endsAt": { "type": "string", "format": "date-time" },
+        "totalBallots": { "type": "integer" },
+        "commentsCount": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "pollId", "createdBy", "createdByName", "createdByPhoto",
+        "question", "description", "category", "questionType",
+        "options", "optionIds", "maxChoices", "status", "resultsVisibility",
+        "allowVoteChange", "anonymousMode", "showVoterCount", "allowShare",
+        "isPinned", "hasDeadline", "endsAt", "totalBallots",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "PollComment": {
+      "title": "PollComment",
+      "description": "Facebook-style threaded comment or reply under an Mpoll discussion question.",
+      "type": "object",
+      "properties": {
+        "pollId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "authorPhoto": { "type": "string", "maxLength": 500 },
+        "body": { "type": "string", "minLength": 2, "maxLength": 4000 },
+        "parentCommentId": { "type": "string", "maxLength": 128 },
+        "likesCount": { "type": "integer" },
+        "isDeleted": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "pollId", "authorId", "authorName", "authorPhoto", "body",
+        "parentCommentId", "likesCount", "isDeleted", "createdAt", "updatedAt"
+      ]
+    },
+    "PollTally": {
+      "title": "PollTally",
+      "description": "Per-option atomic vote tally counter guarded by ballot-diff verification.",
+      "type": "object",
+      "properties": {
+        "pollId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "optionId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "votesCount": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["pollId", "optionId", "votesCount", "updatedAt"]
+    },
+    "PollBallot": {
+      "title": "PollBallot",
+      "description": "Single-account immutable-identity ballot record preventing duplicate voting.",
+      "type": "object",
+      "properties": {
+        "pollId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "voterName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "voterPhoto": { "type": "string", "maxLength": 500 },
+        "selectedOptionIds": { "type": "array", "description": "1 to 10 selected option IDs chosen by the voter." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "pollId", "userId", "voterName", "voterPhoto",
+        "selectedOptionIds", "createdAt", "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -706,6 +848,34 @@
     "/training_certificates/{certId}": {
       "schema": { "$ref": "#/entities/TrainingCertificate" },
       "description": "Owner-issued A4 institutional training certificates."
+    },
+    "/owner_private_photos/{photoId}": {
+      "schema": { "$ref": "#/entities/OwnerPrivatePhoto" },
+      "description": "Owner-only private personal photo vault backup records with SHA-256 deduplication."
+    },
+    "/owner_photo_folders/{folderId}": {
+      "schema": { "$ref": "#/entities/OwnerPhotoFolder" },
+      "description": "Owner-only hierarchical folders for organizing and locking private photos."
+    },
+    "/polls/{pollId}": {
+      "schema": { "$ref": "#/entities/Poll" },
+      "description": "Owner-created community polls & voting cards readable publicly (open/closed) and writable only by owner (with atomic ballot count increment)."
+    },
+    "/polls/{pollId}/tallies/{optionId}": {
+      "schema": { "$ref": "#/entities/PollTally" },
+      "description": "Per-option vote counter protected by resultsVisibility rules and atomic ballot diff checks."
+    },
+    "/polls/{pollId}/ballots/{userId}": {
+      "schema": { "$ref": "#/entities/PollBallot" },
+      "description": "Authenticated single-account ballot record preventing duplicate votes."
+    },
+    "/polls/{pollId}/comments/{commentId}": {
+      "schema": { "$ref": "#/entities/PollComment" },
+      "description": "Facebook-style threaded opinion comments under an Mpoll question."
+    },
+    "/polls/{pollId}/comments/{commentId}/likes/{userId}": {
+      "schema": { "$ref": "#/entities/Vote" },
+      "description": "Per-user like records on Mpoll discussion comments."
     }
   }
 }

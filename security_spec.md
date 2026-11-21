@@ -12,6 +12,7 @@
 9. **24-Hour Status & Viewer-List Privacy**: Mchart photo statuses (`/mchart_statuses/{statusId}`) require non-anonymous authentication (`isSignedIn()`), expire after 24 hours, respect `'members'` vs `'selected'` audience restrictions, and restrict `/views/{viewerId}` listing strictly to the status author.
 10. **Strict Mchart Member-Only Gate & Locked Notes**: Group chat (`/forum_chat_messages`) and owner notes (`/mchart_notes`) require `isSignedIn()`. Locked note full content (`/mchart_notes/{noteId}/content/full`) is strictly unreadable unless `canReadProtectedNoteContent(noteId)` passes.
 11. **View-Once Photo Scrubbing & Atomic Followers**: Recipient of a `viewOnce` direct photo can consume it exactly once, transitioning `viewOnceConsumed: true` and scrubbing `attachmentUrl: ""`. Member follow/unfollow atomically updates `followersCount` via `existsAfter`.
+12. **Secure Community Voting & Single-Account Ballot Integrity**: Only verified platform owner (`isAdmin()`) can create, configure, close, or delete `/polls/{pollId}`. Unauthenticated guests can read open/closed poll questions, but CANNOT create or update `/ballots/{userId}` or `/tallies/{optionId}`. Each registered non-suspended member (`isNotSuspended()`) gets exactly one `/ballots/{userId}` keyed by `request.auth.uid`, validated atomically against `/polls/{pollId}.totalBallots` and `/tallies/{optionId}.votesCount` (`+/-1` only), with results visibility (`always`, `after_vote`, `after_close`, `owner_only`) and deadline (`endsAt > request.time`) enforced server-side in Firestore Rules.
 
 ## 2. Adversarial "Dirty Dozen" Payloads (Expected: PERMISSION_DENIED)
 1. **Unauthenticated / Anonymous Write**: Creating a topic when `request.auth == null` or `sign_in_provider == "anonymous"`.
@@ -31,3 +32,4 @@
 15. **Status Viewer-List Snooping**: Non-author User B attempting `list` on `/mchart_statuses/s1/views` to discover who viewed User A's status.
 16. **Unauthenticated Mchart Snooping**: Guest (`request.auth == null`) attempting `get` or `list` on `/forum_chat_messages` or `/mchart_notes`.
 17. **Sender Replay / Re-open of View-Once Photo**: Attempting to reset `viewOnceConsumed` back to `false` or restore `attachmentUrl`.
+18. **Guest / Duplicate / Stuffed Poll Ballot**: Unauthenticated guest attempting to cast a ballot, voter attempting to create `/polls/p1/ballots/otherUid`, voter attempting to increment `/polls/p1/tallies/opt1.votesCount` by `+10`, or reading `owner_only` / `after_close` tallies early.

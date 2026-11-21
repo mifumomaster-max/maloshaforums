@@ -19,6 +19,8 @@ import {
   Move,
   Newspaper,
   Palette,
+  RotateCcw,
+  Save,
   Send,
   Share2,
   Shuffle,
@@ -33,6 +35,12 @@ import { useLanguage } from '../context/LanguageContext';
 import { uploadImageToCloudinary } from '../services/cloudinaryService';
 import { PrimaryBoard, TopicCategory } from '../types';
 import { parseTagsInput } from '../utils/formatters';
+import {
+  blobToImageElement,
+  clearStudioDraft,
+  loadStudioDraft,
+  saveStudioDraft,
+} from '../utils/studioDraftStorage';
 
 type PosterLayoutId =
   | 'bbc_classic'
@@ -106,6 +114,64 @@ interface XCardConfig {
   xPct: number;
   yPct: number;
   widthPct: number;
+}
+
+const POSTER_DRAFT_KEY = 'poster_studio_draft_v1';
+
+interface PosterStudioDraftPayload {
+  activeTab: StudioTabId;
+  layoutId: PosterLayoutId;
+  aspect: PosterAspect;
+  fontStyle: FontStyleId;
+  paletteId: string;
+  colors: PosterPalette;
+  showMonogram: boolean;
+  monogramText: string;
+  channelLabel: string;
+  showVerifiedMasthead: boolean;
+  stampSeal: StampSealId;
+  showWatermarkMark: boolean;
+  showHeaderBar: boolean;
+  showLivePill: boolean;
+  dateStamp: string;
+  showRibbon: boolean;
+  ribbonText: string;
+  locationTag: string;
+  headline: string;
+  subheadline: string;
+  headlineSize: HeadlineSize;
+  scrimStrength: number;
+  headlineBgMode: HeadlineBgMode;
+  textBackdropOpacity: number;
+  circlesBehindText: boolean;
+  footerLink: string;
+  footerHandle: string;
+  enabledSocials: SocialPlatformKey[];
+  showResultsBanner: boolean;
+  resultsPromoText: string;
+  photoZoom: number;
+  photoOffsetX: number;
+  photoOffsetY: number;
+  mainPhotoBlob: Blob | null;
+  circles: {
+    id: string;
+    blob: Blob | null;
+    xPct: number;
+    yPct: number;
+    sizePct: number;
+    borderWidth: number;
+    borderColor: string;
+    caption: string;
+  }[];
+  xCard: Omit<XCardConfig, 'avatarUrl' | 'avatarImg'> & { avatarBlob: Blob | null };
+  dragModeEnabled: boolean;
+  positionsLocked: boolean;
+  publishBoard: PrimaryBoard;
+  publishMode: PublishMode;
+  postTitle: string;
+  postBody: string;
+  postTagsRaw: string;
+  savedAt: number;
 }
 
 const LAYOUT_OPTIONS: {
@@ -823,6 +889,299 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
     board: PrimaryBoard;
   } | null>(null);
 
+  // Persistent Draft State & File Blob Refs (survives tab switching and phone restart)
+  const mainPhotoBlobRef = useRef<Blob | null>(null);
+  const circleBlobsRef = useRef<Map<string, Blob>>(new Map());
+  const xAvatarBlobRef = useRef<Blob | null>(null);
+  const draftHydratedRef = useRef(false);
+  const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
+
+  const buildDraftPayload = useCallback(
+    (): PosterStudioDraftPayload => ({
+      activeTab,
+      layoutId,
+      aspect,
+      fontStyle,
+      paletteId,
+      colors,
+      showMonogram,
+      monogramText,
+      channelLabel,
+      showVerifiedMasthead,
+      stampSeal,
+      showWatermarkMark,
+      showHeaderBar,
+      showLivePill,
+      dateStamp,
+      showRibbon,
+      ribbonText,
+      locationTag,
+      headline,
+      subheadline,
+      headlineSize,
+      scrimStrength,
+      headlineBgMode,
+      textBackdropOpacity,
+      circlesBehindText,
+      footerLink,
+      footerHandle,
+      enabledSocials,
+      showResultsBanner,
+      resultsPromoText,
+      photoZoom,
+      photoOffsetX,
+      photoOffsetY,
+      mainPhotoBlob: mainPhotoBlobRef.current,
+      circles: circlePhotos.map((c) => ({
+        id: c.id,
+        blob: circleBlobsRef.current.get(c.id) || null,
+        xPct: c.xPct,
+        yPct: c.yPct,
+        sizePct: c.sizePct,
+        borderWidth: c.borderWidth,
+        borderColor: c.borderColor,
+        caption: c.caption,
+      })),
+      xCard: {
+        enabled: xCard.enabled,
+        theme: xCard.theme,
+        displayName: xCard.displayName,
+        handle: xCard.handle,
+        verifyType: xCard.verifyType,
+        body: xCard.body,
+        timestamp: xCard.timestamp,
+        showMetrics: xCard.showMetrics,
+        replies: xCard.replies,
+        reposts: xCard.reposts,
+        likes: xCard.likes,
+        views: xCard.views,
+        xPct: xCard.xPct,
+        yPct: xCard.yPct,
+        widthPct: xCard.widthPct,
+        avatarBlob: xAvatarBlobRef.current,
+      },
+      dragModeEnabled,
+      positionsLocked,
+      publishBoard,
+      publishMode,
+      postTitle,
+      postBody,
+      postTagsRaw,
+      savedAt: Date.now(),
+    }),
+    [
+      activeTab,
+      layoutId,
+      aspect,
+      fontStyle,
+      paletteId,
+      colors,
+      showMonogram,
+      monogramText,
+      channelLabel,
+      showVerifiedMasthead,
+      stampSeal,
+      showWatermarkMark,
+      showHeaderBar,
+      showLivePill,
+      dateStamp,
+      showRibbon,
+      ribbonText,
+      locationTag,
+      headline,
+      subheadline,
+      headlineSize,
+      scrimStrength,
+      headlineBgMode,
+      textBackdropOpacity,
+      circlesBehindText,
+      footerLink,
+      footerHandle,
+      enabledSocials,
+      showResultsBanner,
+      resultsPromoText,
+      photoZoom,
+      photoOffsetX,
+      photoOffsetY,
+      circlePhotos,
+      xCard,
+      dragModeEnabled,
+      positionsLocked,
+      publishBoard,
+      publishMode,
+      postTitle,
+      postBody,
+      postTagsRaw,
+    ]
+  );
+
+  const latestDraftBuilderRef = useRef(buildDraftPayload);
+  useEffect(() => {
+    latestDraftBuilderRef.current = buildDraftPayload;
+  }, [buildDraftPayload]);
+
+  // Hydrate saved draft once on mount
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const draft = await loadStudioDraft<PosterStudioDraftPayload>(POSTER_DRAFT_KEY);
+        if (cancelled || !draft) {
+          draftHydratedRef.current = true;
+          return;
+        }
+        setActiveTab(draft.activeTab || 'design');
+        setLayoutId(draft.layoutId || 'bbc_classic');
+        setAspect(draft.aspect || '5:6');
+        setFontStyle(draft.fontStyle || 'sans');
+        setPaletteId(draft.paletteId || 'bbc_crimson');
+        if (draft.colors) setColors(draft.colors);
+        setShowMonogram(Boolean(draft.showMonogram));
+        if (typeof draft.monogramText === 'string') setMonogramText(draft.monogramText);
+        if (typeof draft.channelLabel === 'string') setChannelLabel(draft.channelLabel);
+        setShowVerifiedMasthead(Boolean(draft.showVerifiedMasthead));
+        setStampSeal(draft.stampSeal || 'none');
+        setShowWatermarkMark(Boolean(draft.showWatermarkMark));
+        setShowHeaderBar(draft.showHeaderBar !== false);
+        setShowLivePill(draft.showLivePill !== false);
+        if (typeof draft.dateStamp === 'string') setDateStamp(draft.dateStamp);
+        setShowRibbon(draft.showRibbon !== false);
+        if (typeof draft.ribbonText === 'string') setRibbonText(draft.ribbonText);
+        if (typeof draft.locationTag === 'string') setLocationTag(draft.locationTag);
+        if (typeof draft.headline === 'string') setHeadline(draft.headline);
+        if (typeof draft.subheadline === 'string') setSubheadline(draft.subheadline);
+        setHeadlineSize(draft.headlineSize || 'normal');
+        if (typeof draft.scrimStrength === 'number') setScrimStrength(draft.scrimStrength);
+        setHeadlineBgMode(draft.headlineBgMode || 'solid');
+        if (typeof draft.textBackdropOpacity === 'number') setTextBackdropOpacity(draft.textBackdropOpacity);
+        setCirclesBehindText(Boolean(draft.circlesBehindText));
+        if (typeof draft.footerLink === 'string') setFooterLink(draft.footerLink);
+        if (typeof draft.footerHandle === 'string') setFooterHandle(draft.footerHandle);
+        if (Array.isArray(draft.enabledSocials)) setEnabledSocials(draft.enabledSocials);
+        setShowResultsBanner(draft.showResultsBanner !== false);
+        if (typeof draft.resultsPromoText === 'string') setResultsPromoText(draft.resultsPromoText);
+        if (typeof draft.photoZoom === 'number') setPhotoZoom(draft.photoZoom);
+        if (typeof draft.photoOffsetX === 'number') setPhotoOffsetX(draft.photoOffsetX);
+        if (typeof draft.photoOffsetY === 'number') setPhotoOffsetY(draft.photoOffsetY);
+        setDragModeEnabled(draft.dragModeEnabled !== false);
+        setPositionsLocked(Boolean(draft.positionsLocked));
+        if (draft.publishBoard) setPublishBoard(draft.publishBoard);
+        if (draft.publishMode) setPublishMode(draft.publishMode);
+        if (typeof draft.postTitle === 'string') setPostTitle(draft.postTitle);
+        if (typeof draft.postBody === 'string') setPostBody(draft.postBody);
+        if (typeof draft.postTagsRaw === 'string') setPostTagsRaw(draft.postTagsRaw);
+
+        if (draft.mainPhotoBlob) {
+          mainPhotoBlobRef.current = draft.mainPhotoBlob;
+          const url = URL.createObjectURL(draft.mainPhotoBlob);
+          setPhotoObjectUrl(url);
+        }
+
+        if (Array.isArray(draft.circles) && draft.circles.length > 0) {
+          const restoredCircles: CirclePhotoItem[] = [];
+          for (const c of draft.circles) {
+            const loaded = await blobToImageElement(c.blob);
+            if (loaded && c.blob) {
+              circleBlobsRef.current.set(c.id, c.blob);
+              restoredCircles.push({
+                id: c.id,
+                objectUrl: loaded.objectUrl,
+                img: loaded.img,
+                xPct: c.xPct,
+                yPct: c.yPct,
+                sizePct: c.sizePct,
+                borderWidth: c.borderWidth,
+                borderColor: c.borderColor,
+                caption: c.caption,
+              });
+            }
+          }
+          if (!cancelled && restoredCircles.length > 0) {
+            setCirclePhotos(restoredCircles);
+          }
+        }
+
+        if (draft.xCard) {
+          const loadedAvatar = await blobToImageElement(draft.xCard.avatarBlob);
+          if (loadedAvatar && draft.xCard.avatarBlob) {
+            xAvatarBlobRef.current = draft.xCard.avatarBlob;
+          }
+          const { avatarBlob: _ignoredBlob, ...restX } = draft.xCard;
+          if (!cancelled) {
+            setXCard({
+              ...restX,
+              avatarUrl: loadedAvatar?.objectUrl || null,
+              avatarImg: loadedAvatar?.img || null,
+            });
+          }
+        }
+
+        if (!cancelled && draft.savedAt) {
+          setDraftSavedAt(draft.savedAt);
+        }
+      } finally {
+        draftHydratedRef.current = true;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Debounced Auto-Save on every edit
+  useEffect(() => {
+    if (!draftHydratedRef.current) return;
+    const timer = window.setTimeout(() => {
+      const payload = buildDraftPayload();
+      void saveStudioDraft(POSTER_DRAFT_KEY, payload).then(() => {
+        setDraftSavedAt(payload.savedAt);
+      });
+    }, 320);
+    return () => window.clearTimeout(timer);
+  }, [buildDraftPayload]);
+
+  // Immediate flush on unmount / tab switch / phone sleep / pagehide
+  useEffect(() => {
+    const flushNow = () => {
+      if (!draftHydratedRef.current) return;
+      void saveStudioDraft(POSTER_DRAFT_KEY, latestDraftBuilderRef.current());
+    };
+    const onVisChange = () => {
+      if (document.visibilityState === 'hidden') flushNow();
+    };
+    document.addEventListener('visibilitychange', onVisChange);
+    window.addEventListener('pagehide', flushNow);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisChange);
+      window.removeEventListener('pagehide', flushNow);
+      flushNow();
+    };
+  }, []);
+
+  const handleResetPosterDraft = async () => {
+    await clearStudioDraft(POSTER_DRAFT_KEY);
+    mainPhotoBlobRef.current = null;
+    circleBlobsRef.current.clear();
+    xAvatarBlobRef.current = null;
+    if (photoObjectUrl) URL.revokeObjectURL(photoObjectUrl);
+    setPhotoObjectUrl(null);
+    setLoadedPhoto(null);
+    setCirclePhotos([]);
+    setSelectedCircleId(null);
+    setSelectedTarget(null);
+    setLayoutId('bbc_classic');
+    setAspect('5:6');
+    setFontStyle('sans');
+    applyPalettePreset(PALETTE_PRESETS[0]);
+    setHeadline('Taarifa Muhimu: Fursa Mpya za Kidijitali na Elimu kwa Vijana Zazinduliwa Rasmi');
+    setSubheadline('Fuata uchambuzi kamili na majadiliano ya wadau moja kwa moja ndani ya jukwaa.');
+    setPostTitle('');
+    setPostBody('');
+    setDraftSavedAt(null);
+    onToast(tr('Rasimu imefutwa — umeanza ukurasa mpya wa Poster Studio.', 'Draft cleared — fresh poster ready.'));
+  };
+
   const applyPalettePreset = (preset: PosterPalette) => {
     setPaletteId(preset.id);
     setColors(preset);
@@ -881,6 +1240,7 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
       return;
     }
     if (photoObjectUrl) URL.revokeObjectURL(photoObjectUrl);
+    mainPhotoBlobRef.current = file;
     setPhotoObjectUrl(URL.createObjectURL(file));
     setPhotoZoom(1);
     setPhotoOffsetX(0);
@@ -890,6 +1250,7 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
 
   const handleClearMainPhoto = () => {
     if (photoObjectUrl) URL.revokeObjectURL(photoObjectUrl);
+    mainPhotoBlobRef.current = null;
     setPhotoObjectUrl(null);
     setLoadedPhoto(null);
     setPhotoZoom(1);
@@ -910,6 +1271,7 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
     const img = new Image();
     img.onload = () => {
       const id = `circle-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      circleBlobsRef.current.set(id, file);
       const colSlot = circlePhotos.length % 3;
       const newItem: CirclePhotoItem = {
         id,
@@ -946,6 +1308,7 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
   };
 
   const removeCirclePhoto = (id: string) => {
+    circleBlobsRef.current.delete(id);
     setCirclePhotos((prev) => {
       const target = prev.find((c) => c.id === id);
       if (target) URL.revokeObjectURL(target.objectUrl);
@@ -970,6 +1333,7 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
     const objUrl = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
+      xAvatarBlobRef.current = file;
       setXCard((prev) => {
         if (prev.avatarUrl) URL.revokeObjectURL(prev.avatarUrl);
         return { ...prev, avatarUrl: objUrl, avatarImg: img, enabled: true };
@@ -2296,7 +2660,23 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {draftSavedAt && (
+            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-200">
+              <Save className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>{tr('Imehifadhiwa', 'Auto-saved')}</span>
+            </span>
+          )}
+
+          <button
+            type="button"
+            onClick={() => void handleResetPosterDraft()}
+            className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border border-white/25 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-white/20"
+          >
+            <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>{tr('Anza Upya', 'Reset')}</span>
+          </button>
+
           <button
             type="button"
             onClick={handleRandomizeDesign}

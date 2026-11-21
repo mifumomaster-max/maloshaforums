@@ -30,6 +30,8 @@ import {
   MemberIdRecord,
   MemberIdVerificationResult,
   OwnerCustomIdCardData,
+  OwnerPhotoFolder,
+  OwnerPrivatePhoto,
   PresenceArea,
   ReportReason,
   StatusPrivacyMode,
@@ -3687,3 +3689,325 @@ export async function fetchForumMembersDirectory(): Promise<MemberDirectoryCandi
     return [];
   }
 }
+
+export async function computeFileSha256(file: Blob): Promise<string> {
+  const buf = await file.arrayBuffer();
+  if (typeof crypto !== 'undefined' && crypto.subtle) {
+    const digest = await crypto.subtle.digest('SHA-256', buf);
+    const bytes = new Uint8Array(digest);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  // Fallback deterministic 64-hex hash if crypto.subtle unavailable
+  const bytes = new Uint8Array(buf);
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  let h3 = 0x9e3779b9;
+  let h4 = 0x85ebca6b;
+  for (let i = 0; i < bytes.length; i++) {
+    const v = bytes[i];
+    h1 = Math.imul(h1 ^ v, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ (v + i), 0x85ebca6b) >>> 0;
+    h3 = Math.imul(h3 ^ (v * 31), 0xc2b2ae35) >>> 0;
+    h4 = Math.imul(h4 ^ (i & 255), 0x27d4eb2f) >>> 0;
+  }
+  const seg = (n: number) => n.toString(16).padStart(8, '0');
+  return `${seg(h1)}${seg(h2)}${seg(h3)}${seg(h4)}${seg(h1 ^ h3)}${seg(h2 ^ h4)}${seg(bytes.length >>> 0)}${seg((h1 + h2 + h3 + h4) >>> 0)}`;
+}
+
+export function ownerPhotoIdFromHash(fileHash: string): string {
+  const cleanHash = fileHash.toLowerCase().replace(/[^a-f0-9]/g, '');
+  return `ph_${cleanHash.slice(0, 40)}`;
+}
+
+export async function listOwnerPrivatePhotos(): Promise<OwnerPrivatePhoto[]> {
+  const path = 'owner_private_photos';
+  try {
+    const snap = await getDocs(collection(db, 'owner_private_photos'));
+    const list: OwnerPrivatePhoto[] = snap.docs.map((docSnap) => {
+      const d = docSnap.data();
+      return {
+        photoId: String(d.photoId || docSnap.id),
+        ownerUid: String(d.ownerUid || ''),
+        fileHash: String(d.fileHash || ''),
+        fileName: String(d.fileName || 'picha.jpg'),
+        mimeType: String(d.mimeType || 'image/jpeg'),
+        fileSize: Number(d.fileSize || 0),
+        width: Number(d.width || 0),
+        height: Number(d.height || 0),
+        imageUrl: String(d.imageUrl || ''),
+        album: String(d.album || 'Binafsi'),
+        caption: String(d.caption || ''),
+        createdAt: d.createdAt || null,
+        updatedAt: d.updatedAt || null,
+      };
+    });
+    return list.sort((a, b) => {
+      const aMs = a.createdAt ? a.createdAt.toMillis() : 0;
+      const bMs = b.createdAt ? b.createdAt.toMillis() : 0;
+      return bMs - aMs;
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+export async function ownerPrivatePhotoExists(fileHash: string): Promise<boolean> {
+  const photoId = ownerPhotoIdFromHash(fileHash);
+  if (!/^ph_[a-f0-9]{40}$/.test(photoId)) return false;
+  try {
+    const snap = await getDoc(doc(db, 'owner_private_photos', photoId));
+    return snap.exists();
+  } catch {
+    return false;
+  }
+}
+
+export async function saveOwnerPrivatePhotoRecord(
+  ownerUid: string,
+  payload: {
+    fileHash: string;
+    fileName: string;
+    mimeType: string;
+    fileSize: number;
+    width: number;
+    height: number;
+    imageUrl: string;
+    album: string;
+    caption: string;
+  }
+): Promise<{ status: 'saved' | 'duplicate'; photo: OwnerPrivatePhoto }> {
+  const cleanHash = payload.fileHash.toLowerCase().replace(/[^a-f0-9]/g, '');
+  if (cleanHash.length !== 64) {
+    throw new Error('Alama ya utambulisho wa picha (SHA-256) si sahihi.');
+  }
+  const photoId = ownerPhotoIdFromHash(cleanHash);
+  const path = `owner_private_photos/${photoId}`;
+  const docRef = doc(db, 'owner_private_photos', photoId);
+
+  try {
+    const existingSnap = await getDoc(docRef);
+    if (existingSnap.exists()) {
+      const d = existingSnap.data();
+      return {
+        status: 'duplicate',
+        photo: {
+          photoId: String(d.photoId || photoId),
+          ownerUid: String(d.ownerUid || ownerUid),
+          fileHash: String(d.fileHash || cleanHash),
+          fileName: String(d.fileName || payload.fileName),
+          mimeType: String(d.mimeType || payload.mimeType),
+          fileSize: Number(d.fileSize || payload.fileSize),
+          width: Number(d.width || payload.width),
+          height: Number(d.height || payload.height),
+          imageUrl: String(d.imageUrl || payload.imageUrl),
+          album: String(d.album || payload.album),
+          caption: String(d.caption || payload.caption),
+          createdAt: d.createdAt || null,
+          updatedAt: d.updatedAt || null,
+        },
+      };
+    }
+
+    const cleanName = sanitizeTextInput(payload.fileName || 'picha.jpg', 140) || 'picha.jpg';
+    const cleanMime = sanitizeTextInput(payload.mimeType || 'image/jpeg', 60) || 'image/jpeg';
+    const cleanAlbum = sanitizeTextInput(payload.album || 'Binafsi', 40) || 'Binafsi';
+    const cleanCaption = sanitizeTextInput(payload.caption || '', 240);
+    const cleanUrl = String(payload.imageUrl || '').trim().slice(0, 500);
+    const cleanSize = Math.max(0, Math.min(30_000_000, Math.round(payload.fileSize || 0)));
+    const cleanW = Math.max(0, Math.min(20_000, Math.round(payload.width || 0)));
+    const cleanH = Math.max(0, Math.min(20_000, Math.round(payload.height || 0)));
+
+    await setDoc(docRef, {
+      photoId,
+      ownerUid,
+      fileHash: cleanHash,
+      fileName: cleanName,
+      mimeType: cleanMime,
+      fileSize: cleanSize,
+      width: cleanW,
+      height: cleanH,
+      imageUrl: cleanUrl,
+      album: cleanAlbum,
+      caption: cleanCaption,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    return {
+      status: 'saved',
+      photo: {
+        photoId,
+        ownerUid,
+        fileHash: cleanHash,
+        fileName: cleanName,
+        mimeType: cleanMime,
+        fileSize: cleanSize,
+        width: cleanW,
+        height: cleanH,
+        imageUrl: cleanUrl,
+        album: cleanAlbum,
+        caption: cleanCaption,
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+      },
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function updateOwnerPrivatePhotoMeta(
+  photoId: string,
+  album: string,
+  caption: string
+): Promise<void> {
+  const path = `owner_private_photos/${photoId}`;
+  try {
+    await updateDoc(doc(db, 'owner_private_photos', photoId), {
+      album: sanitizeTextInput(album || 'Binafsi', 40) || 'Binafsi',
+      caption: sanitizeTextInput(caption || '', 240),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteOwnerPrivatePhoto(photoId: string): Promise<void> {
+  const path = `owner_private_photos/${photoId}`;
+  try {
+    await deleteDoc(doc(db, 'owner_private_photos', photoId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function listOwnerPhotoFolders(): Promise<OwnerPhotoFolder[]> {
+  const path = 'owner_photo_folders';
+  try {
+    const snap = await getDocs(collection(db, 'owner_photo_folders'));
+    const folders: OwnerPhotoFolder[] = snap.docs.map((docSnap) => {
+      const d = docSnap.data();
+      return {
+        folderId: String(d.folderId || docSnap.id),
+        ownerUid: String(d.ownerUid || ''),
+        name: String(d.name || 'Faili'),
+        parentId: String(d.parentId || ''),
+        pinHash: String(d.pinHash || ''),
+        createdAt: d.createdAt || null,
+        updatedAt: d.updatedAt || null,
+      };
+    });
+    return folders.sort((a, b) => {
+      const aMs = a.createdAt ? a.createdAt.toMillis() : 0;
+      const bMs = b.createdAt ? b.createdAt.toMillis() : 0;
+      return aMs - bMs;
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+export async function createOwnerPhotoFolder(
+  ownerUid: string,
+  payload: { name: string; parentId?: string; pinHash?: string }
+): Promise<OwnerPhotoFolder> {
+  const cleanName = sanitizeTextInput(payload.name || '', 40);
+  if (!cleanName) {
+    throw new Error('Andika jina la faili.');
+  }
+  const cleanParentId = String(payload.parentId || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+    .slice(0, 40);
+  const cleanPinHash = String(payload.pinHash || '')
+    .toLowerCase()
+    .replace(/[^a-f0-9]/g, '');
+  if (cleanPinHash && cleanPinHash.length !== 64) {
+    throw new Error('PIN hash si sahihi.');
+  }
+  const randSuffix =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  const folderId = `fld_${randSuffix}`.slice(0, 40);
+  const path = `owner_photo_folders/${folderId}`;
+  try {
+    await setDoc(doc(db, 'owner_photo_folders', folderId), {
+      folderId,
+      ownerUid,
+      name: cleanName,
+      parentId: cleanParentId,
+      pinHash: cleanPinHash,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return {
+      folderId,
+      ownerUid,
+      name: cleanName,
+      parentId: cleanParentId,
+      pinHash: cleanPinHash,
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function renameOwnerPhotoFolder(
+  folderId: string,
+  name: string,
+  parentId?: string
+): Promise<void> {
+  const cleanName = sanitizeTextInput(name || '', 40);
+  if (!cleanName) {
+    throw new Error('Andika jina jipya la faili.');
+  }
+  const path = `owner_photo_folders/${folderId}`;
+  try {
+    const patch: Record<string, unknown> = {
+      name: cleanName,
+      updatedAt: serverTimestamp(),
+    };
+    if (typeof parentId === 'string') {
+      patch.parentId = parentId.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40);
+    }
+    await updateDoc(doc(db, 'owner_photo_folders', folderId), patch);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function updateOwnerPhotoFolderPin(
+  folderId: string,
+  pinHash: string
+): Promise<void> {
+  const cleanPinHash = String(pinHash || '')
+    .toLowerCase()
+    .replace(/[^a-f0-9]/g, '');
+  if (cleanPinHash && cleanPinHash.length !== 64) {
+    throw new Error('PIN hash si sahihi.');
+  }
+  const path = `owner_photo_folders/${folderId}`;
+  try {
+    await updateDoc(doc(db, 'owner_photo_folders', folderId), {
+      pinHash: cleanPinHash,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteOwnerPhotoFolder(folderId: string): Promise<void> {
+  const path = `owner_photo_folders/${folderId}`;
+  try {
+    await deleteDoc(doc(db, 'owner_photo_folders', folderId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+

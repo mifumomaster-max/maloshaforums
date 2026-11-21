@@ -77,10 +77,10 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
       badgeTone: 'green',
     },
     {
-      id: 'trending',
-      iconSection: 'trending',
-      label: tr('Vuma', 'Hot'),
-      unread: 0,
+      id: 'votes',
+      iconSection: 'votes',
+      label: 'Mpoll',
+      unread: counts.votes || 0,
       badgeTone: 'crimson',
     },
   ];

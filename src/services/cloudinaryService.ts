@@ -91,6 +91,128 @@ export async function uploadImageToCloudinary(file: File): Promise<string> {
   return result.secure_url.slice(0, 500);
 }
 
+export async function prepareDataSaverImageFile(
+  file: File,
+  options?: { maxDim?: number; quality?: number }
+): Promise<File> {
+  const prepared = await prepareSharedImageFile(file);
+  if (prepared.type === 'image/gif') return prepared;
+  if (typeof document === 'undefined' || typeof createImageBitmap === 'undefined') {
+    return prepared;
+  }
+
+  const maxDim = options?.maxDim ?? 1600;
+  const quality = options?.quality ?? 0.78;
+
+  try {
+    const bitmap = await createImageBitmap(prepared);
+    const scale = Math.min(1, maxDim / Math.max(bitmap.width || 1, bitmap.height || 1));
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      bitmap.close();
+      return prepared;
+    }
+    ctx.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, 'image/webp', quality)
+    );
+    const finalBlob =
+      blob && blob.size > 0
+        ? blob
+        : await new Promise<Blob | null>((resolve) =>
+            canvas.toBlob(resolve, 'image/jpeg', quality)
+          );
+    if (!finalBlob || finalBlob.size >= prepared.size) return prepared;
+
+    const ext = finalBlob.type === 'image/webp' ? 'webp' : 'jpg';
+    const baseName = (prepared.name || 'picha').replace(/\.[^.]+$/, '');
+    return new File([finalBlob], `${baseName}.${ext}`, { type: finalBlob.type });
+  } catch {
+    return prepared;
+  }
+}
+
+export async function uploadImageToCloudinaryWithProgress(
+  file: File,
+  onProgress?: (percent: number, loadedBytes: number, totalBytes: number) => void
+): Promise<string> {
+  const normalizedType =
+    file.type === 'image/jpg' ? 'image/jpeg' : (file.type || '').toLowerCase();
+  if (!ALLOWED_IMAGE_TYPES.has(normalizedType)) {
+    throw new Error('Aina hii ya picha hairuhusiwi. Tumia JPG, PNG, WEBP, au GIF.');
+  }
+
+  if (file.size > MAX_IMAGE_BYTES) {
+    throw new Error('Picha ni kubwa sana. Ukubwa usizidi MB 8.');
+  }
+
+  const { cloudName, uploadPreset, configured } = getCloudinaryConfig();
+  if (!configured) {
+    throw new Error(
+      'Mipangilio ya Cloudinary (Cloud Name na Upload Preset) bado haijawekwa.'
+    );
+  }
+
+  const endpoint = `https://api.cloudinary.com/v1_1/${encodeURIComponent(cloudName)}/image/upload`;
+
+  const result = await new Promise<{ secure_url?: string }>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', endpoint, true);
+
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable && onProgress) {
+        const pct = Math.min(99, Math.max(1, Math.round((ev.loaded / ev.total) * 100)));
+        onProgress(pct, ev.loaded, ev.total);
+      }
+    };
+
+    xhr.onload = () => {
+      try {
+        const parsed = JSON.parse(xhr.responseText || '{}') as {
+          secure_url?: string;
+          error?: { message?: string };
+        };
+        if (xhr.status >= 200 && xhr.status < 300) {
+          onProgress?.(100, file.size, file.size);
+          resolve(parsed);
+        } else {
+          reject(
+            new Error(
+              parsed?.error?.message
+                ? `Cloudinary: ${parsed.error.message}`
+                : 'Imeshindwa kupakia picha kwenda Cloudinary.'
+            )
+          );
+        }
+      } catch {
+        reject(new Error('Imeshindwa kupakia picha kwenda Cloudinary.'));
+      }
+    };
+
+    xhr.onerror = () => {
+      reject(new Error('Mtandao umekatika wakati wa kupakia picha. Jaribu tena.'));
+    };
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('upload_preset', uploadPreset);
+    xhr.send(formData);
+  });
+
+  if (!result.secure_url || !result.secure_url.startsWith('https://')) {
+    throw new Error('Cloudinary haikurudisha kiungo sahihi cha picha.');
+  }
+
+  return result.secure_url.slice(0, 500);
+}
+
 const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024; // 10MB
 const ALLOWED_DOCUMENT_EXTENSIONS = new Set([
   'pdf',

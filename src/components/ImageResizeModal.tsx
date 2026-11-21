@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Check, Crop, Maximize2, RotateCcw, RotateCw, Upload, X } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 
@@ -7,6 +8,14 @@ export type AspectPreset = 'free' | '4:5' | '1:1' | '3:4' | '4:3' | '16:9';
 interface ImageResizeModalProps {
   file: File | null;
   defaultPreset?: AspectPreset;
+  titleSw?: string;
+  titleEn?: string;
+  subtitleSw?: string;
+  subtitleEn?: string;
+  confirmLabelSw?: string;
+  confirmLabelEn?: string;
+  showCircleGuide?: boolean;
+  showLivePreview?: boolean;
   onCancel: () => void;
   onConfirm: (resizedFile: File) => void;
 }
@@ -53,6 +62,14 @@ function clamp(val: number, min: number, max: number): number {
 export const ImageResizeModal: React.FC<ImageResizeModalProps> = ({
   file,
   defaultPreset = 'free',
+  titleSw,
+  titleEn,
+  subtitleSw,
+  subtitleEn,
+  confirmLabelSw,
+  confirmLabelEn,
+  showCircleGuide = false,
+  showLivePreview = false,
   onCancel,
   onConfirm,
 }) => {
@@ -69,6 +86,7 @@ export const ImageResizeModal: React.FC<ImageResizeModalProps> = ({
   const stageRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragSession | null>(null);
   const imgElementRef = useRef<HTMLImageElement | null>(null);
+  const livePreviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // Load selected file object URL
   useEffect(() => {
@@ -301,6 +319,36 @@ export const ImageResizeModal: React.FC<ImageResizeModalProps> = ({
     };
   }, [crop.w, crop.h, naturalSize.w, naturalSize.h, qualityScale]);
 
+  // Update WYSIWYG live crop thumbnail canvas whenever crop/rotation updates
+  useEffect(() => {
+    if (!showLivePreview || !file) return;
+    const canvas = livePreviewCanvasRef.current;
+    const img = imgElementRef.current;
+    if (!canvas || !img || !naturalSize.w || !naturalSize.h) return;
+
+    const sx = Math.max(0, Math.round(crop.x * naturalSize.w));
+    const sy = Math.max(0, Math.round(crop.y * naturalSize.h));
+    const sw = Math.max(1, Math.round(crop.w * naturalSize.w));
+    const sh = Math.max(1, Math.round(crop.h * naturalSize.h));
+
+    const size = 96;
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, size, size);
+
+    const scale = Math.min(size / sw, size / sh);
+    const dw = Math.max(1, Math.round(sw * scale));
+    const dh = Math.max(1, Math.round(sh * scale));
+    const dx = Math.round((size - dw) / 2);
+    const dy = Math.round((size - dh) / 2);
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+  }, [showLivePreview, file, rotatedPreviewUrl, naturalSize.w, naturalSize.h, crop]);
+
   const handleConfirmCrop = async () => {
     if (!file || !imgElementRef.current || !naturalSize.w || !naturalSize.h) return;
     setProcessing(true);
@@ -354,26 +402,29 @@ export const ImageResizeModal: React.FC<ImageResizeModalProps> = ({
 
   const isGif = file.type === 'image/gif';
 
-  return (
+  const modalNode = (
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={tr('Rekebisha Ukubwa wa Picha Kabla ya Kupakia', 'Resize & Frame Photo Before Upload')}
-      className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/80 backdrop-blur-[2px] sm:items-center sm:p-4"
+      aria-label={tr(
+        titleSw || 'Rekebisha Ukubwa wa Picha Kabla ya Kupakia',
+        titleEn || 'Resize & Frame Photo Before Upload'
+      )}
+      className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-950/85 p-2 backdrop-blur-[2px] sm:p-4"
     >
-      <div className="flex max-h-[96dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl border border-slate-700 bg-[#0F172A] text-white shadow-2xl sm:rounded-xl">
+      <div className="flex max-h-[92dvh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-700 bg-[#0F172A] text-white shadow-2xl">
         {/* Modal Header */}
-        <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3 sm:px-5">
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-800 px-4 py-3 sm:px-5">
           <div className="flex items-center gap-2">
             <Crop className="h-4 w-4 text-amber-400" aria-hidden="true" />
             <div>
               <h2 className="font-sans text-sm font-bold text-white">
-                {tr('Rekebisha / Kata Picha (Resize)', 'Resize & Crop Photo')}
+                {tr(titleSw || 'Rekebisha / Kata Picha (Crop)', titleEn || 'Resize & Crop Photo')}
               </h2>
               <p className="text-[11px] text-slate-400">
                 {tr(
-                  'Vuta pembe au buruta fremu — itapakiwa na kuonekana hivyo hivyo bila kukatwa.',
-                  'Drag corners or move frame — uploaded and shown in full without clipping.'
+                  subtitleSw || 'Vuta pembe au buruta fremu — itapakiwa na kuonekana hivyo hivyo bila kukatwa.',
+                  subtitleEn || 'Drag corners or move frame — uploaded and shown in full without clipping.'
                 )}
               </p>
             </div>
@@ -447,7 +498,7 @@ export const ImageResizeModal: React.FC<ImageResizeModalProps> = ({
         </div>
 
         {/* Interactive Crop Stage */}
-        <div className="relative flex min-h-[240px] flex-1 items-center justify-center overflow-hidden bg-slate-950 p-3 sm:p-5">
+        <div className="relative flex min-h-[210px] flex-1 items-center justify-center overflow-hidden bg-slate-950 p-5 sm:p-6">
           {rotatedPreviewUrl ? (
             <div
               ref={stageRef}
@@ -455,13 +506,13 @@ export const ImageResizeModal: React.FC<ImageResizeModalProps> = ({
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerUp}
               style={{ touchAction: 'none' }}
-              className="relative inline-block max-h-[52dvh] max-w-full select-none overflow-hidden"
+              className="relative inline-block max-h-[46dvh] max-w-full select-none"
             >
               <img
                 src={rotatedPreviewUrl}
                 alt={tr('Hakiki ya kukata picha', 'Crop preview')}
                 draggable={false}
-                className="block max-h-[52dvh] w-auto max-w-full object-contain"
+                className="block max-h-[46dvh] w-auto max-w-full object-contain"
               />
 
               {/* Outside Dark Scrim Masks */}
@@ -491,6 +542,10 @@ export const ImageResizeModal: React.FC<ImageResizeModalProps> = ({
                 }}
                 className="absolute cursor-move border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.45)]"
               >
+                {showCircleGuide && preset === '1:1' && (
+                  <div className="pointer-events-none absolute inset-1 rounded-full border border-dashed border-amber-300/75" />
+                )}
+
                 {/* Rule of Thirds Gridlines */}
                 <div className="pointer-events-none absolute inset-0 grid grid-cols-3 grid-rows-3">
                   <div className="border-r border-b border-white/25" />
@@ -564,14 +619,27 @@ export const ImageResizeModal: React.FC<ImageResizeModalProps> = ({
         </div>
 
         {/* Size / Resolution Bar & Footer Actions */}
-        <div className="space-y-3 border-t border-slate-800 bg-[#111827] px-4 py-3 sm:px-5">
+        <div className="shrink-0 space-y-2.5 border-t border-slate-800 bg-[#111827] px-4 py-3 pb-[max(0.875rem,env(safe-area-inset-bottom))] sm:px-5">
           <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-2 text-slate-300">
-              <Maximize2 className="h-3.5 w-3.5 text-amber-400" aria-hidden="true" />
-              <span>{tr('Ukubwa wa Picha:', 'Output Size:')}</span>
-              <span className="rounded bg-slate-800 px-2 py-0.5 font-mono font-bold text-white tabular-nums">
-                {outputPixels.w} × {outputPixels.h} px
-              </span>
+            <div className="flex items-center gap-2.5 text-slate-300">
+              {showLivePreview && (
+                <div className="flex items-center gap-1.5">
+                  <canvas
+                    ref={livePreviewCanvasRef}
+                    className="h-10 w-10 rounded-lg border border-amber-400/70 bg-slate-900 object-contain"
+                  />
+                  <span className="text-[10px] font-semibold text-amber-300">
+                    {tr('Matokeo', 'Output')}
+                  </span>
+                </div>
+              )}
+              <div className="flex items-center gap-1.5">
+                <Maximize2 className="h-3.5 w-3.5 text-amber-400" aria-hidden="true" />
+                <span>{tr('Ukubwa:', 'Size:')}</span>
+                <span className="rounded bg-slate-800 px-2 py-0.5 font-mono font-bold text-white tabular-nums">
+                  {outputPixels.w} × {outputPixels.h} px
+                </span>
+              </div>
             </div>
 
             <label className="flex items-center gap-2 text-[11px] text-slate-300">
@@ -600,12 +668,12 @@ export const ImageResizeModal: React.FC<ImageResizeModalProps> = ({
             </p>
           )}
 
-          <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
             <button
               type="button"
               disabled={processing}
               onClick={() => file && onConfirm(file)}
-              className="inline-flex min-h-[42px] items-center gap-1.5 rounded-lg border border-slate-600 bg-slate-800 px-3.5 py-2 text-xs font-semibold text-slate-100 transition-colors hover:bg-slate-700 disabled:opacity-60"
+              className="inline-flex min-h-[42px] items-center gap-1.5 rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-100 transition-colors hover:bg-slate-700 disabled:opacity-60"
             >
               <Upload className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
               <span>{tr('Pakia Asili Bila Kukata', 'Upload Original')}</span>
@@ -630,7 +698,10 @@ export const ImageResizeModal: React.FC<ImageResizeModalProps> = ({
                 <span>
                   {processing
                     ? tr('Inashughulikia...', 'Processing...')
-                    : tr('Hifadhi Ukubwa & Pakia', 'Apply Resize & Upload')}
+                    : tr(
+                        confirmLabelSw || 'Hifadhi Ukubwa & Pakia',
+                        confirmLabelEn || 'Apply Resize & Upload'
+                      )}
                 </span>
               </button>
             </div>
@@ -639,4 +710,9 @@ export const ImageResizeModal: React.FC<ImageResizeModalProps> = ({
       </div>
     </div>
   );
+
+  if (typeof document !== 'undefined') {
+    return createPortal(modalNode, document.body);
+  }
+  return modalNode;
 };

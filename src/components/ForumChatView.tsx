@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowDown,
   Ban,
@@ -840,7 +841,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
         top: `calc(var(--malosha-header-h, 114px) + ${Math.max(0, viewportMetrics.offsetTop)}px)`,
         height: isKeyboardUp
           ? `calc(${Math.round(viewportMetrics.height)}px - var(--malosha-header-h, 114px))`
-          : `calc(${Math.round(viewportMetrics.height)}px - var(--malosha-header-h, 114px) - 56px - env(safe-area-inset-bottom, 0px))`,
+          : `calc(${Math.round(viewportMetrics.height)}px - var(--malosha-header-h, 114px) - 60px - env(safe-area-inset-bottom, 0px))`,
       }
     : {
         top: 'var(--malosha-header-h, 124px)',
@@ -1852,73 +1853,106 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
       </section>
 
       {/* Lightbox Modal for Chat Images */}
-      {lightboxImage && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label={lightboxImage.name}
-          onClick={() => setLightboxImage(null)}
-          className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/90 p-4"
-        >
+      {lightboxImage &&
+        typeof document !== 'undefined' &&
+        createPortal(
           <div
-            onClick={(e) => e.stopPropagation()}
-            className="flex w-full max-w-4xl items-center justify-between pb-3 text-white"
+            role="dialog"
+            aria-modal="true"
+            aria-label={lightboxImage.name}
+            onClick={() => setLightboxImage(null)}
+            className="fixed inset-0 z-[90] flex flex-col items-center justify-center bg-black/90 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
           >
-            <p className="truncate text-sm font-semibold">{lightboxImage.name}</p>
-            <div className="flex items-center gap-2">
-              <a
-                href={lightboxImage.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                download={lightboxImage.name}
-                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-white/15 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/25"
-              >
-                <ExternalLink className="h-4 w-4" aria-hidden="true" />
-                <span>{tr('Pakua', 'Download')}</span>
-              </a>
-              <button
-                type="button"
-                onClick={() => setLightboxImage(null)}
-                aria-label={tr('Funga picha', 'Close image')}
-                className="flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-          </div>
-          <img
-            src={lightboxImage.url}
-            alt={lightboxImage.name}
-            onClick={(e) => e.stopPropagation()}
-            className="max-h-[82vh] max-w-full rounded-xl object-contain"
-          />
-        </div>
-      )}
-
-      {/* In-App PDF Viewer + Download Modal */}
-      {activePdfDoc && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label={activePdfDoc.name}
-          onClick={() => setActivePdfDoc(null)}
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/75 p-0 backdrop-blur-xs md:items-center md:p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="flex h-[90dvh] w-full max-w-3xl flex-col overflow-hidden rounded-t-3xl bg-[#F4F7FA] text-slate-900 shadow-2xl md:h-[86dvh] md:rounded-2xl"
-          >
-            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-[#075E54] px-4 py-3 text-white">
-              <div className="flex min-w-0 items-center gap-2.5">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-red-600 text-[10px] font-extrabold text-white">
-                  PDF
-                </span>
-                <p className="truncate text-xs font-bold sm:text-sm">{activePdfDoc.name}</p>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="flex w-full max-w-4xl items-center justify-between pb-3 text-white"
+            >
+              <p className="truncate text-sm font-semibold">{lightboxImage.name}</p>
+              <div className="flex items-center gap-2">
+                <a
+                  href={lightboxImage.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  download={lightboxImage.name}
+                  className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-white/15 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/25"
+                >
+                  <ExternalLink className="h-4 w-4" aria-hidden="true" />
+                  <span>{tr('Pakua', 'Download')}</span>
+                </a>
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={() => setLightboxImage(null)}
+                  aria-label={tr('Funga picha', 'Close image')}
+                  className="flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+            <img
+              src={lightboxImage.url}
+              alt={lightboxImage.name}
+              onClick={(e) => e.stopPropagation()}
+              className="max-h-[82vh] max-w-full rounded-xl object-contain"
+            />
+          </div>,
+          document.body
+        )}
+
+      {/* In-App PDF Viewer + Download Modal */}
+      {activePdfDoc &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={activePdfDoc.name}
+            onClick={() => setActivePdfDoc(null)}
+            className="fixed inset-0 z-[90] flex items-end justify-center bg-black/75 p-0 backdrop-blur-xs md:items-center md:p-4"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="flex h-[90dvh] w-full max-w-3xl flex-col overflow-hidden rounded-t-3xl bg-[#F4F7FA] text-slate-900 shadow-2xl pb-[max(0.5rem,env(safe-area-inset-bottom))] md:pb-0 md:h-[86dvh] md:rounded-2xl"
+            >
+              <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-[#075E54] px-4 py-3 text-white">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-red-600 text-[10px] font-extrabold text-white">
+                    PDF
+                  </span>
+                  <p className="truncate text-xs font-bold sm:text-sm">{activePdfDoc.name}</p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void downloadChatAttachmentFile(
+                        activePdfDoc.url,
+                        activePdfDoc.name,
+                        'application/pdf'
+                      ).then(() =>
+                        onToast(tr('PDF imepakuliwa kwenye simu yako!', 'PDF saved to your device!'))
+                      );
+                    }}
+                    className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl bg-[#25D366] px-3 text-xs font-extrabold text-[#064E46] hover:brightness-105"
+                  >
+                    <Download className="h-4 w-4" aria-hidden="true" />
+                    <span>{tr('Pakua Simu', 'Save PDF')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActivePdfDoc(null)}
+                    aria-label={tr('Funga PDF', 'Close PDF')}
+                    className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25"
+                  >
+                    <X className="h-5 w-5" aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6 sm:px-5">
+                <MobilePdfNoteReader
+                  pdfUrl={activePdfDoc.url}
+                  fileName={activePdfDoc.name}
+                  onDownload={() => {
                     void downloadChatAttachmentFile(
                       activePdfDoc.url,
                       activePdfDoc.name,
@@ -1927,39 +1961,12 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                       onToast(tr('PDF imepakuliwa kwenye simu yako!', 'PDF saved to your device!'))
                     );
                   }}
-                  className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl bg-[#25D366] px-3 text-xs font-extrabold text-[#064E46] hover:brightness-105"
-                >
-                  <Download className="h-4 w-4" aria-hidden="true" />
-                  <span>{tr('Pakua Simu', 'Save PDF')}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActivePdfDoc(null)}
-                  aria-label={tr('Funga PDF', 'Close PDF')}
-                  className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25"
-                >
-                  <X className="h-5 w-5" aria-hidden="true" />
-                </button>
+                />
               </div>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6 sm:px-5">
-              <MobilePdfNoteReader
-                pdfUrl={activePdfDoc.url}
-                fileName={activePdfDoc.name}
-                onDownload={() => {
-                  void downloadChatAttachmentFile(
-                    activePdfDoc.url,
-                    activePdfDoc.name,
-                    'application/pdf'
-                  ).then(() =>
-                    onToast(tr('PDF imepakuliwa kwenye simu yako!', 'PDF saved to your device!'))
-                  );
-                }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
 
       {/* Interactive Image Resize / Crop Modal */}
       <ImageResizeModal

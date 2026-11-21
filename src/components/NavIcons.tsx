@@ -1,6 +1,6 @@
 import React, { useId } from 'react';
 
-export type NavIconSection = 'all' | 'kijiweni' | 'video' | 'fursa' | 'makala' | 'chat' | 'trending';
+export type NavIconSection = 'all' | 'kijiweni' | 'video' | 'fursa' | 'makala' | 'chat' | 'votes';
 
 interface NavSectionIconProps {
   section: NavIconSection;
@@ -293,33 +293,53 @@ export const NavSectionIcon: React.FC<NavSectionIconProps> = ({
     );
   }
 
-  if (section === 'trending') {
+  if (section === 'votes') {
     return (
       <svg viewBox="0 0 28 28" fill="none" className={className} aria-hidden="true">
         <defs>
-          <linearGradient id={`flameOuter-${uid}`} x1="14" y1="2.5" x2="14" y2="25.5" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stopColor="#FB7185" />
-            <stop offset="45%" stopColor="#EF4444" />
-            <stop offset="100%" stopColor="#EA580C" />
+          <linearGradient id={`voteBox-${uid}`} x1="4" y1="11" x2="24" y2="25" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#1D4E89" />
+            <stop offset="100%" stopColor="#0E2640" />
           </linearGradient>
-          <linearGradient id={`flameInner-${uid}`} x1="14" y1="11" x2="14" y2="24" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stopColor="#FEF08A" />
-            <stop offset="55%" stopColor="#FACC15" />
-            <stop offset="100%" stopColor="#F59E0B" />
+          <linearGradient id={`voteTop-${uid}`} x1="3" y1="10" x2="25" y2="14" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#38BDF8" />
+            <stop offset="100%" stopColor="#0284C7" />
+          </linearGradient>
+          <linearGradient id={`votePaper-${uid}`} x1="9" y1="2.5" x2="19" y2="13" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#FEF9C3" />
+            <stop offset="100%" stopColor="#FDE047" />
           </linearGradient>
         </defs>
-        {/* Outer realistic flame */}
+        {/* Ballot Box Body */}
+        <rect x="4" y="12.5" width="20" height="12.2" rx="2.8" fill={`url(#voteBox-${uid})`} />
+        {/* Lid */}
+        <rect x="2.8" y="10.2" width="22.4" height="3.6" rx="1.4" fill={`url(#voteTop-${uid})`} stroke="#FFFFFF" strokeWidth="0.7" />
+        {/* Ballot Slot */}
+        <rect x="8.2" y="11.4" width="11.6" height="1.4" rx="0.7" fill="#082F49" />
+        {/* Crisp Golden Ballot Paper Entering Slot */}
         <path
-          d="M14.6 2.5C15.1 6.2 18.6 8.3 20.5 11.4C22.2 14.1 22.1 17.7 20.2 20.5C18.6 22.9 16.4 24.4 13.7 24.4C9.5 24.4 6 21 6 16.4C6 13.6 7.3 11 9 9.2C9.1 10.9 10.2 11.9 11.1 12.1C10.5 8.9 11.9 5.3 14.6 2.5Z"
-          fill={`url(#flameOuter-${uid})`}
+          d="M9.5 4.2C9.5 3.3 10.2 2.6 11.1 2.6H16.9C17.8 2.6 18.5 3.3 18.5 4.2V12H9.5V4.2Z"
+          fill={`url(#votePaper-${uid})`}
+          stroke="#FFFFFF"
+          strokeWidth="0.8"
         />
-        {/* Inner glowing core */}
+        {/* Checkmark on Ballot */}
         <path
-          d="M14.2 11.6C15.8 13.7 17.4 15.3 17.4 17.9C17.4 20.4 15.8 22.4 13.6 22.4C11.4 22.4 9.8 20.5 9.8 18.1C9.8 16.6 10.5 15.2 11.6 14.2C11.8 15.2 12.4 15.8 13 15.9C12.7 14.2 13.2 12.8 14.2 11.6Z"
-          fill={`url(#flameInner-${uid})`}
+          d="M11.7 7.4L13.3 9L16.4 5.7"
+          stroke="#0F766E"
+          strokeWidth="1.9"
+          strokeLinecap="round"
+          strokeLinejoin="round"
         />
-        {/* Bright spark tip */}
-        <ellipse cx="13.6" cy="19.3" rx="1.6" ry="2.1" fill="#FEF9C3" />
+        {/* Front Badge Dot */}
+        <circle cx="14" cy="18.8" r="2.5" fill="#F59E0B" />
+        <path
+          d="M12.8 18.8L13.6 19.6L15.3 17.9"
+          stroke="#FFFFFF"
+          strokeWidth="1.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
       </svg>
     );
   }

@@ -34,6 +34,8 @@ import {
   MemberDirectoryCandidate,
   NavTab,
   NavUnreadCounts,
+  Poll,
+  PollBallot,
   PresenceArea,
   PrimaryBoard,
   Report,
@@ -96,7 +98,13 @@ import { AuthView } from './components/AuthView';
 import { ForumChatView, MchartSubTab } from './components/ForumChatView';
 import { MemberProfileModal } from './components/MemberProfileModal';
 import { VideosFeedView } from './components/VideosFeedView';
+import { VotingPollsView } from './components/VotingPollsView';
 import { usePWAInstall } from './hooks/usePWAInstall';
+import {
+  fetchUserBallotsForPolls,
+  isPollEffectivelyOpen,
+  subscribePolls,
+} from './services/pollService';
 import {
   dismissPhoneNotifications,
   sendPhoneNotification,
@@ -252,14 +260,37 @@ function ForumShell() {
     }
   });
 
+  const [polls, setPolls] = useState<Poll[]>([]);
+  const [loadingPolls, setLoadingPolls] = useState(true);
+  const [userPollBallots, setUserPollBallots] = useState<Record<string, PollBallot>>({});
+  const [selectedPollId, setSelectedPollId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const params = new URLSearchParams(window.location.search);
+    const shortParam = params.get('p') || params.get('poll');
+    if (shortParam && shortParam.trim()) return shortParam.trim();
+    const pathMatch = window.location.pathname.match(/^\/p\/([a-zA-Z0-9_-]+)\/?$/);
+    return pathMatch ? pathMatch[1] : null;
+  });
+
   const [activeTab, setActiveTab] = useState<NavTab>(() => {
     if (typeof window === 'undefined') return 'kijiweni';
-    const tabParam = new URLSearchParams(window.location.search).get('tab');
+    const params = new URLSearchParams(window.location.search);
+    const tabParam = params.get('tab');
+    const isShortPath = /^\/p\/[a-zA-Z0-9_-]+\/?$/.test(window.location.pathname);
     if (tabParam === 'mchart' || tabParam === 'chat') return 'chat';
     if (tabParam === 'video' || tabParam === 'videos') return 'video';
     if (tabParam === 'fursa') return 'fursa';
     if (tabParam === 'makala') return 'makala';
-    if (tabParam === 'trending') return 'trending';
+    if (
+      tabParam === 'mpoll' ||
+      tabParam === 'kura' ||
+      tabParam === 'votes' ||
+      params.has('p') ||
+      params.has('poll') ||
+      isShortPath
+    ) {
+      return 'votes';
+    }
     return 'kijiweni';
   });
   const [initialVideoId, setInitialVideoId] = useState<string | null>(() => {
@@ -275,9 +306,10 @@ function ForumShell() {
     return 'direct';
   });
   const [authPromptReason, setAuthPromptReason] = useState<AuthPromptReason | null>(null);
-  const returnDestinationRef = useRef<{ tab: NavTab; topicId: string | null }>({
+  const returnDestinationRef = useRef<{ tab: NavTab; topicId: string | null; pollId: string | null }>({
     tab: 'kijiweni',
     topicId: null,
+    pollId: null,
   });
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
@@ -286,7 +318,9 @@ function ForumShell() {
   });
   const [selectedCategory, setSelectedCategory] = useState<TopicCategory | 'all'>(() => {
     if (typeof window === 'undefined') return 'Kijiweni';
-    const tabParam = new URLSearchParams(window.location.search).get('tab');
+    const params = new URLSearchParams(window.location.search);
+    const tabParam = params.get('tab');
+    const isShortPath = /^\/p\/[a-zA-Z0-9_-]+\/?$/.test(window.location.pathname);
     if (tabParam === 'fursa') return 'Fursa';
     if (tabParam === 'makala') return 'Makala';
     if (
@@ -294,7 +328,12 @@ function ForumShell() {
       tabParam === 'chat' ||
       tabParam === 'video' ||
       tabParam === 'videos' ||
-      tabParam === 'trending'
+      tabParam === 'mpoll' ||
+      tabParam === 'kura' ||
+      tabParam === 'votes' ||
+      params.has('p') ||
+      params.has('poll') ||
+      isShortPath
     ) {
       return 'all';
     }
@@ -637,6 +676,43 @@ function ForumShell() {
       cancelled = true;
     };
   }, [authReady, user, videos]);
+
+  // Real-time community polls listener (open & closed public polls + drafts for owner)
+  useEffect(() => {
+    if (!authReady) return;
+    setLoadingPolls(true);
+    const unsub = subscribePolls(
+      isAdmin,
+      (list) => {
+        setPolls(list);
+        setLoadingPolls(false);
+      },
+      () => {
+        setLoadingPolls(false);
+      }
+    );
+    return () => unsub();
+  }, [authReady, isAdmin]);
+
+  // Sync current user's ballots across loaded polls
+  useEffect(() => {
+    if (!authReady || !user || polls.length === 0) {
+      setUserPollBallots({});
+      return;
+    }
+    let cancelled = false;
+    void fetchUserBallotsForPolls(
+      polls.map((p) => p.id),
+      user.uid
+    ).then((res) => {
+      if (!cancelled) {
+        setUserPollBallots(res);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [authReady, user, polls]);
 
   // Reset cached vote checks when user changes
   useEffect(() => {
@@ -1505,12 +1581,22 @@ function ForumShell() {
             return ms > videosLastSeenMs;
           }).length;
 
+    const unvotedOpenPollsCount =
+      activeTab === 'votes' && !selectedTopicId
+        ? 0
+        : polls.filter((p) => {
+            if (!isPollEffectivelyOpen(p)) return false;
+            if (user?.uid && userPollBallots[p.id]) return false;
+            return true;
+          }).length;
+
     return {
       kijiweni: countBoard('Kijiweni'),
       video: unreadVideoCount,
       fursa: countBoard('Fursa'),
       makala: countBoard('Makala'),
       chat: unreadChatCount + unreadNotesCount + unreadDirectCount,
+      votes: unvotedOpenPollsCount,
     };
   }, [
     currentlyViewedBoard,
@@ -1525,6 +1611,8 @@ function ForumShell() {
     unreadChatCount,
     unreadNotesCount,
     unreadDirectCount,
+    polls,
+    userPollBallots,
   ]);
 
   const unreadRepliesModCount = useMemo(
@@ -1577,6 +1665,7 @@ function ForumShell() {
     unreadCounts.fursa +
     unreadCounts.makala +
     unreadCounts.chat +
+    (unreadCounts.votes || 0) +
     unreadRepliesModCount +
     unreadSignupCount;
 
@@ -1866,6 +1955,11 @@ function ForumShell() {
         url.searchParams.delete('v');
         changed = true;
       }
+      if (url.searchParams.has('poll') || url.searchParams.has('p')) {
+        url.searchParams.delete('poll');
+        url.searchParams.delete('p');
+        changed = true;
+      }
     } else if (activeTab === 'video' && !selectedTopicId) {
       if (url.searchParams.get('tab') !== 'video') {
         url.searchParams.set('tab', 'video');
@@ -1873,6 +1967,43 @@ function ForumShell() {
       }
       if (url.searchParams.has('view')) {
         url.searchParams.delete('view');
+        changed = true;
+      }
+      if (url.searchParams.has('poll') || url.searchParams.has('p')) {
+        url.searchParams.delete('poll');
+        url.searchParams.delete('p');
+        changed = true;
+      }
+    } else if (activeTab === 'votes' && !selectedTopicId) {
+      if (url.searchParams.has('poll')) {
+        url.searchParams.delete('poll');
+        changed = true;
+      }
+      if (selectedPollId) {
+        if (url.searchParams.get('p') !== selectedPollId) {
+          url.searchParams.set('p', selectedPollId);
+          changed = true;
+        }
+        if (url.searchParams.has('tab')) {
+          url.searchParams.delete('tab');
+          changed = true;
+        }
+      } else {
+        if (url.searchParams.has('p')) {
+          url.searchParams.delete('p');
+          changed = true;
+        }
+        if (url.searchParams.get('tab') !== 'mpoll') {
+          url.searchParams.set('tab', 'mpoll');
+          changed = true;
+        }
+      }
+      if (url.searchParams.has('view')) {
+        url.searchParams.delete('view');
+        changed = true;
+      }
+      if (url.searchParams.has('v')) {
+        url.searchParams.delete('v');
         changed = true;
       }
     } else {
@@ -1888,12 +2019,17 @@ function ForumShell() {
         url.searchParams.delete('v');
         changed = true;
       }
+      if (activeTab !== 'auth' && (url.searchParams.has('poll') || url.searchParams.has('p'))) {
+        url.searchParams.delete('poll');
+        url.searchParams.delete('p');
+        changed = true;
+      }
     }
 
     if (changed) {
       window.history.replaceState({}, '', url.toString());
     }
-  }, [selectedTopicId, activeTab, mchartSubTab]);
+  }, [selectedTopicId, activeTab, mchartSubTab, selectedPollId]);
 
   useEffect(() => {
     if (!authReady || !selectedTopicId) {
@@ -2026,13 +2162,18 @@ function ForumShell() {
     (reason?: AuthPromptReason | unknown) => {
       if (user) return;
       const normalizedReason: AuthPromptReason | null =
-        reason === 'comment' || reason === 'like' || reason === 'post' || reason === 'chat'
+        reason === 'comment' ||
+        reason === 'like' ||
+        reason === 'post' ||
+        reason === 'chat' ||
+        reason === 'vote'
           ? reason
           : null;
       if (activeTab !== 'auth') {
         returnDestinationRef.current = {
           tab: activeTab,
           topicId: selectedTopicId,
+          pollId: selectedPollId,
         };
       }
       setAuthPromptReason(normalizedReason);
@@ -2042,7 +2183,7 @@ function ForumShell() {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     },
-    [user, activeTab, selectedTopicId]
+    [user, activeTab, selectedTopicId, selectedPollId]
   );
 
   useEffect(() => {
@@ -2062,6 +2203,11 @@ function ForumShell() {
                 : 'all'
         );
         setSelectedTopicId(dest.topicId);
+      } else if (dest.tab === 'votes') {
+        setActiveTab('votes');
+        setSelectedCategory('all');
+        setSelectedTopicId(null);
+        setSelectedPollId(dest.pollId);
       } else if (dest.tab === 'chat') {
         setActiveTab('chat');
         setSelectedCategory('all');
@@ -2080,6 +2226,7 @@ function ForumShell() {
     if (activeTab === 'video') return 'video';
     if (activeTab === 'fursa') return 'fursa';
     if (activeTab === 'makala') return 'makala';
+    if (activeTab === 'votes') return 'votes';
     if (activeTab === 'safety') return 'profile';
     return 'forum';
   }, [activeTab]);
@@ -2148,6 +2295,9 @@ function ForumShell() {
     }
     if (tab !== 'video') {
       setInitialVideoId(null);
+    }
+    if (tab !== 'votes') {
+      setSelectedPollId(null);
     }
     setActiveTab(tab);
     setSelectedTopicId(null);
@@ -2698,8 +2848,6 @@ function ForumShell() {
           onMarkNotificationRead={handleMarkNotificationRead}
           onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
           hideVideoTab={hideVideoTabForCurrentUser}
-          hideVideoTabForUsers={hideVideoTabForUsers}
-          onToggleHideVideoTab={isAdmin ? handleToggleHideVideoTab : undefined}
           recentSignups={adminRecentSignups}
           unreadSignupCount={unreadSignupCount}
           signupLastSeenMs={adminSignupLastSeenMs}
@@ -2816,6 +2964,9 @@ function ForumShell() {
               if (dest.topicId) {
                 setSelectedTopicId(dest.topicId);
               }
+              if (fallbackTab === 'votes' && dest.pollId) {
+                setSelectedPollId(dest.pollId);
+              }
             }}
             onSuccess={async (signedInUser, isNewUser) => {
               const privInfo = await getPrivateUserInfo(signedInUser.uid).catch(() => null);
@@ -2824,7 +2975,12 @@ function ForumShell() {
               }
               const dest = returnDestinationRef.current;
               setAuthPromptReason(null);
-              if (dest.topicId && !isNewUser) {
+              if (dest.tab === 'votes') {
+                setActiveTab('votes');
+                setSelectedCategory('all');
+                setSelectedTopicId(null);
+                setSelectedPollId(dest.pollId);
+              } else if (dest.topicId && !isNewUser) {
                 const targetTab =
                   dest.tab === 'auth' || dest.tab === 'all' ? 'kijiweni' : dest.tab;
                 setActiveTab(targetTab);
@@ -2953,6 +3109,26 @@ function ForumShell() {
             onToast={showToast}
             onRequestConfirm={(opts) => setConfirmState(opts)}
           />
+        ) : activeTab === 'votes' ? (
+          <VotingPollsView
+            polls={polls}
+            loading={loadingPolls}
+            userBallots={userPollBallots}
+            onBallotSaved={(pollId, ballot) => {
+              setUserPollBallots((prev) => ({ ...prev, [pollId]: ballot }));
+            }}
+            user={user}
+            userDisplayName={userProfile?.displayName || user?.displayName || 'Mwanachama'}
+            userPhoto={userProfile?.photoURL || user?.photoURL || ''}
+            isAdmin={isAdmin}
+            isSuspended={isSuspended}
+            selectedPollId={selectedPollId}
+            onClearSelectedPoll={() => setSelectedPollId(null)}
+            onBack={() => handleSelectTab('kijiweni')}
+            onSignIn={handleSignIn}
+            onToast={showToast}
+            onRequestConfirm={(opts) => setConfirmState(opts)}
+          />
         ) : (
           <TopicList
             topics={topics}
@@ -3019,7 +3195,7 @@ function ForumShell() {
             <p>
               © {new Date().getFullYear()} Malosha Forums. Kijiweni
               {!hideVideoTabForCurrentUser && ' · Video'} · {tr('Fursa', 'Opportunities')} ·{' '}
-              {tr('Makala', 'Articles')} · Mchart · {tr('Zilizovuma', 'Trending')}.
+              {tr('Makala', 'Articles')} · Mchart · Mpoll.
             </p>
             <div className="flex flex-wrap items-center justify-center gap-5">
               <button
@@ -3061,6 +3237,13 @@ function ForumShell() {
               </button>
               <button
                 type="button"
+                onClick={() => handleSelectTab('votes')}
+                className="hover:text-slate-900 hover:underline"
+              >
+                Mpoll
+              </button>
+              <button
+                type="button"
                 onClick={() => handleSelectTab('safety')}
                 className="hover:text-slate-900 hover:underline"
               >
@@ -3085,7 +3268,7 @@ function ForumShell() {
       )}
 
       {/* Floating Add Topic / Post Action Icon */}
-      {!isFullStageView && activeTab !== 'auth' && (
+      {!isFullStageView && activeTab !== 'auth' && activeTab !== 'votes' && (
         <button
           type="button"
           onClick={handleOpenNewTopic}

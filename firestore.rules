@@ -734,6 +734,48 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidOwnerPrivatePhoto(data, photoId) {
+      return data.keys().hasAll([
+          'photoId', 'ownerUid', 'fileHash', 'fileName', 'mimeType',
+          'fileSize', 'width', 'height', 'imageUrl', 'album', 'caption',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'photoId', 'ownerUid', 'fileHash', 'fileName', 'mimeType',
+          'fileSize', 'width', 'height', 'imageUrl', 'album', 'caption',
+          'createdAt', 'updatedAt'
+        ])
+        && data.photoId is string && data.photoId == photoId && photoId.matches('^ph_[a-f0-9]{40}$')
+        && data.ownerUid is string && isValidId(data.ownerUid)
+        && data.fileHash is string && data.fileHash.matches('^[a-f0-9]{64}$')
+        && data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 140
+        && data.mimeType is string && data.mimeType.size() <= 60
+        && data.fileSize is int && data.fileSize >= 0 && data.fileSize <= 30000000
+        && data.width is int && data.width >= 0 && data.width <= 20000
+        && data.height is int && data.height >= 0 && data.height <= 20000
+        && data.imageUrl is string && data.imageUrl.matches('^https://.*') && data.imageUrl.size() <= 500
+        && data.album is string && data.album.size() <= 40
+        && data.caption is string && data.caption.size() <= 240
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOwnerPhotoFolder(data, folderId) {
+      return data.keys().hasAll([
+          'folderId', 'ownerUid', 'name', 'parentId', 'pinHash', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'folderId', 'ownerUid', 'name', 'parentId', 'pinHash', 'createdAt', 'updatedAt'
+        ])
+        && data.folderId is string && data.folderId == folderId && folderId.size() <= 40
+        && data.ownerUid is string && isValidId(data.ownerUid)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 40
+        && data.parentId is string && data.parentId.size() <= 40 && (data.parentId == '' || isValidId(data.parentId))
+        && data.pinHash is string && (data.pinHash == '' || data.pinHash.matches('^[a-f0-9]{64}$'))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     function noteDocData(noteId) {
       return get(/databases/$(database)/documents/mchart_notes/$(noteId)).data;
     }
@@ -756,6 +798,148 @@ service cloud.firestore {
             ('lockedTargetMode' in noteDocData(noteId)) &&
             noteDocData(noteId).lockedTargetMode == 'selected' &&
             (!hasNoteAccessDoc(noteId) || (noteAccessStatus(noteId) != 'locked' && noteAccessStatus(noteId) != 'pending'))
+          )
+        )
+      );
+    }
+
+    function isValidPollOption(opt, expectedId) {
+      return opt is map
+        && opt.keys().hasAll(['id', 'label'])
+        && opt.keys().hasOnly(['id', 'label', 'color', 'imageUrl', 'subtitle'])
+        && opt.id is string && isValidId(opt.id) && opt.id == expectedId
+        && opt.label is string && opt.label.size() >= 1 && opt.label.size() <= 160
+        && (!('color' in opt) || (opt.color is string && opt.color.size() <= 30))
+        && (!('imageUrl' in opt) || (opt.imageUrl is string && opt.imageUrl.size() <= 500))
+        && (!('subtitle' in opt) || (opt.subtitle is string && opt.subtitle.size() <= 160));
+    }
+
+    function isValidPoll(data, pollId) {
+      return data.keys().hasAll([
+          'pollId', 'question', 'description', 'category', 'questionType',
+          'options', 'optionIds', 'maxChoices', 'status', 'resultsVisibility',
+          'allowVoteChange', 'anonymousMode', 'showVoterCount', 'allowShare',
+          'isPinned', 'hasDeadline', 'endsAt', 'totalBallots',
+          'createdBy', 'createdByName', 'createdByPhoto', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'pollId', 'question', 'description', 'imageUrl', 'category', 'questionType',
+          'pollStyle', 'institutionName',
+          'options', 'optionIds', 'maxChoices', 'status', 'resultsVisibility',
+          'allowVoteChange', 'anonymousMode', 'showVoterCount', 'allowShare',
+          'isPinned', 'hasDeadline', 'endsAt', 'totalBallots', 'commentsCount',
+          'createdBy', 'createdByName', 'createdByPhoto', 'createdAt', 'updatedAt'
+        ])
+        && data.pollId is string && data.pollId == pollId && isValidId(data.pollId)
+        && data.question is string && data.question.size() >= 4 && data.question.size() <= 300
+        && data.description is string && data.description.size() <= 1500
+        && (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 500 && (data.imageUrl == '' || data.imageUrl.matches('^https://.*'))))
+        && data.category in ['Siasa', 'Jamii', 'Biashara', 'Teknolojia', 'Elimu', 'Michezo', 'Uongozi', 'Mengineyo']
+        && data.questionType in ['single', 'multiple', 'yes_no', 'rating', 'open_opinion']
+        && (!('pollStyle' in data) || (data.pollStyle is string && data.pollStyle in ['standard', 'social_x', 'whatsapp', 'candidate_election', 'school_election', 'local_govt', 'open_opinion']))
+        && (!('institutionName' in data) || (data.institutionName is string && data.institutionName.size() <= 120))
+        && data.options is list
+        && data.optionIds is list
+        && data.optionIds.size() == data.options.size()
+        && data.optionIds.toSet().size() == data.optionIds.size()
+        && (
+          (
+            data.questionType == 'open_opinion'
+            && data.options.size() == 0
+            && data.optionIds.size() == 0
+          ) || (
+            data.questionType != 'open_opinion'
+            && data.options.size() >= 2
+            && data.options.size() <= 12
+            && isValidPollOption(data.options[0], data.optionIds[0])
+            && isValidPollOption(data.options[1], data.optionIds[1])
+          )
+        )
+        && data.maxChoices is int && data.maxChoices >= 1 && data.maxChoices <= 12
+        && data.status in ['open', 'closed', 'draft']
+        && data.resultsVisibility in ['always', 'after_vote', 'after_close', 'owner_only']
+        && data.allowVoteChange is bool
+        && data.anonymousMode is bool
+        && data.showVoterCount is bool
+        && data.allowShare is bool
+        && data.isPinned is bool
+        && data.hasDeadline is bool
+        && data.endsAt is timestamp
+        && data.totalBallots is int && data.totalBallots >= 0
+        && (!('commentsCount' in data) || (data.commentsCount is int && data.commentsCount >= 0))
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
+        && data.createdByName is string && data.createdByName.size() >= 1 && data.createdByName.size() <= 80
+        && data.createdByPhoto is string && data.createdByPhoto.size() <= 500
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPollComment(data, pollId) {
+      return data.keys().hasAll([
+          'pollId', 'authorId', 'authorName', 'authorPhoto', 'body',
+          'parentCommentId', 'likesCount', 'isDeleted', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'pollId', 'authorId', 'authorName', 'authorPhoto', 'body',
+          'parentCommentId', 'likesCount', 'isDeleted', 'createdAt', 'updatedAt'
+        ])
+        && data.pollId is string && isValidId(data.pollId) && data.pollId == pollId
+        && data.authorId is string && isValidId(data.authorId)
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80
+        && data.authorPhoto is string && data.authorPhoto.size() <= 500
+        && data.body is string && data.body.size() >= 2 && data.body.size() <= 4000
+        && data.parentCommentId is string && data.parentCommentId.size() <= 128
+        && data.likesCount is int && data.likesCount >= 0
+        && data.isDeleted is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPollTally(data, pollId, optionId) {
+      return data.keys().hasAll(['pollId', 'optionId', 'votesCount', 'updatedAt'])
+        && data.keys().hasOnly(['pollId', 'optionId', 'votesCount', 'updatedAt'])
+        && data.pollId is string && data.pollId == pollId && isValidId(data.pollId)
+        && data.optionId is string && data.optionId == optionId && isValidId(data.optionId)
+        && data.votesCount is int && data.votesCount >= 0
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPollBallot(data, pollId, userId) {
+      return data.keys().hasAll(['pollId', 'userId', 'voterName', 'voterPhoto', 'selectedOptionIds', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['pollId', 'userId', 'voterName', 'voterPhoto', 'selectedOptionIds', 'createdAt', 'updatedAt'])
+        && data.pollId is string && data.pollId == pollId && isValidId(data.pollId)
+        && data.userId is string && data.userId == userId && isValidId(data.userId)
+        && data.voterName is string && data.voterName.size() >= 1 && data.voterName.size() <= 80
+        && data.voterPhoto is string && data.voterPhoto.size() <= 500
+        && data.selectedOptionIds is list
+        && data.selectedOptionIds.size() >= 1 && data.selectedOptionIds.size() <= 12
+        && data.selectedOptionIds.toSet().size() == data.selectedOptionIds.size()
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function pollDocData(pollId) {
+      return get(/databases/$(database)/documents/polls/$(pollId)).data;
+    }
+
+    function canReadPollResults(pollId) {
+      return isAdmin() || (
+        exists(/databases/$(database)/documents/polls/$(pollId))
+        && pollDocData(pollId).status != 'draft'
+        && (
+          pollDocData(pollId).resultsVisibility == 'always' ||
+          (
+            pollDocData(pollId).resultsVisibility == 'after_close' && (
+              pollDocData(pollId).status == 'closed' ||
+              (pollDocData(pollId).hasDeadline && pollDocData(pollId).endsAt <= request.time)
+            )
+          ) ||
+          (
+            pollDocData(pollId).resultsVisibility == 'after_vote' && (
+              (isSignedIn() && exists(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid))) ||
+              pollDocData(pollId).status == 'closed' ||
+              (pollDocData(pollId).hasDeadline && pollDocData(pollId).endsAt <= request.time)
+            )
           )
         )
       );
@@ -1860,6 +2044,325 @@ service cloud.firestore {
         && incoming().updatedAt == request.time;
 
       allow delete: if isAdmin() && isValidId(certId);
+    }
+
+    // 18. Owner-Only Private Personal Photo Vault Backup
+    match /owner_private_photos/{photoId} {
+      allow get: if isAdmin() && isValidId(photoId);
+      allow list: if isAdmin();
+
+      allow create: if isAdmin()
+        && isValidId(photoId)
+        && isValidOwnerPrivatePhoto(incoming(), photoId)
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidId(photoId)
+        && isValidOwnerPrivatePhoto(incoming(), photoId)
+        && incoming().photoId == existing().photoId
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().fileHash == existing().fileHash
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isAdmin() && isValidId(photoId);
+    }
+
+    // 18B. Owner-Only Hierarchical Photo Folders with Optional SHA-256 PIN Lock
+    match /owner_photo_folders/{folderId} {
+      allow get: if isAdmin() && isValidId(folderId);
+      allow list: if isAdmin();
+
+      allow create: if isAdmin()
+        && isValidId(folderId)
+        && isValidOwnerPhotoFolder(incoming(), folderId)
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidId(folderId)
+        && isValidOwnerPhotoFolder(incoming(), folderId)
+        && incoming().folderId == existing().folderId
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isAdmin() && isValidId(folderId);
+    }
+
+    // 19. Community Polls & Voting (Owner-Managed Questions + 1-Per-Account Secure Ballots)
+    match /polls/{pollId} {
+      allow get: if isValidId(pollId)
+        && (existing().status in ['open', 'closed'] || isAdmin());
+
+      allow list: if resource.data.status in ['open', 'closed'] || isAdmin();
+
+      allow create: if isAdmin()
+        && isValidId(pollId)
+        && isValidPoll(incoming(), pollId)
+        && incoming().createdBy == request.auth.uid
+        && incoming().totalBallots == 0
+        && (!('commentsCount' in incoming()) || incoming().commentsCount == 0)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(pollId)
+        && isValidPoll(incoming(), pollId)
+        && incoming().pollId == existing().pollId
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            isNotSuspended()
+            && existing().status == 'open'
+            && (!existing().hasDeadline || existing().endsAt > request.time)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['totalBallots', 'updatedAt'])
+            && incoming().totalBallots == existing().totalBallots + 1
+            && !exists(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid))
+            && existsAfter(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid))
+          ) ||
+          (
+            isNotSuspended()
+            && existing().status == 'open'
+            && (!existing().hasDeadline || existing().endsAt > request.time)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['commentsCount', 'updatedAt'])
+            && incoming().commentsCount is int
+            && incoming().commentsCount >= 0
+            && (
+              (
+                (!('commentsCount' in existing()) && incoming().commentsCount == 1) ||
+                ('commentsCount' in existing() && incoming().commentsCount == existing().commentsCount + 1)
+              ) ||
+              (
+                'commentsCount' in existing()
+                && existing().commentsCount >= 1
+                && incoming().commentsCount == existing().commentsCount - 1
+              )
+            )
+          )
+        );
+
+      allow delete: if isAdmin() && isValidId(pollId);
+
+      match /tallies/{optionId} {
+        allow get: if isValidId(pollId) && isValidId(optionId) && canReadPollResults(pollId);
+
+        allow list: if isAdmin();
+
+        allow create: if isAdmin()
+          && isValidId(pollId)
+          && isValidId(optionId)
+          && isValidPollTally(incoming(), pollId, optionId)
+          && incoming().votesCount == 0
+          && incoming().updatedAt == request.time;
+
+        allow update: if isValidId(pollId)
+          && isValidId(optionId)
+          && isValidPollTally(incoming(), pollId, optionId)
+          && incoming().pollId == existing().pollId
+          && incoming().optionId == existing().optionId
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            (
+              isNotSuspended()
+              && exists(/databases/$(database)/documents/polls/$(pollId))
+              && pollDocData(pollId).status == 'open'
+              && (!pollDocData(pollId).hasDeadline || pollDocData(pollId).endsAt > request.time)
+              && optionId in pollDocData(pollId).optionIds
+              && incoming().diff(existing()).affectedKeys().hasOnly(['votesCount', 'updatedAt'])
+              && existsAfter(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid))
+              && (
+                (
+                  incoming().votesCount == existing().votesCount + 1
+                  && optionId in getAfter(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid)).data.selectedOptionIds
+                  && (
+                    !exists(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid)) ||
+                    (
+                      pollDocData(pollId).allowVoteChange == true
+                      && !(optionId in get(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid)).data.selectedOptionIds)
+                    )
+                  )
+                ) ||
+                (
+                  existing().votesCount >= 1
+                  && incoming().votesCount == existing().votesCount - 1
+                  && pollDocData(pollId).allowVoteChange == true
+                  && exists(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid))
+                  && optionId in get(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid)).data.selectedOptionIds
+                  && !(optionId in getAfter(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid)).data.selectedOptionIds)
+                )
+              )
+            )
+          );
+
+        allow delete: if isAdmin() && isValidId(pollId) && isValidId(optionId);
+      }
+
+      match /ballots/{userId} {
+        allow get: if isSignedIn()
+          && isValidId(pollId)
+          && isValidId(userId)
+          && (isOwner(userId) || isAdmin());
+
+        allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+
+        allow create: if isNotSuspended()
+          && isValidId(pollId)
+          && isValidId(userId)
+          && isOwner(userId)
+          && isValidPollBallot(incoming(), pollId, userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/polls/$(pollId))
+          && pollDocData(pollId).status == 'open'
+          && (!pollDocData(pollId).hasDeadline || pollDocData(pollId).endsAt > request.time)
+          && incoming().selectedOptionIds.size() <= pollDocData(pollId).maxChoices
+          && pollDocData(pollId).optionIds.hasAll(incoming().selectedOptionIds)
+          && (pollDocData(pollId).questionType != 'multiple' ? incoming().selectedOptionIds.size() == 1 : true)
+          && getAfter(/databases/$(database)/documents/polls/$(pollId)).data.totalBallots == pollDocData(pollId).totalBallots + 1
+          && getAfter(/databases/$(database)/documents/polls/$(pollId)/tallies/$(incoming().selectedOptionIds[0])).data.votesCount ==
+             get(/databases/$(database)/documents/polls/$(pollId)/tallies/$(incoming().selectedOptionIds[0])).data.votesCount + 1;
+
+        allow update: if isNotSuspended()
+          && isValidId(pollId)
+          && isValidId(userId)
+          && isOwner(userId)
+          && isValidPollBallot(incoming(), pollId, userId)
+          && incoming().pollId == existing().pollId
+          && incoming().userId == existing().userId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/polls/$(pollId))
+          && pollDocData(pollId).status == 'open'
+          && pollDocData(pollId).allowVoteChange == true
+          && (!pollDocData(pollId).hasDeadline || pollDocData(pollId).endsAt > request.time)
+          && incoming().selectedOptionIds.size() <= pollDocData(pollId).maxChoices
+          && pollDocData(pollId).optionIds.hasAll(incoming().selectedOptionIds)
+          && (pollDocData(pollId).questionType != 'multiple' ? incoming().selectedOptionIds.size() == 1 : true);
+
+        allow delete: if isAdmin() && isValidId(pollId) && isValidId(userId);
+      }
+
+      match /comments/{commentId} {
+        allow get: if isValidId(pollId)
+          && isValidId(commentId)
+          && (existing().isDeleted == false || isAdmin() || (isSignedIn() && existing().authorId == request.auth.uid));
+
+        allow list: if resource.data.isDeleted == false
+          || isAdmin()
+          || (isSignedIn() && resource.data.authorId == request.auth.uid);
+
+        allow create: if isNotSuspended()
+          && isValidId(pollId)
+          && isValidId(commentId)
+          && isValidPollComment(incoming(), pollId)
+          && incoming().authorId == request.auth.uid
+          && incoming().likesCount == 0
+          && incoming().isDeleted == false
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/polls/$(pollId))
+          && pollDocData(pollId).status == 'open'
+          && (!pollDocData(pollId).hasDeadline || pollDocData(pollId).endsAt > request.time)
+          && (
+            (
+              !('commentsCount' in pollDocData(pollId)) &&
+              getAfter(/databases/$(database)/documents/polls/$(pollId)).data.commentsCount == 1
+            ) ||
+            (
+              'commentsCount' in pollDocData(pollId) &&
+              getAfter(/databases/$(database)/documents/polls/$(pollId)).data.commentsCount == pollDocData(pollId).commentsCount + 1
+            )
+          );
+
+        allow update: if isNotSuspended()
+          && isValidId(pollId)
+          && isValidId(commentId)
+          && isValidPollComment(incoming(), pollId)
+          && incoming().pollId == existing().pollId
+          && incoming().authorId == existing().authorId
+          && incoming().createdAt == existing().createdAt
+          && (
+            // Action 1: Admin Moderation
+            (
+              isAdmin() &&
+              incoming().updatedAt == request.time
+            ) ||
+            // Action 2: Author Comment Edit
+            (
+              existing().authorId == request.auth.uid &&
+              existing().isDeleted == false &&
+              pollDocData(pollId).status == 'open' &&
+              (!pollDocData(pollId).hasDeadline || pollDocData(pollId).endsAt > request.time) &&
+              incoming().updatedAt == request.time &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['body', 'updatedAt'])
+            ) ||
+            // Action 3: Author Soft Delete
+            (
+              existing().authorId == request.auth.uid &&
+              existing().isDeleted == false &&
+              incoming().isDeleted == true &&
+              incoming().updatedAt == request.time &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['isDeleted', 'body', 'updatedAt'])
+            ) ||
+            // Action 4: Atomic Comment Like Sync
+            (
+              existing().isDeleted == false &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['likesCount']) &&
+              (
+                (
+                  incoming().likesCount == existing().likesCount + 1 &&
+                  !exists(/databases/$(database)/documents/polls/$(pollId)/comments/$(commentId)/likes/$(request.auth.uid)) &&
+                  existsAfter(/databases/$(database)/documents/polls/$(pollId)/comments/$(commentId)/likes/$(request.auth.uid))
+                ) ||
+                (
+                  existing().likesCount >= 1 &&
+                  incoming().likesCount == existing().likesCount - 1 &&
+                  exists(/databases/$(database)/documents/polls/$(pollId)/comments/$(commentId)/likes/$(request.auth.uid)) &&
+                  !existsAfter(/databases/$(database)/documents/polls/$(pollId)/comments/$(commentId)/likes/$(request.auth.uid))
+                )
+              )
+            )
+          );
+
+        allow delete: if isSignedIn()
+          && isValidId(pollId)
+          && isValidId(commentId)
+          && (isAdmin() || (isNotSuspended() && existing().authorId == request.auth.uid));
+
+        match /likes/{userId} {
+          allow get: if isSignedIn()
+            && isValidId(pollId)
+            && isValidId(commentId)
+            && isValidId(userId)
+            && userId == request.auth.uid;
+
+          allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+
+          allow create: if isNotSuspended()
+            && isValidId(pollId)
+            && isValidId(commentId)
+            && isValidId(userId)
+            && userId == request.auth.uid
+            && isValidVote(incoming(), userId)
+            && incoming().createdAt == request.time
+            && exists(/databases/$(database)/documents/polls/$(pollId)/comments/$(commentId));
+
+          allow update: if false;
+
+          allow delete: if isNotSuspended()
+            && isValidId(pollId)
+            && isValidId(commentId)
+            && isValidId(userId)
+            && userId == request.auth.uid;
+        }
+      }
     }
   }
 }
