@@ -224,6 +224,21 @@
   animation: malosha-welcome-name 9s cubic-bezier(0.22, 1, 0.36, 1) infinite;
 }
 
+@keyframes malosha-status-fade {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.42;
+    transform: scale(0.99);
+  }
+}
+
+.animate-malosha-fade {
+  animation: malosha-status-fade 2.4s ease-in-out infinite;
+}
+
 .animate-malosha-float-a {
   animation: malosha-float-a 11s ease-in-out infinite;
 }
@@ -249,6 +264,8 @@
   .animate-malosha-youth-right,
   .animate-malosha-handshake-clasp,
   .animate-malosha-welcome-name,
+  .animate-malosha-status-fade,
+  .animate-malosha-fade,
   .animate-malosha-float-a,
   .animate-malosha-float-b,
   .animate-malosha-beam {

@@ -4,12 +4,16 @@ import { User } from 'firebase/auth';
 import {
   Activity,
   ArrowLeft,
+  ArrowRight,
   Award,
   BarChart3,
   Building2,
   Camera,
   Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
   Clock,
   Copy,
   Crown,
@@ -19,17 +23,23 @@ import {
   Eye,
   EyeOff,
   FileSpreadsheet,
+  FileText,
   Filter,
+  GitBranch,
   Globe,
   Image as ImageIcon,
   Landmark,
   Link2,
+  ListChecks,
   Lock,
   MessageCircle,
   MessageSquare,
+  Moon,
+  Palette,
   PieChart,
   Pin,
   Plus,
+  Printer,
   Radio,
   RefreshCw,
   Scale,
@@ -37,8 +47,11 @@ import {
   Search,
   Share2,
   ShieldCheck,
+  Shuffle,
   SlidersHorizontal,
   Sparkles,
+  Star,
+  Sun,
   Target,
   Trash2,
   TrendingUp,
@@ -55,29 +68,41 @@ import { useLanguage } from '../context/LanguageContext';
 import {
   AuthPromptReason,
   POLL_CATEGORIES,
+  POLL_THEME_COLORS,
   Poll,
   PollBallot,
   PollCategory,
+  PollGender,
   PollOption,
   PollQuestionType,
   PollResultsVisibility,
   PollStatus,
   PollStyle,
+  PollThemeColor,
+  PollTournament,
+  TournamentCandidate,
 } from '../types';
 import {
   CreateOrUpdatePollInput,
   buildPollShareUrl,
+  buildTournamentRoadmapPreview,
   canViewPollResults,
   castOrUpdatePollVote,
   createPoll,
+  createPollTournament,
   deletePoll,
+  deletePollTournament,
+  exportOfficialPollReportPng,
   exportPollResultsCsv,
   fetchPollBallotsForOwner,
   fetchPollById,
   isPollEffectivelyOpen,
   isPollExpired,
+  parseBulkCandidatesText,
+  resolveAndAdvanceTournament,
   sharePoll,
   subscribePollTallies,
+  subscribePollTournaments,
   togglePollPin,
   updatePoll,
   updatePollStatus,
@@ -104,6 +129,8 @@ interface VotingPollsViewProps {
   isSuspended: boolean;
   selectedPollId?: string | null;
   onClearSelectedPoll?: () => void;
+  mpollBgTheme?: 'darkblue' | 'light';
+  onToggleMpollBgTheme?: () => void;
   onBack?: () => void;
   onSignIn: (reason?: AuthPromptReason) => void;
   onToast: (text: string, kind?: 'success' | 'error') => void;
@@ -126,6 +153,199 @@ const OPTION_COLORS = [
   '#DB2777',
   '#0F766E',
 ];
+
+interface PollThemePalette {
+  id: PollThemeColor;
+  hex: string;
+  labelSw: string;
+  labelEn: string;
+  accentBarClass: string;
+  cardBgClass: string;
+  borderClass: string;
+  badgeTextClass: string;
+  iconBgClass: string;
+  btnClass: string;
+}
+
+const POLL_THEME_PALETTES: Record<PollThemeColor, PollThemePalette> = {
+  cobalt: {
+    id: 'cobalt',
+    hex: '#1D4E89',
+    labelSw: 'Bluu Rasmi',
+    labelEn: 'Royal Cobalt',
+    accentBarClass: 'bg-[#1D4E89]',
+    cardBgClass: 'bg-white bg-gradient-to-b from-[#1D4E89]/[0.06] via-white to-white',
+    borderClass: 'border-[#1D4E89]/25',
+    badgeTextClass: 'text-[#1D4E89]',
+    iconBgClass: 'bg-[#1D4E89] text-white',
+    btnClass: 'bg-[#1D4E89] hover:bg-[#163d6c] text-white',
+  },
+  emerald: {
+    id: 'emerald',
+    hex: '#059669',
+    labelSw: 'Kijani Kijanja',
+    labelEn: 'Emerald Green',
+    accentBarClass: 'bg-emerald-600',
+    cardBgClass: 'bg-white bg-gradient-to-b from-emerald-50/90 via-white to-white',
+    borderClass: 'border-emerald-200',
+    badgeTextClass: 'text-emerald-700',
+    iconBgClass: 'bg-emerald-600 text-white',
+    btnClass: 'bg-emerald-600 hover:bg-emerald-700 text-white',
+  },
+  violet: {
+    id: 'violet',
+    hex: '#7C3AED',
+    labelSw: 'Zambarau',
+    labelEn: 'Deep Violet',
+    accentBarClass: 'bg-violet-600',
+    cardBgClass: 'bg-white bg-gradient-to-b from-violet-50/90 via-white to-white',
+    borderClass: 'border-violet-200',
+    badgeTextClass: 'text-violet-700',
+    iconBgClass: 'bg-violet-600 text-white',
+    btnClass: 'bg-violet-600 hover:bg-violet-700 text-white',
+  },
+  amber: {
+    id: 'amber',
+    hex: '#D97706',
+    labelSw: 'Dhahabu',
+    labelEn: 'Warm Amber',
+    accentBarClass: 'bg-amber-600',
+    cardBgClass: 'bg-white bg-gradient-to-b from-amber-50/90 via-white to-white',
+    borderClass: 'border-amber-200',
+    badgeTextClass: 'text-amber-800',
+    iconBgClass: 'bg-amber-600 text-white',
+    btnClass: 'bg-amber-600 hover:bg-amber-700 text-white',
+  },
+  crimson: {
+    id: 'crimson',
+    hex: '#DC2626',
+    labelSw: 'Nyekundu',
+    labelEn: 'Bold Crimson',
+    accentBarClass: 'bg-rose-600',
+    cardBgClass: 'bg-white bg-gradient-to-b from-rose-50/90 via-white to-white',
+    borderClass: 'border-rose-200',
+    badgeTextClass: 'text-rose-700',
+    iconBgClass: 'bg-rose-600 text-white',
+    btnClass: 'bg-rose-600 hover:bg-rose-700 text-white',
+  },
+  teal: {
+    id: 'teal',
+    hex: '#0F766E',
+    labelSw: 'Bahari Kijani',
+    labelEn: 'Deep Teal',
+    accentBarClass: 'bg-teal-700',
+    cardBgClass: 'bg-white bg-gradient-to-b from-teal-50/90 via-white to-white',
+    borderClass: 'border-teal-200',
+    badgeTextClass: 'text-teal-800',
+    iconBgClass: 'bg-teal-700 text-white',
+    btnClass: 'bg-teal-700 hover:bg-teal-800 text-white',
+  },
+  indigo: {
+    id: 'indigo',
+    hex: '#4338CA',
+    labelSw: 'Indigo',
+    labelEn: 'Civic Indigo',
+    accentBarClass: 'bg-indigo-600',
+    cardBgClass: 'bg-white bg-gradient-to-b from-indigo-50/90 via-white to-white',
+    borderClass: 'border-indigo-200',
+    badgeTextClass: 'text-indigo-700',
+    iconBgClass: 'bg-indigo-600 text-white',
+    btnClass: 'bg-indigo-600 hover:bg-indigo-700 text-white',
+  },
+  rose: {
+    id: 'rose',
+    hex: '#DB2777',
+    labelSw: 'Waridi',
+    labelEn: 'Vibrant Rose',
+    accentBarClass: 'bg-pink-600',
+    cardBgClass: 'bg-white bg-gradient-to-b from-pink-50/90 via-white to-white',
+    borderClass: 'border-pink-200',
+    badgeTextClass: 'text-pink-700',
+    iconBgClass: 'bg-pink-600 text-white',
+    btnClass: 'bg-pink-600 hover:bg-pink-700 text-white',
+  },
+  cyan: {
+    id: 'cyan',
+    hex: '#0284C7',
+    labelSw: 'Anga (X)',
+    labelEn: 'Sky Cyan',
+    accentBarClass: 'bg-sky-500',
+    cardBgClass: 'bg-white bg-gradient-to-b from-sky-50/90 via-white to-white',
+    borderClass: 'border-sky-200',
+    badgeTextClass: 'text-sky-700',
+    iconBgClass: 'bg-sky-500 text-white',
+    btnClass: 'bg-sky-600 hover:bg-sky-700 text-white',
+  },
+  slate: {
+    id: 'slate',
+    hex: '#334155',
+    labelSw: 'Nyeusi Rasmi',
+    labelEn: 'Executive Slate',
+    accentBarClass: 'bg-slate-800',
+    cardBgClass: 'bg-white bg-gradient-to-b from-slate-100/90 via-white to-white',
+    borderClass: 'border-slate-300',
+    badgeTextClass: 'text-slate-800',
+    iconBgClass: 'bg-slate-800 text-white',
+    btnClass: 'bg-slate-800 hover:bg-slate-900 text-white',
+  },
+};
+
+function getPollThemePalette(poll: Pick<Poll, 'id' | 'pollStyle' | 'themeColor'>): PollThemePalette {
+  if (poll.themeColor && POLL_THEME_PALETTES[poll.themeColor]) {
+    return POLL_THEME_PALETTES[poll.themeColor];
+  }
+  if (poll.pollStyle === 'whatsapp') return POLL_THEME_PALETTES.emerald;
+  if (poll.pollStyle === 'social_x') return POLL_THEME_PALETTES.cyan;
+  if (poll.pollStyle === 'open_opinion') return POLL_THEME_PALETTES.violet;
+  if (poll.pollStyle === 'local_govt') return POLL_THEME_PALETTES.teal;
+  if (poll.pollStyle === 'school_election') return POLL_THEME_PALETTES.indigo;
+  if (poll.pollStyle === 'candidate_election') return POLL_THEME_PALETTES.cobalt;
+  let hash = 0;
+  for (let i = 0; i < poll.id.length; i++) {
+    hash = (hash * 31 + poll.id.charCodeAt(i)) >>> 0;
+  }
+  const colorKey = POLL_THEME_COLORS[hash % POLL_THEME_COLORS.length];
+  return POLL_THEME_PALETTES[colorKey];
+}
+
+function getDefaultThemeForStyle(style: PollStyle): PollThemeColor {
+  switch (style) {
+    case 'whatsapp':
+      return 'emerald';
+    case 'social_x':
+      return 'cyan';
+    case 'open_opinion':
+      return 'violet';
+    case 'local_govt':
+      return 'teal';
+    case 'school_election':
+      return 'indigo';
+    case 'candidate_election':
+      return 'cobalt';
+    default:
+      return 'amber';
+  }
+}
+
+function deterministicShuffleOptions(options: PollOption[], seed: string): PollOption[] {
+  if (options.length <= 1) return options;
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const arr = [...options];
+  for (let i = arr.length - 1; i > 0; i--) {
+    h ^= h << 13;
+    h ^= h >>> 17;
+    h ^= h << 5;
+    const j = (h >>> 0) % (i + 1);
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+  return arr;
+}
 
 interface PollStyleMeta {
   id: PollStyle;
@@ -272,6 +492,25 @@ function toDatetimeLocalValue(date: Date): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+const CANDIDATE_ROLE_PRESETS = [
+  'Mwenyekiti',
+  'Makamu Mwenyekiti',
+  'Katibu',
+  'Mhasibu',
+  'Mjumbe',
+  'Head Boy',
+  'Head Girl',
+  'Prefect',
+] as const;
+
+const ACTIVE_BUILDER_STYLES: PollStyle[] = [
+  'local_govt',
+  'school_election',
+  'social_x',
+  'whatsapp',
+  'open_opinion',
+];
+
 function getDefaultOptionsForStyleAndType(
   style: PollStyle,
   type: PollQuestionType,
@@ -298,20 +537,16 @@ function getDefaultOptionsForStyleAndType(
       {
         id: 'opt_1',
         label: '',
-        subtitle: tr('Kidato cha Tano · Mgombea Mkuu wa Shule', 'Form V · Head Prefect Candidate'),
+        positionTitle: tr('Kiongozi Mkuu (Head Prefect)', 'Head Prefect'),
+        subtitle: tr('Kidato cha Tano · Ilani ya Maendeleo', 'Form V · Manifesto'),
         color: '#1D4E89',
       },
       {
         id: 'opt_2',
         label: '',
-        subtitle: tr('Kidato cha Tano · Mgombea Mkuu wa Shule', 'Form V · Head Prefect Candidate'),
+        positionTitle: tr('Kiongozi Mkuu (Head Prefect)', 'Head Prefect'),
+        subtitle: tr('Kidato cha Tano · Ilani ya Maendeleo', 'Form V · Manifesto'),
         color: '#059669',
-      },
-      {
-        id: 'opt_3',
-        label: '',
-        subtitle: tr('Kidato cha Tano · Mgombea Mkuu wa Shule', 'Form V · Head Prefect Candidate'),
-        color: '#D97706',
       },
     ];
   }
@@ -320,30 +555,16 @@ function getDefaultOptionsForStyleAndType(
       {
         id: 'opt_1',
         label: '',
-        subtitle: tr('Mgombea Uenyekiti wa Mtaa / Kijiji', 'Street / Village Chairperson Candidate'),
+        positionTitle: 'Mwenyekiti',
+        subtitle: tr('Mgombea wa Mtaa / Kijiji', 'Local Council Candidate'),
         color: '#059669',
       },
       {
         id: 'opt_2',
         label: '',
-        subtitle: tr('Mgombea Uenyekiti wa Mtaa / Kijiji', 'Street / Village Chairperson Candidate'),
+        positionTitle: 'Mwenyekiti',
+        subtitle: tr('Mgombea wa Mtaa / Kijiji', 'Local Council Candidate'),
         color: '#1D4E89',
-      },
-    ];
-  }
-  if (style === 'candidate_election') {
-    return [
-      {
-        id: 'opt_1',
-        label: '',
-        subtitle: tr('Nafasi / Ilani Fupi', 'Role / Short Manifesto'),
-        color: '#1D4E89',
-      },
-      {
-        id: 'opt_2',
-        label: '',
-        subtitle: tr('Nafasi / Ilani Fupi', 'Role / Short Manifesto'),
-        color: '#D97706',
       },
     ];
   }
@@ -729,6 +950,7 @@ interface InlinePollBuilderProps {
   userPhoto: string;
   onCancel: () => void;
   onSaved: (pollId: string, isEdit: boolean) => void;
+  onOpenTournamentStudio?: () => void;
   onToast: (text: string, kind?: 'success' | 'error') => void;
 }
 
@@ -739,13 +961,16 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
   userPhoto,
   onCancel,
   onSaved,
+  onOpenTournamentStudio,
   onToast,
 }) => {
   const { tr } = useLanguage();
   const isEdit = Boolean(editingPoll);
 
-  const [pollStyle, setPollStyle] = useState<PollStyle>(
-    editingPoll?.pollStyle || 'candidate_election'
+  const initialStyle: PollStyle = editingPoll?.pollStyle || 'local_govt';
+  const [pollStyle, setPollStyle] = useState<PollStyle>(initialStyle);
+  const [themeColor, setThemeColor] = useState<PollThemeColor>(
+    editingPoll?.themeColor || getDefaultThemeForStyle(initialStyle)
   );
   const [institutionName, setInstitutionName] = useState(
     editingPoll?.institutionName || ''
@@ -756,14 +981,14 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
   const [uploadingQuestionImg, setUploadingQuestionImg] = useState(false);
   const [pendingQuestionCropFile, setPendingQuestionCropFile] = useState<File | null>(null);
   const [questionImgUrlInputOpen, setQuestionImgUrlInputOpen] = useState(false);
-  const [category, setCategory] = useState<PollCategory>(editingPoll?.category || 'Uongozi');
+  const [category, setCategory] = useState<PollCategory>(editingPoll?.category || 'Siasa');
   const [questionType, setQuestionType] = useState<PollQuestionType>(
     editingPoll?.questionType || 'single'
   );
   const [options, setOptions] = useState<PollOption[]>(
     editingPoll?.options && editingPoll.options.length >= 2
       ? editingPoll.options.map((o) => ({ ...o }))
-      : getDefaultOptionsForStyleAndType('candidate_election', 'single', tr)
+      : getDefaultOptionsForStyleAndType('local_govt', 'single', tr)
   );
   const [maxChoices, setMaxChoices] = useState<number>(editingPoll?.maxChoices || 2);
   const [status, setStatus] = useState<PollStatus>(editingPoll?.status || 'open');
@@ -778,6 +1003,18 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
   );
   const [showVoterCount, setShowVoterCount] = useState(
     editingPoll ? editingPoll.showVoterCount : true
+  );
+  const [showLivePercentages, setShowLivePercentages] = useState(
+    editingPoll ? editingPoll.showLivePercentages !== false : true
+  );
+  const [shuffleOptions, setShuffleOptions] = useState(
+    editingPoll ? Boolean(editingPoll.shuffleOptions) : false
+  );
+  const [allowComments, setAllowComments] = useState(
+    editingPoll ? editingPoll.allowComments !== false : true
+  );
+  const [quorumTarget, setQuorumTarget] = useState<number>(
+    editingPoll?.quorumTarget || 0
   );
   const [allowShare, setAllowShare] = useState(editingPoll ? editingPoll.allowShare : true);
   const [isPinned, setIsPinned] = useState(editingPoll ? editingPoll.isPinned : false);
@@ -801,11 +1038,19 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
   const fileInputRefs = useRef<Record<number, HTMLInputElement | null>>({});
   const questionImgInputRef = useRef<HTMLInputElement | null>(null);
 
-  const styleMeta = POLL_STYLE_META[pollStyle];
+  const styleMeta = POLL_STYLE_META[pollStyle] || POLL_STYLE_META.local_govt;
+  const activePalette = POLL_THEME_PALETTES[themeColor] || POLL_THEME_PALETTES.teal;
   const isOpenOpinion = questionType === 'open_opinion';
+  const showRoleAndGenderFields =
+    pollStyle === 'local_govt' ||
+    pollStyle === 'school_election' ||
+    pollStyle === 'candidate_election';
 
   const handleSelectStyle = (nextStyle: PollStyle) => {
     setPollStyle(nextStyle);
+    if (!isEdit) {
+      setThemeColor(getDefaultThemeForStyle(nextStyle));
+    }
     if (nextStyle === 'open_opinion') {
       setQuestionType('open_opinion');
       if (!isEdit) {
@@ -829,20 +1074,65 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
     }
   };
 
+  const applyStudioQuickBlueprint = (
+    blueprintKey: 'local_govt' | 'school_election' | 'x_debate' | 'whatsapp_group' | 'opinion'
+  ) => {
+    if (blueprintKey === 'local_govt') {
+      setPollStyle('local_govt');
+      setThemeColor('teal');
+      setQuestionType('single');
+      setCategory('Siasa');
+      setAllowVoteChange(false);
+      setShowLivePercentages(true);
+      setOptions(getDefaultOptionsForStyleAndType('local_govt', 'single', tr));
+    } else if (blueprintKey === 'school_election') {
+      setPollStyle('school_election');
+      setThemeColor('indigo');
+      setQuestionType('single');
+      setCategory('Elimu');
+      setAllowVoteChange(false);
+      setShowLivePercentages(true);
+      setOptions(getDefaultOptionsForStyleAndType('school_election', 'single', tr));
+    } else if (blueprintKey === 'x_debate') {
+      setPollStyle('social_x');
+      setThemeColor('cyan');
+      setQuestionType('single');
+      setCategory('Siasa');
+      setAllowVoteChange(true);
+      setShowLivePercentages(true);
+      setOptions(getDefaultOptionsForStyleAndType('social_x', 'single', tr));
+    } else if (blueprintKey === 'whatsapp_group') {
+      setPollStyle('whatsapp');
+      setThemeColor('emerald');
+      setQuestionType('multiple');
+      setMaxChoices(2);
+      setCategory('Jamii');
+      setAllowVoteChange(true);
+      setOptions(getDefaultOptionsForStyleAndType('whatsapp', 'multiple', tr));
+    } else if (blueprintKey === 'opinion') {
+      setPollStyle('open_opinion');
+      setThemeColor('violet');
+      setQuestionType('open_opinion');
+      setCategory('Jamii');
+      setAllowComments(true);
+    }
+  };
+
   const handleTypeChange = (nextType: PollQuestionType) => {
     setQuestionType(nextType);
     if (nextType === 'open_opinion') {
       setPollStyle('open_opinion');
       return;
     }
+    const safeStyle: PollStyle = pollStyle === 'open_opinion' ? 'local_govt' : pollStyle;
     if (pollStyle === 'open_opinion') {
-      setPollStyle('standard');
+      setPollStyle(safeStyle);
     }
     if (nextType === 'yes_no' || nextType === 'rating') {
-      setOptions(getDefaultOptionsForStyleAndType(pollStyle === 'open_opinion' ? 'standard' : pollStyle, nextType, tr));
+      setOptions(getDefaultOptionsForStyleAndType(safeStyle, nextType, tr));
     } else if (questionType === 'yes_no' || questionType === 'rating' || questionType === 'open_opinion') {
       if (options.length < 2 || questionType !== 'open_opinion') {
-        setOptions(getDefaultOptionsForStyleAndType(pollStyle === 'open_opinion' ? 'standard' : pollStyle, nextType, tr));
+        setOptions(getDefaultOptionsForStyleAndType(safeStyle, nextType, tr));
       }
     }
   };
@@ -972,6 +1262,8 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
             ...o,
             label: o.label.trim(),
             subtitle: (o.subtitle || '').trim() || undefined,
+            positionTitle: (o.positionTitle || '').trim() || undefined,
+            gender: o.gender,
             imageUrl: (o.imageUrl || '').trim() || undefined,
           }))
           .filter((o) => o.label.length > 0);
@@ -1016,6 +1308,7 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
         category,
         questionType,
         pollStyle,
+        themeColor,
         institutionName,
         options: cleanOptions,
         maxChoices:
@@ -1025,6 +1318,10 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
         allowVoteChange,
         anonymousMode,
         showVoterCount,
+        showLivePercentages,
+        shuffleOptions,
+        allowComments,
+        quorumTarget: Math.max(0, Math.round(quorumTarget || 0)),
         allowShare,
         isPinned,
         hasDeadline,
@@ -1055,61 +1352,183 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
   };
 
   return (
-    <div className="space-y-4">
-      {/* Top inline header bar — NO popup */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3 shadow-xs">
-        <div className="flex items-center gap-3 min-w-0">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="w-10 h-10 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 flex items-center justify-center transition-colors shrink-0"
-            aria-label={tr('Rudi kwenye orodha ya Mpoll', 'Back to Mpoll list')}
-          >
-            <ArrowLeft size={18} />
-          </button>
-          <div className="min-w-0">
-            <h2 className="text-base sm:text-lg font-bold text-[#0F172A] tracking-tight truncate">
-              {isEdit
-                ? tr('Hariri Mpoll / Uchaguzi', 'Edit Mpoll / Election')
-                : tr('Tengeneza Mpoll Mpya', 'Create New Mpoll')}
-            </h2>
-            <p className="text-xs text-slate-500">
-              {tr(
-                'Chagua mtindo wa kura (Wagombea wenye picha, Shule, Serikali za Mitaa, X au WhatsApp) na weka mipangilio kamili.',
-                'Choose format (Candidate portraits, School, Local Govt, X or WhatsApp) and configure full voting rules.'
-              )}
-            </p>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="px-3.5 py-2 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-        >
-          {tr('Rudi Kwenye Orodha', 'Back to List')}
-        </button>
-      </div>
-
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {/* Step 1: Choose Poll Format / Template */}
-        <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3 shadow-xs">
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <h3 className="text-sm font-bold text-[#0F172A] flex items-center gap-2">
-                <Sparkles size={15} className="text-[#1D4E89]" />
-                {tr('1. Chagua Aina / Mtindo wa Mpoll', '1. Choose Mpoll Format & Style')}
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
+    <div className="space-y-3.5 text-[#0F172A]">
+      {/* Studio Header Bar — Unified Single-Page Poll Creation Workspace */}
+      <div className={`bg-white border ${activePalette.borderClass} rounded-2xl overflow-hidden shadow-xs`}>
+        <div className={`h-1.5 w-full ${activePalette.accentBarClass}`} />
+        <div className="p-3.5 sm:p-5 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="w-10 h-10 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 flex items-center justify-center transition-colors shrink-0"
+              aria-label={tr('Rudi kwenye orodha ya Mpoll', 'Back to Mpoll list')}
+            >
+              <ArrowLeft size={18} />
+            </button>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h2 className="text-base sm:text-lg font-extrabold text-[#0F172A] tracking-tight truncate">
+                  {isEdit
+                    ? tr('Studio ya Kuhariri Mpoll', 'Mpoll Studio Editor')
+                    : tr('Studio ya Kutengeneza Kura (Mpoll Studio)', 'Mpoll Creation Studio')}
+                </h2>
+              </div>
+              <p className="text-[11px] sm:text-xs text-slate-600 mt-0.5">
                 {tr(
-                  'Kila mtindo hupanga muonekano wa kura kwa wapiga kura na matokeo yake.',
-                  'Each format tailors how voters see candidates, options, and tallies.'
+                  'Jaza mtindo, rangi, swali, wagombea, na mipangilio yote kwenye ukurasa huu mmoja bila kubadilisha hatua.',
+                  'Configure format, color, question, options, and full settings all on this single page.'
                 )}
               </p>
             </div>
           </div>
 
+          <button
+            type="button"
+            onClick={onCancel}
+            className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            {tr('Funga Studio', 'Exit Studio')}
+          </button>
+        </div>
+      </div>
+
+      {/* Live Mini Preview Strip of How Voters Will See This Card */}
+      <div className={`bg-white rounded-2xl border ${activePalette.borderClass} ${activePalette.cardBgClass} overflow-hidden shadow-xs text-[#0F172A]`}>
+        <div className={`h-1.5 w-full ${activePalette.accentBarClass}`} />
+        <div className="p-3 sm:p-4 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${activePalette.iconBgClass}`}>
+              {getStyleIcon(pollStyle, 15)}
+            </span>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                <span className={`font-extrabold ${activePalette.badgeTextClass}`}>
+                  {tr(styleMeta.shortTagSw, styleMeta.shortTagEn)}
+                </span>
+                <span className="text-slate-300">·</span>
+                <span className="font-semibold text-slate-600">{category}</span>
+                {institutionName && (
+                  <>
+                    <span className="text-slate-300">·</span>
+                    <span className="font-semibold text-slate-700 truncate">{institutionName}</span>
+                  </>
+                )}
+              </div>
+              <div className="text-xs sm:text-sm font-extrabold text-[#0A2540] truncate mt-0.5">
+                {question.trim() || tr('Hakiki ya muonekano wa kadi yako hapa...', 'Live preview of your poll card appearance...')}
+              </div>
+            </div>
+          </div>
+          <span className="text-[11px] font-bold text-slate-600">
+            {tr('Rangi:', 'Color:')} <strong className={activePalette.badgeTextClass}>{tr(activePalette.labelSw, activePalette.labelEn)}</strong>
+          </span>
+        </div>
+      </div>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {/* Step 1: Choose Poll Format, Quick Blueprints & Distinct Color Theme */}
+        <section className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4 shadow-xs text-[#0F172A]">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-extrabold text-[#0F172A] flex items-center gap-2">
+                <Sparkles size={15} style={{ color: activePalette.hex }} />
+                {tr('1. Chagua Mtindo wa Swali & Rangi ya Kadi', '1. Poll Format, Templates & Card Color')}
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {tr(
+                  'Kila mtindo na rangi hutoa muonekano tofauti kwa wapiga kura ili kutofautisha kura haraka.',
+                  'Every format and color gives voters a distinct visual layout at a glance.'
+                )}
+              </p>
+            </div>
+          </div>
+
+          {/* One-Tap Quick Blueprints + Launch Multi-Stage Leader Elimination */}
+          {!isEdit && (
+            <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-[11px] font-bold text-slate-600 flex items-center gap-1.5">
+                  <Zap size={12} className="text-amber-600" />
+                  {tr('Vianzishi vya Haraka (Quick Studio Presets):', 'Quick Studio Starters:')}
+                </div>
+                {onOpenTournamentStudio && (
+                  <button
+                    type="button"
+                    onClick={onOpenTournamentStudio}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0A2540] hover:bg-[#133A63] text-white text-[11px] font-bold shadow-2xs transition-colors"
+                  >
+                    <GitBranch size={12} className="text-sky-300" />
+                    {tr('Mchakato wa Mtoano (Wagombea 30–300)', 'Multi-Stage Elimination (30–300)')}
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  { key: 'local_govt' as const, label: tr('Serikali za Mitaa (Picha + Cheo)', 'Local Govt Election') },
+                  { key: 'school_election' as const, label: tr('Uchaguzi wa Shule / Chuo', 'School / College Election') },
+                  { key: 'x_debate' as const, label: tr('Mtindo wa X (Twitter Poll)', 'X / Twitter Poll') },
+                  { key: 'whatsapp_group' as const, label: tr('Mtindo wa WhatsApp', 'WhatsApp Poll') },
+                  { key: 'opinion' as const, label: tr('Swali 1 la Maoni Huru', 'Open Opinion Thread') },
+                ].map((bp) => (
+                  <button
+                    key={bp.key}
+                    type="button"
+                    onClick={() => applyStudioQuickBlueprint(bp.key)}
+                    className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:border-[#1D4E89] hover:text-[#1D4E89] text-[11px] font-bold text-slate-700 transition-colors"
+                  >
+                    + {bp.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Distinct Color Theme Picker */}
+          <div className="rounded-xl border border-slate-200 p-3.5 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-extrabold text-[#0F172A] flex items-center gap-1.5">
+                <Palette size={14} style={{ color: activePalette.hex }} />
+                {tr('Rangi ya Kipekee ya Kadi Hii', 'Unique Card Theme Color')}
+              </span>
+              <span className="text-[11px] font-bold" style={{ color: activePalette.hex }}>
+                {tr(activePalette.labelSw, activePalette.labelEn)}
+              </span>
+            </div>
+            <div className="grid grid-cols-5 sm:grid-cols-10 gap-2">
+              {POLL_THEME_COLORS.map((colorKey) => {
+                const pal = POLL_THEME_PALETTES[colorKey];
+                const isSelectedColor = themeColor === colorKey;
+                return (
+                  <button
+                    key={colorKey}
+                    type="button"
+                    onClick={() => setThemeColor(colorKey)}
+                    className={`flex flex-col items-center gap-1 p-1.5 rounded-xl border transition-all ${
+                      isSelectedColor
+                        ? 'border-slate-900 bg-slate-50 shadow-xs scale-[1.03]'
+                        : 'border-slate-200 bg-white hover:border-slate-300'
+                    }`}
+                    title={tr(pal.labelSw, pal.labelEn)}
+                  >
+                    <span
+                      className="w-6 h-6 rounded-full border-2 border-white shadow-xs flex items-center justify-center"
+                      style={{ backgroundColor: pal.hex }}
+                    >
+                      {isSelectedColor && <Check size={12} className="text-white" />}
+                    </span>
+                    <span className="text-[9px] font-bold text-slate-600 truncate max-w-full">
+                      {tr(pal.labelSw.split(' ')[0], pal.labelEn.split(' ')[0])}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-            {(Object.values(POLL_STYLE_META) as PollStyleMeta[]).map((item) => {
+            {ACTIVE_BUILDER_STYLES.map((styleId) => {
+              const item = POLL_STYLE_META[styleId];
               const selected = pollStyle === item.id;
               return (
                 <button
@@ -1118,14 +1537,14 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
                   onClick={() => handleSelectStyle(item.id)}
                   className={`text-left p-3.5 rounded-xl border transition-all flex items-start gap-2.5 ${
                     selected
-                      ? 'bg-[#1D4E89]/[0.06] border-[#1D4E89] ring-1 ring-[#1D4E89]/30'
+                      ? `${activePalette.cardBgClass} ${activePalette.borderClass} ring-1 ring-slate-900/10`
                       : 'bg-slate-50/70 border-slate-200 hover:bg-white hover:border-slate-300'
                   }`}
                 >
                   <span
                     className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
                       selected
-                        ? 'bg-[#1D4E89] text-white'
+                        ? activePalette.iconBgClass
                         : 'bg-white border border-slate-200 text-slate-600'
                     }`}
                   >
@@ -1146,7 +1565,7 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
         </section>
 
         {/* Step 2: Question, Institution & Type */}
-        <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4 shadow-xs">
+        <section className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4 shadow-xs text-[#0F172A]">
           <h3 className="text-sm font-bold text-[#0F172A] flex items-center gap-2">
             <Vote size={15} className="text-[#1D4E89]" />
             {tr('2. Swali, Taasisi na Maelezo ya Kura', '2. Question, Institution & Details')}
@@ -1374,8 +1793,8 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
 
         {/* Step 3: Candidates / Options OR Open Opinion Discussion Confirmation */}
         {isOpenOpinion ? (
-          <section className="bg-sky-50/80 border border-sky-200 rounded-xl p-4 sm:p-5 flex items-start gap-3 shadow-xs">
-            <span className="w-10 h-10 rounded-xl bg-[#1D4E89] text-white flex items-center justify-center shrink-0">
+          <section className="bg-white bg-gradient-to-b from-sky-50 to-white border border-sky-200 rounded-2xl p-4 sm:p-5 flex items-start gap-3 shadow-xs text-[#0F172A]">
+            <span className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${activePalette.iconBgClass}`}>
               <MessageSquare size={18} />
             </span>
             <div className="space-y-1">
@@ -1394,7 +1813,7 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
             </div>
           </section>
         ) : (
-        <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3.5 shadow-xs">
+        <section className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-3.5 shadow-xs text-[#0F172A]">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h3 className="text-sm font-bold text-[#0F172A] flex items-center gap-2">
@@ -1549,6 +1968,107 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
                         className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1D4E89]/20 focus:border-[#1D4E89]"
                       />
 
+                      {showRoleAndGenderFields && (
+                        <div className="rounded-lg border border-slate-200 bg-white p-2.5 space-y-2">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-600 mb-1">
+                                {tr('Cheo / Nafasi Anayogombea (mfano: Mwenyekiti, Katibu)', 'Candidate Role / Title')}
+                              </label>
+                              <input
+                                type="text"
+                                value={opt.positionTitle || ''}
+                                onChange={(e) =>
+                                  setOptions((prev) =>
+                                    prev.map((o, i) =>
+                                      i === idx ? { ...o, positionTitle: e.target.value } : o
+                                    )
+                                  )
+                                }
+                                maxLength={80}
+                                placeholder={tr('Mwenyekiti / Katibu / Mhasibu / Head Boy...', 'Chairperson / Secretary / Prefect...')}
+                                className="w-full px-2.5 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-[#1D4E89]/25 focus:bg-white"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-600 mb-1">
+                                {tr('Jinsia (Hiari)', 'Gender (Optional)')}
+                              </label>
+                              <div className="grid grid-cols-3 gap-1">
+                                {(
+                                  [
+                                    { key: 'male', label: tr('Mvulana', 'Male') },
+                                    { key: 'female', label: tr('Msichana', 'Female') },
+                                    { key: 'none', label: tr('Haijabainishwa', 'Unset') },
+                                  ] as const
+                                ).map((gItem) => {
+                                  const activeG =
+                                    gItem.key === 'none' ? !opt.gender : opt.gender === gItem.key;
+                                  return (
+                                    <button
+                                      key={gItem.key}
+                                      type="button"
+                                      onClick={() =>
+                                        setOptions((prev) =>
+                                          prev.map((o, i) =>
+                                            i === idx
+                                              ? {
+                                                  ...o,
+                                                  gender:
+                                                    gItem.key === 'none'
+                                                      ? undefined
+                                                      : (gItem.key as PollGender),
+                                                }
+                                              : o
+                                          )
+                                        )
+                                      }
+                                      className={`px-2 py-1.5 rounded-md text-[10px] font-bold border transition-colors ${
+                                        activeG
+                                          ? gItem.key === 'female'
+                                            ? 'bg-pink-600 text-white border-pink-600'
+                                            : gItem.key === 'male'
+                                              ? 'bg-[#1D4E89] text-white border-[#1D4E89]'
+                                              : 'bg-slate-700 text-white border-slate-700'
+                                          : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                                      }`}
+                                    >
+                                      {gItem.label}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-1">
+                            <span className="text-[10px] font-semibold text-slate-400 mr-0.5">
+                              {tr('Chagua cheo:', 'Quick role:')}
+                            </span>
+                            {CANDIDATE_ROLE_PRESETS.map((presetRole) => (
+                              <button
+                                key={presetRole}
+                                type="button"
+                                onClick={() =>
+                                  setOptions((prev) =>
+                                    prev.map((o, i) =>
+                                      i === idx ? { ...o, positionTitle: presetRole } : o
+                                    )
+                                  )
+                                }
+                                className={`px-2 py-0.5 rounded-md text-[10px] font-semibold border transition-colors ${
+                                  opt.positionTitle === presetRole
+                                    ? 'bg-[#1D4E89] text-white border-[#1D4E89]'
+                                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-[#1D4E89]'
+                                }`}
+                              >
+                                {presetRole}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
                         <div className="flex items-center gap-1.5">
                           <span className="text-[11px] font-semibold text-slate-500 mr-1">
@@ -1610,14 +2130,14 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
         </section>
         )}
 
-        {/* Step 4: Security, Visibility & Deadlines */}
-        <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4 shadow-xs">
-          <h3 className="text-sm font-bold text-[#0F172A] flex items-center gap-2">
-            <SlidersHorizontal size={15} className="text-[#1D4E89]" />
-            {tr('4. Usalama wa Kura, Muda na Mipangilio', '4. Vote Security, Deadlines & Settings')}
+        {/* Step 4: Full Security, Visibility, Fairness & Turnout Settings */}
+        <section className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4 shadow-xs text-[#0F172A]">
+          <h3 className="text-sm font-extrabold text-[#0F172A] flex items-center gap-2">
+            <SlidersHorizontal size={15} style={{ color: activePalette.hex }} />
+            {tr('4. Mipangilio Kamili ya Kura, Usalama & Muda', '4. Full Poll Settings, Fairness & Deadlines')}
           </h3>
 
-          <div className={`grid grid-cols-1 ${isOpenOpinion ? '' : 'sm:grid-cols-2'} gap-3`}>
+          <div className={`grid grid-cols-1 ${isOpenOpinion ? '' : 'sm:grid-cols-3'} gap-3`}>
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">
                 {tr('Hali ya Mpoll', 'Poll Status')}
@@ -1642,34 +2162,51 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
             </div>
 
             {!isOpenOpinion && (
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  {tr('Wapiga Kura Waone Matokeo Lini?', 'When Voters See Results')}
-                </label>
-                <select
-                  value={resultsVisibility}
-                  onChange={(e) => setResultsVisibility(e.target.value as PollResultsVisibility)}
-                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1D4E89]/25"
-                >
-                  <option value="always">{tr('Muda Wote (Live)', 'Always Visible (Live)')}</option>
-                  <option value="after_vote">
-                    {tr('Baada ya Kupiga Kura', 'After Voting')}
-                  </option>
-                  <option value="after_close">
-                    {tr('Baada ya Kura Kufungwa', 'After Poll Closes')}
-                  </option>
-                  <option value="owner_only">
-                    {tr('Mmiliki Pekee (Siri)', 'Owner Only (Private)')}
-                  </option>
-                </select>
-              </div>
+              <>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    {tr('Wapiga Kura Waone Matokeo Lini?', 'When Voters See Results')}
+                  </label>
+                  <select
+                    value={resultsVisibility}
+                    onChange={(e) => setResultsVisibility(e.target.value as PollResultsVisibility)}
+                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1D4E89]/25"
+                  >
+                    <option value="always">{tr('Muda Wote (Live)', 'Always Visible (Live)')}</option>
+                    <option value="after_vote">
+                      {tr('Baada ya Kupiga Kura', 'After Voting')}
+                    </option>
+                    <option value="after_close">
+                      {tr('Baada ya Kura Kufungwa', 'After Poll Closes')}
+                    </option>
+                    <option value="owner_only">
+                      {tr('Mmiliki Pekee (Siri)', 'Owner Only (Private)')}
+                    </option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    {tr('Lengo la Wapiga Kura (Akidi)', 'Voter Turnout Goal (Quorum)')}
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={1000000}
+                    value={quorumTarget}
+                    onChange={(e) => setQuorumTarget(Math.max(0, Number(e.target.value) || 0))}
+                    placeholder={tr('0 = Bila lengo', '0 = No goal')}
+                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1D4E89]/25 tabular-nums"
+                  />
+                </div>
+              </>
             )}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
             {!isOpenOpinion && (
               <>
-                <label className="flex items-start gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/70 cursor-pointer">
+                <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50/70 cursor-pointer">
                   <input
                     type="checkbox"
                     checked={allowVoteChange}
@@ -1689,7 +2226,7 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
                   </div>
                 </label>
 
-                <label className="flex items-start gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/70 cursor-pointer">
+                <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50/70 cursor-pointer">
                   <input
                     type="checkbox"
                     checked={anonymousMode}
@@ -1709,7 +2246,7 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
                   </div>
                 </label>
 
-                <label className="flex items-start gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/70 cursor-pointer">
+                <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50/70 cursor-pointer">
                   <input
                     type="checkbox"
                     checked={showVoterCount}
@@ -1725,10 +2262,71 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
                     </div>
                   </div>
                 </label>
+
+                <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50/70 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={showLivePercentages}
+                    onChange={(e) => setShowLivePercentages(e.target.checked)}
+                    className="mt-0.5 rounded border-slate-300 text-[#1D4E89] focus:ring-[#1D4E89]"
+                  />
+                  <div>
+                    <div className="font-bold text-slate-800">
+                      {tr('Onyesha Asilimia (%) Kwenye Kadi', 'Show Live Percentage Bars')}
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      {tr(
+                        'Zima kama unataka watu waone idadi tu bila asilimia hadi uchaguzi ufungwe.',
+                        'Turn off to hide percentage shares on the card until results close.'
+                      )}
+                    </div>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50/70 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={shuffleOptions}
+                    onChange={(e) => setShuffleOptions(e.target.checked)}
+                    className="mt-0.5 rounded border-slate-300 text-[#1D4E89] focus:ring-[#1D4E89]"
+                  />
+                  <div>
+                    <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                      <Shuffle size={12} className="text-[#1D4E89]" />
+                      {tr('Changanya Mpangilio wa Wagombea (Haki)', 'Shuffle Option Order (Fairness)')}
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      {tr(
+                        'Kila mpiga kura ataona mpangilio tofauti wa wagombea kuondoa upendeleo wa #1.',
+                        'Randomizes option order per voter to prevent ballot-position bias.'
+                      )}
+                    </div>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50/70 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={allowComments}
+                    onChange={(e) => setAllowComments(e.target.checked)}
+                    className="mt-0.5 rounded border-slate-300 text-[#1D4E89] focus:ring-[#1D4E89]"
+                  />
+                  <div>
+                    <div className="font-bold text-slate-800">
+                      {tr('Ruhusu Maoni Chini ya Kura', 'Allow Discussion Comments')}
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      {tr(
+                        'Wapiga kura waweze kutoa maoni au kuuliza maswali chini ya kadi.',
+                        'Let voters discuss or ask questions beneath this poll card.'
+                      )}
+                    </div>
+                  </div>
+                </label>
               </>
             )}
 
-            <label className="flex items-start gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/70 cursor-pointer">
+            <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50/70 cursor-pointer">
               <input
                 type="checkbox"
                 checked={allowShare}
@@ -1748,7 +2346,7 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
               </div>
             </label>
 
-            <label className="flex items-start gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/70 cursor-pointer sm:col-span-2">
+            <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50/70 cursor-pointer">
               <input
                 type="checkbox"
                 checked={isPinned}
@@ -2515,10 +3113,160 @@ const InlinePollResultsPage: React.FC<InlinePollResultsPageProps> = ({
     tr,
   ]);
 
+  const themePalette = getPollThemePalette(poll);
+
+  const handlePrintOfficialResults = () => {
+    if (typeof window !== 'undefined' && typeof window.print === 'function') {
+      window.print();
+    } else {
+      onToast(tr('Tumia kitufe cha Pakua Taarifa Rasmi (PNG).', 'Use Download Official PNG instead.'), 'error');
+    }
+  };
+
+  const handleDownloadOfficialPng = () => {
+    try {
+      exportOfficialPollReportPng({
+        poll,
+        rows: analytics.rows.map((r) => ({
+          rank: r.rank,
+          label: r.option.label,
+          subtitle: r.option.subtitle,
+          count: r.count,
+          pctRounded: r.pctRounded,
+          color: r.option.color || themePalette.hex,
+          isLeader: r.isLeader,
+        })),
+        totalSelections: analytics.totalSelections,
+        marginVotes: analytics.marginVotes,
+        marginPct: analytics.marginPct,
+        isTie: analytics.isTie,
+        isOpen,
+        accentHex: themePalette.hex,
+        lang,
+      });
+      onToast(
+        tr('Fomu Rasmi ya Matokeo (PNG) imepakuliwa na Official Header!', 'Official Results Certificate PNG downloaded!'),
+        'success'
+      );
+    } catch {
+      onToast(tr('Imeshindwa kuunda picha ya matokeo.', 'Failed to generate results sheet.'), 'error');
+    }
+  };
+
   return (
     <div className="space-y-4">
+      <style>{`
+        @media print {
+          body * { visibility: hidden !important; }
+          #mpoll-official-print-sheet, #mpoll-official-print-sheet * { visibility: visible !important; }
+          #mpoll-official-print-sheet {
+            position: absolute !important;
+            left: 0 !important;
+            top: 0 !important;
+            width: 100% !important;
+            margin: 0 !important;
+            padding: 16px !important;
+            background: #ffffff !important;
+            display: block !important;
+          }
+        }
+      `}</style>
+
+      {/* OFFICIAL CERTIFIED PRINT SHEET (Hidden cleanly on screen, crisp A4 document on Print) */}
+      <div id="mpoll-official-print-sheet" className="hidden print:block bg-white text-[#0F172A] p-6 space-y-5">
+        <div className="border-b-4 border-[#0F172A] pb-4 flex items-start justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div
+              className="w-14 h-14 rounded-full flex items-center justify-center font-black text-white text-sm border-2 border-white shadow-xs shrink-0"
+              style={{ backgroundColor: themePalette.hex }}
+            >
+              MPOLL
+            </div>
+            <div>
+              <div className="text-xs font-extrabold uppercase tracking-wider" style={{ color: themePalette.hex }}>
+                {poll.institutionName || tr('TUME RASMI YA KURA YA MALOSHA · MPOLL', 'MALOSHA OFFICIAL ELECTORAL BOARD · MPOLL')}
+              </div>
+              <h1 className="text-xl font-black tracking-tight text-[#0F172A]">
+                {tr('TAARIFA RASMI YA MATOKEO YA KURA', 'OFFICIAL ELECTION & POLL RESULTS REPORT')}
+              </h1>
+              <div className="text-xs text-slate-600 mt-0.5 tabular-nums">
+                {tr('Kumb. Namba', 'Ref No')}: <strong>MP-{poll.id.toUpperCase()}</strong> · {tr('Kategoria', 'Category')}: {poll.category} · {tr('Tarehe', 'Issued')}: {new Date().toLocaleString()}
+              </div>
+            </div>
+          </div>
+          <div className="text-right text-xs font-extrabold uppercase border-2 px-3 py-1.5 rounded-lg" style={{ borderColor: themePalette.hex, color: themePalette.hex }}>
+            {isOpen
+              ? tr('MATOKEO YA MOJA KWA MOJA', 'LIVE INTERIM RESULTS')
+              : tr('MATOKEO RASMI YALIYOTHIBITISHWA', 'CERTIFIED FINAL RESULTS')}
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <div className="text-xs font-bold uppercase text-slate-500">{tr('Swali / Kichwa cha Uchaguzi', 'Poll Question / Election Title')}</div>
+          <h2 className="text-lg font-extrabold text-[#0F172A]">{poll.question}</h2>
+          {poll.description && <p className="text-xs text-slate-600">{poll.description}</p>}
+        </div>
+
+        <div className="border-2 border-amber-400 bg-amber-50/70 rounded-xl p-4 space-y-1">
+          <div className="text-[11px] font-extrabold uppercase text-amber-800">
+            {analytics.isTie
+              ? tr('HALI RASMI: SARE KILELENI', 'OFFICIAL STANDING: DEADLOCK TIE')
+              : isOpen
+                ? tr('KINARA ANAYEONGOZA', 'CURRENT LEADING CONTENDER')
+                : tr('MSHINDI RASMI ALIYETANGAZWA', 'OFFICIALLY DECLARED WINNER')}
+          </div>
+          <div className="text-lg font-black text-[#0F172A]">
+            {analytics.topCount === 0
+              ? tr('Hakuna kura bado', 'No ballots cast yet')
+              : analytics.isTie
+                ? analytics.leaders.map((l) => l.option.label).join(' & ')
+                : leaderRow?.option.label}
+          </div>
+          {leaderRow && analytics.topCount > 0 && (
+            <div className="text-xs font-bold text-slate-700 tabular-nums">
+              {leaderRow.count.toLocaleString()} {tr('kura', 'votes')} ({leaderRow.pctRounded}%)
+              {analytics.runnerUp && !analytics.isTie && ` · ${tr('Pengo', 'Margin')}: +${analytics.marginVotes.toLocaleString()} (+${analytics.marginPct}%)`}
+              {` · ${tr('Jumla ya Wapiga Kura', 'Total Voters')}: ${poll.totalBallots.toLocaleString()}`}
+            </div>
+          )}
+        </div>
+
+        <table className="w-full border-collapse text-xs">
+          <thead>
+            <tr className="bg-[#0F172A] text-white">
+              <th className="py-2 px-3 text-left">#</th>
+              <th className="py-2 px-3 text-left">{tr('Mgombea / Chaguo', 'Candidate / Option')}</th>
+              <th className="py-2 px-3 text-right">{tr('Kura', 'Votes')}</th>
+              <th className="py-2 px-3 text-right">{tr('Asilimia', 'Share')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {analytics.rows.map((r) => (
+              <tr key={r.option.id} className="border-b border-slate-200">
+                <td className="py-2 px-3 font-bold tabular-nums">#{r.rank}</td>
+                <td className="py-2 px-3">
+                  <div className="font-bold text-[#0F172A]">{r.option.label}</div>
+                  {r.option.subtitle && <div className="text-[11px] text-slate-500">{r.option.subtitle}</div>}
+                </td>
+                <td className="py-2 px-3 text-right font-bold tabular-nums">{r.count.toLocaleString()}</td>
+                <td className="py-2 px-3 text-right font-extrabold tabular-nums">{r.pctRounded}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <div className="border-t-2 border-slate-300 pt-3 flex items-center justify-between text-[11px] text-slate-600">
+          <span>
+            {tr('Msimamizi wa Kura', 'Poll Organizer')}: <strong>{poll.createdByName}</strong> · {tr('Jumla ya Chaguzi', 'Total Selections')}: {analytics.totalSelections.toLocaleString()}
+          </span>
+          <span className="font-mono">{shortUrl}</span>
+        </div>
+      </div>
+
       {/* 1. Command Header Bar */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3">
+      <div className={`bg-white border ${themePalette.borderClass} rounded-2xl overflow-hidden print:hidden`}>
+        <div className={`h-1.5 w-full ${themePalette.accentBarClass}`} />
+        <div className="p-4 sm:p-5 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <button
@@ -2544,7 +3292,7 @@ const InlinePollResultsPage: React.FC<InlinePollResultsPageProps> = ({
                       : tr('Rasmi · Uchaguzi Umefungwa', 'Final · Certified')}
                 </span>
                 <span aria-hidden="true">·</span>
-                <span className="font-bold text-[#1D4E89] inline-flex items-center gap-1">
+                <span className={`font-bold inline-flex items-center gap-1 ${themePalette.badgeTextClass}`}>
                   {getStyleIcon(poll.pollStyle, 13)}
                   {tr(styleMeta.shortTagSw, styleMeta.shortTagEn)}
                 </span>
@@ -2566,13 +3314,29 @@ const InlinePollResultsPage: React.FC<InlinePollResultsPageProps> = ({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
+              onClick={handlePrintOfficialResults}
+              className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold whitespace-nowrap shrink-0 transition-colors ${themePalette.btnClass}`}
+            >
+              <Printer size={14} />
+              {tr('Chapisha Rasmi', 'Print Results')}
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadOfficialPng}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-[#0F172A] whitespace-nowrap shrink-0"
+            >
+              <Download size={14} />
+              {tr('Pakua Fomu Rasmi (PNG)', 'Download Official Sheet')}
+            </button>
+            <button
+              type="button"
               onClick={handleCopyOfficialBulletin}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[#1D4E89]/30 bg-[#1D4E89]/5 hover:bg-[#1D4E89]/10 text-xs font-bold text-[#1D4E89] whitespace-nowrap shrink-0"
             >
               {copiedBulletin ? <Check size={14} className="text-emerald-600" /> : <Copy size={14} />}
               {copiedBulletin
                 ? tr('Tangazo Limenakiliwa', 'Bulletin Copied')
-                : tr('Nakili Tangazo la Mshindi', 'Copy Winner Bulletin')}
+                : tr('Nakili Tangazo', 'Copy Bulletin')}
             </button>
             {poll.allowShare && (
               <button
@@ -2589,10 +3353,10 @@ const InlinePollResultsPage: React.FC<InlinePollResultsPageProps> = ({
                 <button
                   type="button"
                   onClick={() => exportPollResultsCsv(poll, tallies, ballots, lang)}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#1D4E89] hover:bg-[#163d6c] text-white text-xs font-bold transition-colors whitespace-nowrap shrink-0"
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold transition-colors whitespace-nowrap shrink-0"
                 >
                   <FileSpreadsheet size={14} />
-                  {tr('Pakua CSV', 'Export CSV')}
+                  {tr('CSV', 'CSV')}
                 </button>
                 <button
                   type="button"
@@ -2652,6 +3416,7 @@ const InlinePollResultsPage: React.FC<InlinePollResultsPageProps> = ({
             </div>
           </div>
         )}
+        </div>
       </div>
 
       {/* 2. Official Winner Declaration & Head-to-Head Hero Desk */}
@@ -4097,17 +4862,37 @@ const PollCard: React.FC<PollCardProps> = ({
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [showComments, setShowComments] = useState(false);
+  const [, setCountdownTick] = useState(0);
 
   const isOpenOpinion = poll.questionType === 'open_opinion';
   const hasVoted = Boolean(userBallot && userBallot.selectedOptionIds.length > 0);
-  const canSeeResults = !isOpenOpinion && canViewPollResults(poll, hasVoted, isAdmin);
+  const canSeeResults =
+    !isOpenOpinion &&
+    Boolean(user) &&
+    canViewPollResults(poll, hasVoted, isAdmin, Date.now(), Boolean(user));
+  const showPercentages = isAdmin || poll.showLivePercentages !== false;
   const isOpen = isPollEffectivelyOpen(poll);
   const expired = isPollExpired(poll);
   const canCastOrUpdate =
     !isOpenOpinion && isOpen && !isSuspended && (!hasVoted || poll.allowVoteChange);
 
   const styleMeta = POLL_STYLE_META[poll.pollStyle] || POLL_STYLE_META.standard;
+  const themePalette = getPollThemePalette(poll);
   const shortUrl = buildPollShareUrl(poll.id);
+
+  const displayOptions = useMemo(() => {
+    if (!poll.shuffleOptions || isOpenOpinion) return poll.options;
+    return deterministicShuffleOptions(poll.options, `${poll.id}:${user?.uid || 'guest'}`);
+  }, [poll.options, poll.shuffleOptions, poll.id, user?.uid, isOpenOpinion]);
+
+  useEffect(() => {
+    if (!isOpen || !poll.hasDeadline || !poll.endsAt) return;
+    const id = window.setInterval(() => {
+      setCountdownTick((t) => t + 1);
+    }, 30_000);
+    return () => window.clearInterval(id);
+  }, [isOpen, poll.hasDeadline, poll.endsAt]);
 
   useEffect(() => {
     if (!lightboxOpen) return;
@@ -4250,23 +5035,23 @@ const PollCard: React.FC<PollCardProps> = ({
   const isWhatsAppStyle = poll.pollStyle === 'whatsapp';
   const isXStyle = poll.pollStyle === 'social_x';
   const isOpinionStyle = isOpenOpinion || poll.pollStyle === 'open_opinion';
+  const isRatingQuestion = poll.questionType === 'rating';
   const isElection = !isOpenOpinion && isElectionStyle(poll.pollStyle);
+  const quorumTarget = poll.quorumTarget && poll.quorumTarget > 0 ? poll.quorumTarget : 0;
+  const quorumPct = quorumTarget > 0 ? Math.min(100, Math.round((poll.totalBallots / quorumTarget) * 100)) : 0;
 
   return (
     <article
-      className={`bg-white border rounded-xl overflow-hidden transition-shadow ${
+      className={`bg-white text-[#0F172A] border rounded-2xl overflow-hidden transition-all duration-200 ${themePalette.cardBgClass} ${
         isHighlighted
-          ? 'border-[#1D4E89] ring-2 ring-[#1D4E89]/15 shadow-sm'
-          : isOpinionStyle
-            ? 'border-violet-200 shadow-xs'
-            : isWhatsAppStyle
-              ? 'border-emerald-200 shadow-xs'
-              : 'border-slate-200 shadow-xs hover:border-slate-300'
+          ? 'border-[#1D4E89] ring-2 ring-[#1D4E89]/20 shadow-md'
+          : `${themePalette.borderClass} shadow-xs hover:shadow-sm`
       }`}
     >
-      {/* Top Civic / School / WhatsApp / Discussion Accent Strip */}
+      {/* Distinct Per-Poll Theme Color Top Ribbon */}
+      <div className={`h-1.5 ${themePalette.accentBarClass}`} />
       {poll.pollStyle === 'local_govt' && (
-        <div className="h-1.5 flex">
+        <div className="h-1 flex">
           <div className="flex-1 bg-[#1EB53A]" />
           <div className="w-8 bg-[#FCD116]" />
           <div className="w-12 bg-[#0F172A]" />
@@ -4274,45 +5059,52 @@ const PollCard: React.FC<PollCardProps> = ({
           <div className="flex-1 bg-[#00A3DD]" />
         </div>
       )}
-      {poll.pollStyle === 'school_election' && <div className="h-1.5 bg-[#1D4E89]" />}
-      {isWhatsAppStyle && <div className="h-1.5 bg-emerald-600" />}
-      {isOpinionStyle && <div className="h-1.5 bg-violet-600" />}
 
-      <div className="p-4 sm:p-5 space-y-4">
-        {/* Card Header: Creator + Style + Institution + Status */}
-        <div className="flex items-start justify-between gap-3">
+      <div className="p-3.5 sm:p-5 space-y-3.5 sm:space-y-4">
+        {/* Card Header: Creator + Theme Style Badge + Institution + Tournament Tag */}
+        <div className="flex items-start justify-between gap-2.5">
           <div className="flex items-center gap-2.5 min-w-0">
-            <Avatar photoURL={poll.createdByPhoto} name={poll.createdByName} size="sm" />
+            <div className="relative shrink-0">
+              <Avatar photoURL={poll.createdByPhoto} name={poll.createdByName} size="sm" />
+              <span
+                className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-md ${themePalette.iconBgClass} flex items-center justify-center ring-2 ring-white`}
+              >
+                {getStyleIcon(poll.pollStyle, 10)}
+              </span>
+            </div>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-1.5 text-xs">
                 <span className="font-bold text-[#0F172A] truncate">{poll.createdByName}</span>
                 <AuthorVerificationBadge uid={poll.createdBy} size="xs" />
                 <span className="text-slate-300">·</span>
-                <span className="text-slate-500">
+                <span className="text-slate-500 text-[11px]">
                   {poll.createdAt ? formatTime(poll.createdAt) : tr('Sasa hivi', 'Just now')}
                 </span>
               </div>
               <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500 mt-0.5">
-                <span
-                  className={`font-bold inline-flex items-center gap-1 ${
-                    isOpinionStyle
-                      ? 'text-violet-700'
-                      : isWhatsAppStyle
-                        ? 'text-emerald-700'
-                        : 'text-[#1D4E89]'
-                  }`}
-                >
-                  {getStyleIcon(poll.pollStyle, 12)}
+                <span className={`font-bold inline-flex items-center gap-1 ${themePalette.badgeTextClass}`}>
                   {tr(styleMeta.shortTagSw, styleMeta.shortTagEn)}
                 </span>
                 {poll.institutionName && (
                   <>
                     <span>·</span>
-                    <span className="font-semibold text-slate-700">{poll.institutionName}</span>
+                    <span className="font-semibold text-slate-700 truncate max-w-[180px] sm:max-w-none">
+                      {poll.institutionName}
+                    </span>
                   </>
                 )}
                 <span>·</span>
                 <span>{poll.category}</span>
+                {poll.tournamentId && (
+                  <>
+                    <span>·</span>
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-indigo-50 border border-indigo-200 text-indigo-700 font-bold text-[10px]">
+                      <GitBranch size={10} />
+                      {poll.tournamentGroupLabel ||
+                        tr(`Mtoano Hatua ${poll.tournamentRound || 1}`, `Round ${poll.tournamentRound || 1}`)}
+                    </span>
+                  </>
+                )}
                 {poll.isPinned && (
                   <>
                     <span>·</span>
@@ -4327,57 +5119,234 @@ const PollCard: React.FC<PollCardProps> = ({
           </div>
 
           <div className="flex items-center gap-2 shrink-0 text-[11px] font-bold">
-            {poll.status === 'draft' ? (
-              <span className="text-amber-700">{tr('Rasimu', 'Draft')}</span>
-            ) : isOpen ? (
-              <span className="text-emerald-700 flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-600" />
-                {poll.hasDeadline && poll.endsAt
-                  ? formatRemainingCountdown(poll.endsAt.toMillis(), tr)
-                  : tr('Wazi', 'Open')}
-              </span>
-            ) : (
-              <span className="text-slate-500 inline-flex items-center gap-1">
-                <Lock size={12} />
-                {expired ? tr('Imekwisha', 'Ended') : tr('Imefungwa', 'Closed')}
+            {poll.status === 'draft' && (
+              <span className="px-2 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-amber-700">
+                {tr('Rasimu', 'Draft')}
               </span>
             )}
           </div>
         </div>
 
-        {/* Question & Description */}
-        <div className="space-y-2">
-          <h3 className="text-base sm:text-lg font-bold text-[#0F172A] leading-snug">
+        {/* Centered Question Card: Dark Blue Question + Left/Right Candidate Showcase (Local Govt/School) + Time + Fade Status */}
+        <div className="rounded-2xl border border-[#1D4E89]/25 bg-gradient-to-b from-[#EEF4FC] via-[#F8FBFF] to-white px-4 py-4 sm:px-6 sm:py-5 text-center shadow-2xs space-y-3">
+          <h3 className="text-base sm:text-xl font-extrabold text-[#0A2540] leading-snug tracking-tight text-center">
             {poll.question}
           </h3>
           {poll.description && (
-            <p className="text-xs sm:text-sm text-slate-600 leading-relaxed whitespace-pre-line">
+            <p className="text-xs sm:text-sm text-slate-600 leading-relaxed whitespace-pre-line max-w-2xl mx-auto text-center">
               {poll.description}
             </p>
           )}
-          <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500 pt-0.5">
-            <span>
+
+          {/* Left & Right Candidate Showcase Inside Question Card for Local Govt & School Elections */}
+          {!isOpenOpinion &&
+            (poll.pollStyle === 'local_govt' || poll.pollStyle === 'school_election') &&
+            displayOptions.length >= 2 && (
+              <div className="pt-2">
+                {displayOptions.length === 2 ? (
+                  <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 sm:gap-4 max-w-2xl mx-auto">
+                    {/* Left Candidate */}
+                    <div className="rounded-xl bg-white/95 border border-[#1D4E89]/20 p-2.5 sm:p-3 flex flex-col items-center text-center shadow-2xs">
+                      {displayOptions[0].imageUrl ? (
+                        <img
+                          src={optimizeCloudinaryUrl(displayOptions[0].imageUrl, 240)}
+                          alt={displayOptions[0].label}
+                          className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl object-cover object-top border-2 border-white shadow-sm"
+                        />
+                      ) : (
+                        <div
+                          className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl flex items-center justify-center font-extrabold text-lg sm:text-xl text-white shadow-sm"
+                          style={{ backgroundColor: displayOptions[0].color || '#059669' }}
+                        >
+                          {(displayOptions[0].label || 'M1').trim().slice(0, 2).toUpperCase()}
+                        </div>
+                      )}
+                      {displayOptions[0].positionTitle && (
+                        <span className="mt-2 inline-block px-2 py-0.5 rounded-md bg-[#0A2540] text-white text-[10px] font-bold tracking-wide uppercase max-w-full truncate">
+                          {displayOptions[0].positionTitle}
+                        </span>
+                      )}
+                      <div className="mt-1 text-xs sm:text-sm font-extrabold text-[#0A2540] line-clamp-2 leading-tight">
+                        {displayOptions[0].label || tr('Mgombea 1', 'Candidate 1')}
+                      </div>
+                    </div>
+
+                    {/* VS Divider */}
+                    <div className="flex flex-col items-center justify-center">
+                      <span className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-[#0A2540] text-white font-black text-[11px] sm:text-xs flex items-center justify-center shadow-sm ring-2 ring-white">
+                        VS
+                      </span>
+                    </div>
+
+                    {/* Right Candidate */}
+                    <div className="rounded-xl bg-white/95 border border-[#1D4E89]/20 p-2.5 sm:p-3 flex flex-col items-center text-center shadow-2xs">
+                      {displayOptions[1].imageUrl ? (
+                        <img
+                          src={optimizeCloudinaryUrl(displayOptions[1].imageUrl, 240)}
+                          alt={displayOptions[1].label}
+                          className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl object-cover object-top border-2 border-white shadow-sm"
+                        />
+                      ) : (
+                        <div
+                          className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl flex items-center justify-center font-extrabold text-lg sm:text-xl text-white shadow-sm"
+                          style={{ backgroundColor: displayOptions[1].color || '#1D4E89' }}
+                        >
+                          {(displayOptions[1].label || 'M2').trim().slice(0, 2).toUpperCase()}
+                        </div>
+                      )}
+                      {displayOptions[1].positionTitle && (
+                        <span className="mt-2 inline-block px-2 py-0.5 rounded-md bg-[#0A2540] text-white text-[10px] font-bold tracking-wide uppercase max-w-full truncate">
+                          {displayOptions[1].positionTitle}
+                        </span>
+                      )}
+                      <div className="mt-1 text-xs sm:text-sm font-extrabold text-[#0A2540] line-clamp-2 leading-tight">
+                        {displayOptions[1].label || tr('Mgombea 2', 'Candidate 2')}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2 sm:gap-2.5 max-w-2xl mx-auto">
+                    {displayOptions.slice(0, 12).map((cand, cIdx) => (
+                      <div
+                        key={cand.id}
+                        className={`rounded-xl bg-white/95 border border-[#1D4E89]/18 p-2 flex items-center gap-2 text-left shadow-2xs ${
+                          cIdx % 2 === 1 ? 'sm:flex-row-reverse sm:text-right' : ''
+                        }`}
+                      >
+                        {cand.imageUrl ? (
+                          <img
+                            src={optimizeCloudinaryUrl(cand.imageUrl, 160)}
+                            alt={cand.label}
+                            className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl object-cover object-top border border-slate-200 shrink-0"
+                          />
+                        ) : (
+                          <div
+                            className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center font-extrabold text-xs text-white shrink-0"
+                            style={{ backgroundColor: cand.color || OPTION_COLORS[cIdx % OPTION_COLORS.length] }}
+                          >
+                            {(cand.label || `#${cIdx + 1}`).trim().slice(0, 2).toUpperCase()}
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          {cand.positionTitle && (
+                            <div className="text-[10px] font-extrabold uppercase tracking-wide text-[#1D4E89] truncate">
+                              {cand.positionTitle}
+                            </div>
+                          )}
+                          <div className="text-xs font-extrabold text-[#0A2540] truncate">
+                            {cand.label}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+          {/* Remaining Time & Fade-Animated Voting Status Inside the Question Card */}
+          <div className="pt-2.5 border-t border-[#1D4E89]/12 flex flex-wrap items-center justify-center gap-2 sm:gap-2.5">
+            <span
+              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] sm:text-xs font-bold tabular-nums border ${
+                poll.status === 'draft'
+                  ? 'bg-amber-50 border-amber-200 text-amber-800'
+                  : isOpen
+                    ? 'bg-[#0A2540]/6 border-[#0A2540]/18 text-[#0A2540]'
+                    : 'bg-slate-100 border-slate-200 text-slate-600'
+              }`}
+            >
+              {isOpen ? (
+                <Clock size={12} className="text-[#1D4E89] shrink-0" />
+              ) : (
+                <Lock size={12} className="shrink-0" />
+              )}
+              {poll.status === 'draft'
+                ? tr('Rasimu · Haijachapishwa', 'Draft · Not published')
+                : isOpen
+                  ? poll.hasDeadline && poll.endsAt
+                    ? `${tr('Muda uliobaki:', 'Time left:')} ${formatRemainingCountdown(poll.endsAt.toMillis(), tr)}`
+                    : tr('Muda uliobaki: Wazi (Hakuna kikomo)', 'Time left: Open (No limit)')
+                  : expired
+                    ? tr('Muda umekwisha · Imefungwa', 'Time ended · Closed')
+                    : tr('Kura imefungwa', 'Poll closed')}
+            </span>
+
+            {isOpenOpinion ? (
+              <span className="animate-malosha-fade inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] sm:text-xs font-bold border bg-violet-50 border-violet-200 text-violet-800">
+                <MessageSquare size={12} className="shrink-0" />
+                {isOpen
+                  ? tr('Maoni Huru · Shiriki mjadala', 'Open Discussion · Share opinion')
+                  : tr('Mjadala umefungwa', 'Discussion closed')}
+              </span>
+            ) : (
+              <span
+                className={`animate-malosha-fade inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] sm:text-xs font-bold border ${
+                  hasVoted
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : 'bg-amber-50 border-amber-200 text-amber-900'
+                }`}
+              >
+                {hasVoted ? (
+                  <>
+                    <CheckCircle2 size={12} className="text-emerald-600 shrink-0" />
+                    {tr('Tayari umepiga kura', 'Already voted')}
+                  </>
+                ) : (
+                  <>
+                    <Vote size={12} className="text-amber-700 shrink-0" />
+                    {tr('Bado hujapiga kura', 'Not voted yet')}
+                  </>
+                )}
+              </span>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500">
+            <span className="font-medium">
               {isOpenOpinion
                 ? tr('Swali la Maoni Huru · Uwanja Mmoja wa Maoni', 'Open Discussion · Unified Comment Thread')
-                : poll.questionType === 'multiple'
-                  ? tr(`Chagua hadi ${poll.maxChoices}`, `Select up to ${poll.maxChoices}`)
-                  : tr('Chaguo moja pekee', 'Single choice')}
+                : isRatingQuestion
+                  ? tr('Tathmini ya Nyota (Chagua 1)', 'Star Rating (Select 1)')
+                  : poll.questionType === 'multiple'
+                    ? tr(`Chagua hadi ${poll.maxChoices}`, `Select up to ${poll.maxChoices}`)
+                    : tr('Chaguo moja pekee', 'Single choice')}
             </span>
+            {!isOpenOpinion && poll.shuffleOptions && (
+              <>
+                <span>·</span>
+                <span className="inline-flex items-center gap-1">
+                  <Shuffle size={10} />
+                  {tr('Mpangilio nasibu', 'Shuffled')}
+                </span>
+              </>
+            )}
             {!isOpenOpinion && poll.anonymousMode && (
               <>
                 <span>·</span>
                 <span>{tr('Kura ya siri kwa umma', 'Anonymous publicly')}</span>
               </>
             )}
-            {!isOpenOpinion && hasVoted && (
-              <>
-                <span>·</span>
-                <span className="font-bold text-emerald-700">
-                  ✓ {tr('Umeshapiga kura', 'Voted')}
-                </span>
-              </>
-            )}
           </div>
+
+          {/* Optional Quorum / Turnout Goal Meter (Hidden from guests) */}
+          {Boolean(user) && !isOpenOpinion && quorumTarget > 0 && (poll.showVoterCount || isAdmin) && (
+            <div className="pt-1.5 space-y-1 text-left">
+              <div className="flex items-center justify-between text-[11px] text-slate-600 tabular-nums">
+                <span className="inline-flex items-center gap-1 font-semibold">
+                  <Target size={11} className={themePalette.badgeTextClass} />
+                  {tr('Lengo la ushiriki:', 'Turnout target:')} {poll.totalBallots.toLocaleString()} /{' '}
+                  {quorumTarget.toLocaleString()}
+                </span>
+                <span className={`font-extrabold ${themePalette.badgeTextClass}`}>{quorumPct}%</span>
+              </div>
+              <div className="h-1.5 w-full rounded-full bg-slate-200/80 overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-500 ${themePalette.accentBarClass}`}
+                  style={{ width: `${quorumPct}%` }}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Attached Photo Banner (clickable for fullscreen view) */}
@@ -4417,275 +5386,516 @@ const PollCard: React.FC<PollCardProps> = ({
           </div>
         ) : (
           <>
-            {/* Options / Candidates List tailored by Poll Style */}
-            <div className={isElection ? 'grid grid-cols-1 sm:grid-cols-2 gap-2.5' : 'space-y-2'}>
-          {poll.options.map((opt, idx) => {
-            const count = tallies[opt.id] || 0;
-            const pct =
-              analytics.totalSelections > 0
-                ? Math.round((count / analytics.totalSelections) * 1000) / 10
-                : 0;
-            const isSelected = draftSelection.includes(opt.id);
-            const isSavedChoice = userBallot?.selectedOptionIds.includes(opt.id);
-            const color =
-              isWhatsAppStyle
-                ? '#059669'
-                : opt.color || OPTION_COLORS[idx % OPTION_COLORS.length];
-            const isLeader = analytics.topCount > 0 && count === analytics.topCount;
+            {/* Options / Candidates List tailored strictly by Authentic Poll Style */}
+            {isXStyle ? (
+              /* AUTHENTIC X (TWITTER) POLL FORMAT */
+              <div className="space-y-2">
+                {displayOptions.map((opt) => {
+                  const count = tallies[opt.id] || 0;
+                  const pct =
+                    analytics.totalSelections > 0
+                      ? Math.round((count / analytics.totalSelections) * 1000) / 10
+                      : 0;
+                  const isSelected = draftSelection.includes(opt.id);
+                  const isSavedChoice = userBallot?.selectedOptionIds.includes(opt.id);
+                  const isLeader = analytics.topCount > 0 && count === analytics.topCount;
 
-            if (isElection || opt.imageUrl) {
-              // CANDIDATE / PHOTO BALLOT CARD
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => handleToggleOption(opt.id)}
-                  disabled={user ? !canCastOrUpdate : false}
-                  className={`w-full text-left p-3 rounded-xl border transition-all relative overflow-hidden ${
-                    isSelected
-                      ? 'border-[#1D4E89] bg-[#1D4E89]/[0.04] ring-1 ring-[#1D4E89]/30'
-                      : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/50'
-                  } ${user && !canCastOrUpdate ? 'cursor-default' : 'cursor-pointer'}`}
-                >
-                  {canSeeResults && (
-                    <div
-                      className="absolute inset-y-0 left-0 pointer-events-none transition-all duration-500"
-                      style={{
-                        width: `${pct}%`,
-                        backgroundColor: `${color}14`,
-                      }}
-                    />
-                  )}
-
-                  <div className="relative z-10 flex items-center gap-3">
-                    {opt.imageUrl ? (
-                      <img
-                        src={optimizeCloudinaryUrl(opt.imageUrl, 220)}
-                        alt={opt.label}
-                        className="w-14 h-14 rounded-xl object-cover object-top border border-slate-200 shrink-0"
-                      />
-                    ) : (
-                      <div
-                        className="w-14 h-14 rounded-xl flex items-center justify-center font-extrabold text-sm text-white shrink-0 tabular-nums"
-                        style={{ backgroundColor: color }}
+                  if (!canSeeResults) {
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => handleToggleOption(opt.id)}
+                        disabled={user ? !canCastOrUpdate : false}
+                        className={`w-full rounded-full border px-4 py-2.5 text-center text-sm font-bold transition-all flex items-center justify-center gap-2 ${
+                          isSelected
+                            ? 'bg-[#1D9BF0] border-[#1D9BF0] text-white shadow-xs'
+                            : 'bg-white border-[#1D9BF0]/60 text-[#1D9BF0] hover:bg-[#1D9BF0]/8'
+                        } ${user && !canCastOrUpdate ? 'cursor-default' : 'cursor-pointer'}`}
                       >
-                        #{String(idx + 1).padStart(2, '0')}
-                      </div>
-                    )}
+                        {isSelected && <Check size={14} />}
+                        <span className="truncate">{opt.label}</span>
+                      </button>
+                    );
+                  }
 
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-bold text-[#0F172A] truncate">
-                          {opt.label}
-                        </span>
-                        <span
-                          className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 ${
-                            isSelected
-                              ? 'bg-[#1D4E89] border-[#1D4E89] text-white'
-                              : 'border-slate-300 bg-white'
-                          }`}
-                        >
-                          {isSelected && <Check size={12} />}
-                        </span>
-                      </div>
-
-                      {opt.subtitle && (
-                        <p className="text-[11px] text-slate-600 line-clamp-1 mt-0.5">
-                          {opt.subtitle}
-                        </p>
-                      )}
-
-                      {canSeeResults && (
-                        <div className="mt-2 flex items-center justify-between gap-2 text-[11px] tabular-nums">
-                          <span className="font-bold text-slate-700">
-                            {count.toLocaleString()} {tr('kura', 'votes')}
-                            {isLeader && (
-                              <span className="text-amber-700 ml-1.5">
-                                · {isOpen ? tr('Anaongoza', 'Leading') : tr('Mshindi', 'Winner')}
-                              </span>
-                            )}
-                            {isSavedChoice && (
-                              <span className="text-emerald-700 ml-1.5">· {tr('Yako', 'Yours')}</span>
-                            )}
-                          </span>
-                          <span className="font-extrabold" style={{ color }}>
-                            {pct}%
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </button>
-              );
-            }
-
-            // X / WHATSAPP / STANDARD ROW
-            return (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => handleToggleOption(opt.id)}
-                disabled={user ? !canCastOrUpdate : false}
-                className={`w-full text-left rounded-xl border transition-all relative overflow-hidden ${
-                  isXStyle
-                    ? isSelected
-                      ? 'border-[#1D9BF0] bg-sky-50/40'
-                      : 'border-slate-200 hover:bg-slate-50'
-                    : isWhatsAppStyle
-                      ? isSelected
-                        ? 'border-emerald-500 bg-emerald-50/40'
-                        : 'border-slate-200 hover:bg-emerald-50/20'
-                      : isSelected
-                        ? 'border-[#1D4E89] bg-[#1D4E89]/[0.04]'
-                        : 'border-slate-200 hover:bg-slate-50/80'
-                } ${user && !canCastOrUpdate ? 'cursor-default' : 'cursor-pointer'}`}
-              >
-                {canSeeResults && (
-                  <div
-                    className="absolute inset-y-0 left-0 pointer-events-none transition-all duration-500"
-                    style={{
-                      width: `${pct}%`,
-                      backgroundColor: isXStyle
-                        ? isLeader
-                          ? 'rgba(29, 155, 240, 0.20)'
-                          : 'rgba(148, 163, 184, 0.16)'
-                        : isWhatsAppStyle
-                          ? 'rgba(16, 185, 129, 0.18)'
-                          : `${color}16`,
-                    }}
-                  />
-                )}
-
-                <div className="relative z-10 px-3.5 py-2.5 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <span
-                      className={`w-5 h-5 ${
-                        poll.questionType === 'multiple' ? 'rounded-md' : 'rounded-full'
-                      } border flex items-center justify-center shrink-0 ${
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => handleToggleOption(opt.id)}
+                      disabled={user ? !canCastOrUpdate : false}
+                      className={`w-full text-left rounded-lg border transition-all relative overflow-hidden min-h-[42px] ${
                         isSelected
-                          ? isWhatsAppStyle
-                            ? 'bg-emerald-600 border-emerald-600 text-white'
-                            : isXStyle
-                              ? 'bg-[#1D9BF0] border-[#1D9BF0] text-white'
-                              : 'bg-[#1D4E89] border-[#1D4E89] text-white'
-                          : 'border-slate-300 bg-white'
-                      }`}
+                          ? 'border-[#1D9BF0] bg-white'
+                          : 'border-slate-200/80 bg-slate-50/50 hover:border-slate-300'
+                      } ${user && !canCastOrUpdate ? 'cursor-default' : 'cursor-pointer'}`}
                     >
-                      {isSelected && <Check size={12} />}
-                    </span>
-                    <div className="min-w-0">
-                      <div className="text-sm font-semibold text-[#0F172A] truncate">
-                        {opt.label}
+                      <div
+                        className="absolute inset-y-0 left-0 pointer-events-none transition-all duration-500 rounded-r-md"
+                        style={{
+                          width: `${pct}%`,
+                          backgroundColor: isLeader
+                            ? 'rgba(29, 155, 240, 0.24)'
+                            : 'rgba(148, 163, 184, 0.22)',
+                        }}
+                      />
+                      <div className="relative z-10 px-3.5 py-2.5 flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className={`text-sm truncate ${isLeader ? 'font-extrabold text-[#0F172A]' : 'font-semibold text-[#0F172A]'}`}>
+                            {opt.label}
+                          </span>
+                          {(isSavedChoice || isSelected) && (
+                            <CheckCircle2 size={15} className="text-[#1D9BF0] shrink-0" />
+                          )}
+                        </div>
+                        <div className="shrink-0 flex items-center gap-1.5 tabular-nums">
+                          {showPercentages && (
+                            <span className={`text-sm ${isLeader ? 'font-extrabold text-[#0F172A]' : 'font-bold text-slate-700'}`}>
+                              {pct}%
+                            </span>
+                          )}
+                          <span className="text-[11px] text-slate-500">({count.toLocaleString()})</span>
+                        </div>
                       </div>
-                      {opt.subtitle && (
-                        <div className="text-[11px] text-slate-500 truncate">{opt.subtitle}</div>
+                    </button>
+                  );
+                })}
+
+                <div className="pt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500 font-medium tabular-nums">
+                  {canSeeResults && (
+                    <>
+                      <span>
+                        {analytics.totalSelections.toLocaleString()} {tr('kura', 'votes')}
+                      </span>
+                      <span>·</span>
+                    </>
+                  )}
+                  <span>
+                    {isOpen
+                      ? poll.hasDeadline && poll.endsAt
+                        ? formatRemainingCountdown(poll.endsAt.toMillis(), tr)
+                        : tr('Wazi', 'Open')
+                      : !user
+                        ? tr('Imefungwa', 'Closed')
+                        : tr('Matokeo ya mwisho', 'Final results')}
+                  </span>
+                </div>
+              </div>
+            ) : isWhatsAppStyle ? (
+              /* AUTHENTIC WHATSAPP POLL FORMAT */
+              <div className="rounded-2xl bg-[#E7FCEB]/65 border border-[#00A884]/25 p-3.5 sm:p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2 text-[11px] font-bold text-[#008069]">
+                  <span className="inline-flex items-center gap-1.5">
+                    <ListChecks size={14} />
+                    {poll.questionType === 'multiple'
+                      ? tr(`Chagua moja au zaidi (hadi ${poll.maxChoices})`, `Select one or more (up to ${poll.maxChoices})`)
+                      : tr('Chagua moja', 'Select one')}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full bg-white/80 border border-[#00A884]/20 text-[10px]">
+                    WhatsApp Poll
+                  </span>
+                </div>
+
+                <div className="space-y-2.5">
+                  {displayOptions.map((opt) => {
+                    const count = tallies[opt.id] || 0;
+                    const pct =
+                      analytics.totalSelections > 0
+                        ? Math.round((count / analytics.totalSelections) * 1000) / 10
+                        : 0;
+                    const isSelected = draftSelection.includes(opt.id);
+                    const isSavedChoice = userBallot?.selectedOptionIds.includes(opt.id);
+
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => handleToggleOption(opt.id)}
+                        disabled={user ? !canCastOrUpdate : false}
+                        className={`w-full text-left rounded-xl p-2.5 transition-all ${
+                          isSelected
+                            ? 'bg-white shadow-2xs ring-1 ring-[#00A884]/40'
+                            : 'bg-white/75 hover:bg-white'
+                        } ${user && !canCastOrUpdate ? 'cursor-default' : 'cursor-pointer'}`}
+                      >
+                        <div className="flex items-center justify-between gap-2.5">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <span
+                              className={`w-5 h-5 ${
+                                poll.questionType === 'multiple' ? 'rounded-md' : 'rounded-full'
+                              } border-2 flex items-center justify-center shrink-0 transition-colors ${
+                                isSelected
+                                  ? 'bg-[#00A884] border-[#00A884] text-white'
+                                  : 'border-[#00A884]/50 bg-white'
+                              }`}
+                            >
+                              {isSelected && <Check size={12} />}
+                            </span>
+                            <div className="min-w-0">
+                              <span className="text-sm font-semibold text-[#0F172A] truncate block">
+                                {opt.label}
+                              </span>
+                              {opt.subtitle && (
+                                <span className="text-[11px] text-slate-500 truncate block">
+                                  {opt.subtitle}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {canSeeResults && (
+                            <div className="shrink-0 flex items-center gap-1.5 tabular-nums text-xs">
+                              {isSavedChoice && (
+                                <span className="text-[10px] font-bold text-[#008069] bg-[#E7FCEB] px-1.5 py-0.5 rounded">
+                                  {tr('Yako', 'You')}
+                                </span>
+                              )}
+                              <span className="font-extrabold text-[#0F172A]">{count.toLocaleString()}</span>
+                              {showPercentages && (
+                                <span className="text-[11px] text-slate-500">({pct}%)</span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Horizontal WhatsApp Progress Track Directly Under Option Label */}
+                        {canSeeResults && (
+                          <div className="mt-2 pl-7">
+                            <div className="h-2 w-full rounded-full bg-[#D1E7DD] overflow-hidden">
+                              <div
+                                className="h-full rounded-full bg-[#00A884] transition-all duration-500"
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {canSeeResults && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenResults(poll.id, tallies)}
+                    className="w-full pt-2.5 border-t border-[#00A884]/15 text-center text-xs font-bold text-[#008069] hover:underline"
+                  >
+                    {tr('Tazama kura zote', 'View votes')} ({analytics.totalSelections.toLocaleString()})
+                  </button>
+                )}
+              </div>
+            ) : (
+              /* ELECTION CIRCULAR PORTRAIT BALLOTS & STANDARD / RATING ROWS */
+              <div className={isElection ? 'grid grid-cols-1 sm:grid-cols-2 gap-2.5' : 'space-y-2'}>
+                {displayOptions.map((opt, idx) => {
+                  const count = tallies[opt.id] || 0;
+                  const pct =
+                    analytics.totalSelections > 0
+                      ? Math.round((count / analytics.totalSelections) * 1000) / 10
+                      : 0;
+                  const isSelected = draftSelection.includes(opt.id);
+                  const isSavedChoice = userBallot?.selectedOptionIds.includes(opt.id);
+                  const color =
+                    opt.color || OPTION_COLORS[idx % OPTION_COLORS.length] || themePalette.hex;
+                  const isLeader = analytics.topCount > 0 && count === analytics.topCount;
+
+                  if (isElection || opt.imageUrl) {
+                    // CANDIDATE CIRCULAR PORTRAIT BALLOT CARD (Local Govt + School Election + Legacy)
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => handleToggleOption(opt.id)}
+                        disabled={user ? !canCastOrUpdate : false}
+                        className={`w-full text-left p-3 rounded-xl border transition-all relative overflow-hidden ${
+                          isSelected
+                            ? `${themePalette.borderClass} bg-white ring-2 ring-offset-0`
+                            : 'border-slate-200/90 bg-white/95 hover:border-slate-300 hover:bg-white'
+                        } ${user && !canCastOrUpdate ? 'cursor-default' : 'cursor-pointer'}`}
+                        style={
+                          isSelected
+                            ? { borderColor: themePalette.hex, backgroundColor: `${themePalette.hex}0A` }
+                            : undefined
+                        }
+                      >
+                        {canSeeResults && (
+                          <div
+                            className="absolute inset-y-0 left-0 pointer-events-none transition-all duration-500"
+                            style={{
+                              width: `${pct}%`,
+                              backgroundColor: `${color}16`,
+                            }}
+                          />
+                        )}
+
+                        <div className="relative z-10 flex items-center gap-3">
+                          {opt.imageUrl ? (
+                            <img
+                              src={optimizeCloudinaryUrl(opt.imageUrl, 200)}
+                              alt={opt.label}
+                              className={`w-11 h-11 sm:w-12 sm:h-12 rounded-full object-cover object-top shrink-0 border-2 ${
+                                isSelected ? 'border-[#1D4E89] ring-2 ring-[#1D4E89]/25' : 'border-slate-200'
+                              }`}
+                            />
+                          ) : (
+                            <div
+                              className={`w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center font-extrabold text-xs text-white shrink-0 tabular-nums border-2 border-white shadow-2xs ${
+                                isSelected ? 'ring-2 ring-[#1D4E89]/35' : ''
+                              }`}
+                              style={{ backgroundColor: color }}
+                            >
+                              {(opt.label || `#${idx + 1}`).trim().slice(0, 2).toUpperCase()}
+                            </div>
+                          )}
+
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                {(opt.positionTitle || opt.gender === 'male' || opt.gender === 'female') && (
+                                  <div className="flex flex-wrap items-center gap-1 mb-0.5">
+                                    {opt.positionTitle && (
+                                      <span className="px-1.5 py-0.2 rounded bg-slate-100 text-[#0A2540] text-[10px] font-extrabold uppercase tracking-wide">
+                                        {opt.positionTitle}
+                                      </span>
+                                    )}
+                                    {opt.gender === 'male' && (
+                                      <span className="px-1.5 py-0.2 rounded bg-sky-50 text-sky-700 text-[10px] font-bold">
+                                        {tr('Mvulana', 'Male')}
+                                      </span>
+                                    )}
+                                    {opt.gender === 'female' && (
+                                      <span className="px-1.5 py-0.2 rounded bg-rose-50 text-rose-700 text-[10px] font-bold">
+                                        {tr('Msichana', 'Female')}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                                <span className="text-sm font-bold text-[#0F172A] truncate block">
+                                  {opt.label}
+                                </span>
+                              </div>
+
+                              <span
+                                className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 ${
+                                  isSelected ? 'text-white' : 'border-slate-300 bg-white'
+                                }`}
+                                style={
+                                  isSelected
+                                    ? { backgroundColor: themePalette.hex, borderColor: themePalette.hex }
+                                    : undefined
+                                }
+                              >
+                                {isSelected && <Check size={12} />}
+                              </span>
+                            </div>
+
+                            {opt.subtitle && (
+                              <p className="text-[11px] text-slate-600 line-clamp-1 mt-0.5">
+                                {opt.subtitle}
+                              </p>
+                            )}
+
+                            {canSeeResults && (
+                              <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] tabular-nums">
+                                <span className="font-bold text-slate-700">
+                                  {count.toLocaleString()} {tr('kura', 'votes')}
+                                  {isLeader && (
+                                    <span className="text-amber-700 ml-1.5">
+                                      · {isOpen ? tr('Anaongoza', 'Leading') : tr('Mshindi', 'Winner')}
+                                    </span>
+                                  )}
+                                  {isSavedChoice && (
+                                    <span className="text-emerald-700 ml-1.5">· {tr('Yako', 'Yours')}</span>
+                                  )}
+                                </span>
+                                {showPercentages && (
+                                  <span className="font-extrabold" style={{ color }}>
+                                    {pct}%
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  }
+
+                  // LEGACY STANDARD / RATING ROW
+                  const starMatch = isRatingQuestion ? opt.label.match(/^([1-5])\s*★/) : null;
+                  const starCount = starMatch ? Number(starMatch[1]) : 0;
+
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => handleToggleOption(opt.id)}
+                      disabled={user ? !canCastOrUpdate : false}
+                      className={`w-full text-left rounded-xl border transition-all relative overflow-hidden ${
+                        isSelected
+                          ? 'bg-white shadow-2xs'
+                          : 'border-slate-200/90 bg-white/95 hover:bg-slate-50/90'
+                      } ${user && !canCastOrUpdate ? 'cursor-default' : 'cursor-pointer'}`}
+                      style={
+                        isSelected
+                          ? { borderColor: themePalette.hex, backgroundColor: `${themePalette.hex}0D` }
+                          : undefined
+                      }
+                    >
+                      {canSeeResults && (
+                        <div
+                          className="absolute inset-y-0 left-0 pointer-events-none transition-all duration-500"
+                          style={{ width: `${pct}%`, backgroundColor: `${color}1A` }}
+                        />
                       )}
-                    </div>
+
+                      <div className="relative z-10 px-3.5 py-2.5 flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span
+                            className={`w-5 h-5 ${
+                              poll.questionType === 'multiple' ? 'rounded-md' : 'rounded-full'
+                            } border flex items-center justify-center shrink-0 ${
+                              isSelected ? 'text-white' : 'border-slate-300 bg-white'
+                            }`}
+                            style={
+                              isSelected
+                                ? { backgroundColor: themePalette.hex, borderColor: themePalette.hex }
+                                : undefined
+                            }
+                          >
+                            {isSelected && <Check size={12} />}
+                          </span>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {starCount > 0 && (
+                                <span className="inline-flex items-center gap-0.5 text-amber-500 shrink-0">
+                                  {Array.from({ length: starCount }).map((_, si) => (
+                                    <Star key={si} size={11} className="fill-amber-400 text-amber-500" />
+                                  ))}
+                                </span>
+                              )}
+                              <span className="text-sm font-semibold text-[#0F172A] truncate">
+                                {opt.label}
+                              </span>
+                            </div>
+                            {opt.subtitle && (
+                              <div className="text-[11px] text-slate-500 truncate">{opt.subtitle}</div>
+                            )}
+                          </div>
+                        </div>
+
+                        {canSeeResults && (
+                          <div className="shrink-0 text-right tabular-nums">
+                            {showPercentages && (
+                              <span className="text-sm font-extrabold text-[#0F172A]">{pct}%</span>
+                            )}
+                            <span className="text-[11px] text-slate-500 ml-1.5">
+                              ({count.toLocaleString()})
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Guest Prompt OR Vote Submit Bar */}
+            {!user ? (
+              <div
+                className={`rounded-xl border p-3.5 flex flex-wrap items-center justify-between gap-3 ${
+                  guestAttemptedVote || isHighlighted
+                    ? 'bg-amber-50 border-amber-300'
+                    : 'bg-white/80 border-slate-200'
+                }`}
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-bold text-[#0F172A]">
+                    {tr(
+                      'Jisajili au Endelea na Google Ili Kupiga Kura',
+                      'Sign Up or Continue with Google to Vote'
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">
+                    {tr(
+                      'Unaweza kuona swali na wagombea wote hapa. Kupiga kura kunahitaji akaunti ili kulinda kura 1 kwa kila mtu.',
+                      'You can view all poll details freely. Voting requires an account to enforce 1 secure ballot per voter.'
+                    )}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onSignIn('vote')}
+                  className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-colors shrink-0 ${themePalette.btnClass}`}
+                >
+                  <UserCheck size={14} />
+                  {tr('Endelea na Google / Jisajili', 'Continue with Google / Sign Up')}
+                </button>
+              </div>
+            ) : (
+              isOpen &&
+              (!hasVoted || poll.allowVoteChange) && (
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                  <div className="text-xs text-slate-500">
+                    {draftSelection.length > 0
+                      ? tr(
+                          `Umechagua ${draftSelection.length} — bofya thibitisha kukamilisha kura.`,
+                          `Selected ${draftSelection.length} — click confirm to submit.`
+                        )
+                      : tr('Gusa chaguo hapo juu kupiga kura.', 'Tap an option above to vote.')}
                   </div>
 
-                  {canSeeResults && (
-                    <div className="shrink-0 text-right tabular-nums">
-                      <span className="text-sm font-extrabold text-[#0F172A]">{pct}%</span>
-                      <span className="text-[11px] text-slate-500 ml-1.5">
-                        ({count.toLocaleString()})
-                      </span>
-                    </div>
-                  )}
+                  <button
+                    type="button"
+                    disabled={submittingVote || !isSelectionDirty}
+                    onClick={handleSubmitVote}
+                    className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-colors disabled:opacity-50 ${themePalette.btnClass}`}
+                  >
+                    <Vote size={14} />
+                    {submittingVote
+                      ? tr('Inatuma...', 'Submitting...')
+                      : hasVoted
+                        ? tr('Sasisha Kura Yangu', 'Update My Vote')
+                        : tr('Piga Kura Sasa', 'Cast Vote Now')}
+                  </button>
                 </div>
-              </button>
-            );
-          })}
-        </div>
+              )
+            )}
 
-        {/* Guest Prompt OR Vote Submit Bar */}
-        {!user ? (
-          <div
-            className={`rounded-xl border p-3.5 flex flex-wrap items-center justify-between gap-3 ${
-              guestAttemptedVote || isHighlighted
-                ? 'bg-amber-50 border-amber-300'
-                : 'bg-slate-50 border-slate-200'
-            }`}
-          >
-            <div className="min-w-0 flex-1">
-              <div className="text-xs font-bold text-[#0F172A]">
-                {tr(
-                  'Jisajili au Endelea na Google Ili Kupiga Kura',
-                  'Sign Up or Continue with Google to Vote'
-                )}
+            {/* Hidden results notice if restricted */}
+            {!canSeeResults && (
+              <div className="text-[11px] text-slate-500 bg-white/80 border border-slate-200 rounded-lg px-3 py-2 flex items-center gap-2">
+                <EyeOff size={13} className="shrink-0" />
+                <span>
+                  {!user
+                    ? tr(
+                        'Idadi ya kura na matokeo yanayoendelea yamefichwa kwa wageni. Ingia au jisajili kupiga kura na kufuatilia kinachoendelea.',
+                        'Vote counts and live tallies are hidden for guests. Sign in or create an account to vote and see ongoing results.'
+                      )
+                    : poll.resultsVisibility === 'after_vote'
+                      ? tr(
+                          'Matokeo na chati zitaonekana mara tu utakapopiga kura yako.',
+                          'Results and charts unlock right after you cast your vote.'
+                        )
+                      : poll.resultsVisibility === 'after_close'
+                        ? tr(
+                            'Matokeo rasmi yatatolewa kura hii ikifungwa.',
+                            'Official results will be revealed when this poll closes.'
+                          )
+                        : tr(
+                            'Matokeo ya kura hii yamewekwa siri kwa mmiliki pekee.',
+                            'Results are visible to the poll owner only.'
+                          )}
+                </span>
               </div>
-              <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">
-                {tr(
-                  'Unaweza kuona swali na wagombea wote hapa. Kupiga kura kunahitaji akaunti ili kulinda kura 1 kwa kila mtu.',
-                  'You can view all poll details freely. Voting requires an account to enforce 1 secure ballot per voter.'
-                )}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => onSignIn('vote')}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#1D4E89] hover:bg-[#163d6c] text-white text-xs font-bold transition-colors shrink-0"
-            >
-              <UserCheck size={14} />
-              {tr('Endelea na Google / Jisajili', 'Continue with Google / Sign Up')}
-            </button>
-          </div>
-        ) : (
-          isOpen &&
-          (!hasVoted || poll.allowVoteChange) && (
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-              <div className="text-xs text-slate-500">
-                {draftSelection.length > 0
-                  ? tr(
-                      `Umechagua ${draftSelection.length} — bofya thibitisha kukamilisha kura.`,
-                      `Selected ${draftSelection.length} — click confirm to submit.`
-                    )
-                  : tr('Gusa chaguo hapo juu kupiga kura.', 'Tap an option above to vote.')}
-              </div>
-
-              <button
-                type="button"
-                disabled={submittingVote || !isSelectionDirty}
-                onClick={handleSubmitVote}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#1D4E89] hover:bg-[#163d6c] text-white text-xs font-bold transition-colors disabled:opacity-50"
-              >
-                <Vote size={14} />
-                {submittingVote
-                  ? tr('Inatuma...', 'Submitting...')
-                  : hasVoted
-                    ? tr('Sasisha Kura Yangu', 'Update My Vote')
-                    : tr('Piga Kura Sasa', 'Cast Vote Now')}
-              </button>
-            </div>
-          )
-        )}
-
-        {/* Hidden results notice if restricted */}
-        {!canSeeResults && (
-          <div className="text-[11px] text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 flex items-center gap-2">
-            <EyeOff size={13} className="shrink-0" />
-            <span>
-              {poll.resultsVisibility === 'after_vote'
-                ? tr(
-                    'Matokeo na chati zitaonekana mara tu utakapopiga kura yako.',
-                    'Results and charts unlock right after you cast your vote.'
-                  )
-                : poll.resultsVisibility === 'after_close'
-                  ? tr(
-                      'Matokeo rasmi yatatolewa kura hii ikifungwa.',
-                      'Official results will be revealed when this poll closes.'
-                    )
-                  : tr(
-                      'Matokeo ya kura hii yamewekwa siri kwa mmiliki pekee.',
-                      'Results are visible to the poll owner only.'
-                    )}
-            </span>
-          </div>
-        )}
+            )}
           </>
         )}
 
-        {/* Card Footer: Short Link + Analytics Button / Comments Count + Share + Owner Inline Controls */}
-        <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2.5">
+        {/* Card Footer: Short Link + Analytics Button / Comments Toggle + Share + Owner Inline Controls */}
+        <div className="pt-3 border-t border-slate-200/70 flex flex-wrap items-center justify-between gap-2.5">
           <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600 tabular-nums">
             {isOpenOpinion ? (
               <span className="inline-flex items-center gap-1.5 font-semibold text-violet-800">
@@ -4694,7 +5904,7 @@ const PollCard: React.FC<PollCardProps> = ({
               </span>
             ) : (
               <>
-                {(poll.showVoterCount || isAdmin) && (
+                {Boolean(user) && (poll.showVoterCount || isAdmin) && (
                   <span className="inline-flex items-center gap-1 font-semibold">
                     <Users size={13} className="text-slate-400" />
                     {poll.totalBallots.toLocaleString()} {tr('wapiga kura', 'voters')}
@@ -4705,12 +5915,23 @@ const PollCard: React.FC<PollCardProps> = ({
                   <button
                     type="button"
                     onClick={() => onOpenResults(poll.id, tallies)}
-                    className="inline-flex items-center gap-1.5 font-bold text-[#1D4E89] hover:underline"
+                    className={`inline-flex items-center gap-1.5 font-bold hover:underline ${themePalette.badgeTextClass}`}
                   >
                     <BarChart3 size={14} />
                     {isAdmin
-                      ? tr('Matokeo, Chati & Majina ya Wapiga Kura', 'Results, Charts & Voter Names')
-                      : tr('Tazama Matokeo & Chati', 'View Results & Charts')}
+                      ? tr('Matokeo, Chati & Fomu Rasmi', 'Results, Charts & Official Sheet')
+                      : tr('Matokeo & Fomu Rasmi', 'Results & Official Sheet')}
+                  </button>
+                )}
+
+                {poll.allowComments !== false && (
+                  <button
+                    type="button"
+                    onClick={() => setShowComments((v) => !v)}
+                    className="inline-flex items-center gap-1 font-semibold text-slate-600 hover:text-[#0F172A]"
+                  >
+                    <MessageSquare size={13} />
+                    {tr('Mjadala', 'Discuss')} ({(poll.commentsCount || 0).toLocaleString()})
                   </button>
                 )}
               </>
@@ -4723,7 +5944,7 @@ const PollCard: React.FC<PollCardProps> = ({
                 <button
                   type="button"
                   onClick={handleCopyShortLink}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-[11px] font-bold text-slate-700"
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-[11px] font-bold text-slate-700"
                   title={shortUrl}
                 >
                   {copiedId ? (
@@ -4806,14 +6027,31 @@ const PollCard: React.FC<PollCardProps> = ({
           </div>
         </div>
 
+        {/* Collapsible Bounded Comments Drawer for Regular Polls when enabled */}
+        {!isOpenOpinion && showComments && poll.allowComments !== false && (
+          <div className="rounded-xl border border-slate-200 bg-white/95 p-3 sm:p-4">
+            <PollCommentsThread
+              poll={poll}
+              user={user}
+              userDisplayName={userDisplayName}
+              userPhoto={userPhoto}
+              isAdmin={isAdmin}
+              isSuspended={isSuspended}
+              onSignIn={onSignIn}
+              onToast={onToast}
+              onRequestConfirm={onRequestConfirm}
+            />
+          </div>
+        )}
+
         {/* Short Link URL Strip (clean, copy-ready) */}
         {poll.allowShare && (
-          <div className="flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200/80 text-[11px] text-slate-500">
+          <div className="flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg bg-white/80 border border-slate-200/80 text-[11px] text-slate-500">
             <span className="truncate font-mono">{shortUrl}</span>
             <button
               type="button"
               onClick={handleCopyShortLink}
-              className="font-bold text-[#1D4E89] hover:underline shrink-0"
+              className={`font-bold hover:underline shrink-0 ${themePalette.badgeTextClass}`}
             >
               {copiedId ? tr('Imenakiliwa!', 'Copied!') : tr('Nakili', 'Copy')}
             </button>
@@ -4841,9 +6079,12 @@ const PollCard: React.FC<PollCardProps> = ({
                 disabled={deleting}
                 onClick={async () => {
                   setDeleting(true);
-                  await onDeleteInline(poll);
-                  setDeleting(false);
-                  setConfirmDeleteOpen(false);
+                  try {
+                    await onDeleteInline(poll);
+                  } finally {
+                    setDeleting(false);
+                    setConfirmDeleteOpen(false);
+                  }
                 }}
                 className="px-3 py-1 rounded-md bg-rose-600 hover:bg-rose-700 font-bold text-white"
               >
@@ -4887,7 +6128,1131 @@ const PollCard: React.FC<PollCardProps> = ({
 };
 
 // ============================================================================
-// MAIN MPOLL HUB (ZERO MODALS: LIST / BUILDER / RESULTS INLINE VIEWS)
+// DETERMINISTIC MULTI-STAGE LEADER ELIMINATION STUDIO (ZERO AI)
+// ============================================================================
+interface InlineTournamentBuilderProps {
+  user: User;
+  userDisplayName: string;
+  userPhoto: string;
+  onCancel: () => void;
+  onCreated: (tournamentId: string) => void;
+  onToast: (text: string, kind?: 'success' | 'error') => void;
+}
+
+const TOURNAMENT_DURATION_PRESETS: Array<{ labelSw: string; labelEn: string; mins: number }> = [
+  { labelSw: 'Dk 15', labelEn: '15m', mins: 15 },
+  { labelSw: 'Dk 30', labelEn: '30m', mins: 30 },
+  { labelSw: 'Saa 1', labelEn: '1h', mins: 60 },
+  { labelSw: 'Saa 6', labelEn: '6h', mins: 360 },
+  { labelSw: 'Saa 24', labelEn: '24h', mins: 1440 },
+  { labelSw: 'Siku 3', labelEn: '3d', mins: 4320 },
+  { labelSw: 'Wiki 1', labelEn: '1w', mins: 10080 },
+];
+
+const InlineTournamentBuilder: React.FC<InlineTournamentBuilderProps> = ({
+  user,
+  userDisplayName,
+  userPhoto,
+  onCancel,
+  onCreated,
+  onToast,
+}) => {
+  const { tr } = useLanguage();
+  const [title, setTitle] = useState('');
+  const [institutionName, setInstitutionName] = useState('');
+  const [category, setCategory] = useState<PollCategory>('Uongozi');
+  const [pollStyle, setPollStyle] = useState<'local_govt' | 'school_election'>('local_govt');
+  const [positionTitle, setPositionTitle] = useState('Mwenyekiti');
+  const [description, setDescription] = useState('');
+  const [targetWinnersCount, setTargetWinnersCount] = useState(1);
+  const [useGenderQuota, setUseGenderQuota] = useState(false);
+  const [requiredMaleCount, setRequiredMaleCount] = useState(1);
+  const [requiredFemaleCount, setRequiredFemaleCount] = useState(0);
+  const [groupSize, setGroupSize] = useState(8);
+  const [roundDurationMinutes, setRoundDurationMinutes] = useState(1440);
+  const [pasteText, setPasteText] = useState('');
+  const [candidates, setCandidates] = useState<TournamentCandidate[]>([]);
+  const [candidateSearch, setCandidateSearch] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const maleCount = useMemo(
+    () => candidates.filter((c) => c.gender === 'male').length,
+    [candidates]
+  );
+  const femaleCount = useMemo(
+    () => candidates.filter((c) => c.gender === 'female').length,
+    [candidates]
+  );
+
+  const roadmap = useMemo(
+    () =>
+      buildTournamentRoadmapPreview({
+        candidates,
+        targetWinnersCount,
+        useGenderQuota,
+        requiredMaleCount,
+        requiredFemaleCount,
+        groupSize,
+      }),
+    [candidates, targetWinnersCount, useGenderQuota, requiredMaleCount, requiredFemaleCount, groupSize]
+  );
+
+  const visibleCandidates = useMemo(() => {
+    const q = candidateSearch.trim().toLowerCase();
+    if (!q) return candidates;
+    return candidates.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        (c.positionTitle && c.positionTitle.toLowerCase().includes(q))
+    );
+  }, [candidates, candidateSearch]);
+
+  const handleLoadBulkText = (replaceAll: boolean) => {
+    const parsed = parseBulkCandidatesText(pasteText, positionTitle);
+    if (parsed.length === 0) {
+      onToast(
+        tr('Bandika angalau jina moja kwenye kisanduku cha majina.', 'Paste at least one candidate name.'),
+        'error'
+      );
+      return;
+    }
+
+    if (replaceAll) {
+      setCandidates(parsed);
+      setPasteText('');
+      onToast(
+        tr(`Wagombea ${parsed.length} wamepakiwa kikamilifu!`, `${parsed.length} candidates loaded!`),
+        'success'
+      );
+      return;
+    }
+
+    setCandidates((prev) => {
+      const existingKeys = new Set(prev.map((c) => c.name.trim().toLowerCase()));
+      const additions = parsed.filter((c) => !existingKeys.has(c.name.trim().toLowerCase()));
+      const combined = [...prev, ...additions].slice(0, 300);
+      return combined;
+    });
+    setPasteText('');
+    onToast(tr('Majina mapya yameongezwa kwenye orodha.', 'New names added to candidate list.'), 'success');
+  };
+
+  const handleAddSingleCandidate = () => {
+    if (candidates.length >= 300) {
+      onToast(tr('Kikomo cha wagombea 300 kimefikiwa.', 'Maximum 300 candidates reached.'), 'error');
+      return;
+    }
+    const nextIdx = candidates.length + 1;
+    setCandidates((prev) => [
+      ...prev,
+      {
+        id: `c_${nextIdx}_${Math.random().toString(36).slice(2, 6)}`,
+        name: `Mgombea ${nextIdx}`,
+        gender: 'male',
+        positionTitle: positionTitle.trim() || undefined,
+      },
+    ]);
+  };
+
+  const updateCandidate = (id: string, patch: Partial<TournamentCandidate>) => {
+    setCandidates((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  };
+
+  const removeCandidate = (id: string) => {
+    setCandidates((prev) => prev.filter((c) => c.id !== id));
+  };
+
+  const applyGenderToAll = (g: PollGender) => {
+    setCandidates((prev) => prev.map((c) => ({ ...c, gender: g })));
+  };
+
+  const handleTargetWinnersChange = (nextVal: number) => {
+    const safe = Math.max(1, Math.min(50, nextVal || 1));
+    setTargetWinnersCount(safe);
+    if (useGenderQuota) {
+      const halfMale = Math.ceil(safe / 2);
+      setRequiredMaleCount(halfMale);
+      setRequiredFemaleCount(Math.max(0, safe - halfMale));
+    }
+  };
+
+  const handleLaunchTournament = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (title.trim().length < 4) {
+      onToast(
+        tr('Andika kichwa cha mchakato (angalau herufi 4).', 'Enter a process title (min 4 chars).'),
+        'error'
+      );
+      return;
+    }
+    if (!roadmap.valid) {
+      onToast(roadmap.errorSw || tr('Rekebisha mpangilio kwanza.', 'Please fix validation errors.'), 'error');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const cleanCands = candidates.map((c) => ({
+        ...c,
+        name: c.name.trim() || 'Mgombea',
+        positionTitle: (c.positionTitle || positionTitle).trim() || undefined,
+      }));
+      const id = await createPollTournament(user, userDisplayName, userPhoto, {
+        title: title.trim(),
+        description: description.trim(),
+        institutionName: institutionName.trim(),
+        category,
+        positionTitle: positionTitle.trim(),
+        pollStyle,
+        targetWinnersCount,
+        useGenderQuota,
+        requiredMaleCount: useGenderQuota ? requiredMaleCount : 0,
+        requiredFemaleCount: useGenderQuota ? requiredFemaleCount : 0,
+        groupSize,
+        roundDurationMinutes,
+        candidates: cleanCands,
+      });
+      onToast(
+        tr(
+          'Mchakato wa mtoano umeanza! Kadi za kura za Hatua ya 1 zimechapishwa.',
+          'Elimination process launched! Round 1 ballots are live.'
+        ),
+        'success'
+      );
+      onCreated(id);
+    } catch (err) {
+      onToast(
+        err instanceof Error ? err.message : tr('Imeshindwa kuanzisha mchakato.', 'Failed to launch process.'),
+        'error'
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <form
+      onSubmit={handleLaunchTournament}
+      className="bg-white text-[#0F172A] border border-slate-200 rounded-2xl shadow-sm overflow-hidden"
+    >
+      {/* Header */}
+      <div className="bg-gradient-to-r from-[#0A2540] via-[#102D54] to-[#1D4E89] text-white px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="w-9 h-9 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center shrink-0 transition-colors"
+            aria-label={tr('Rudi', 'Back')}
+          >
+            <ArrowLeft size={17} />
+          </button>
+          <div className="min-w-0">
+            <div className="inline-flex items-center gap-1.5 text-[11px] font-bold text-sky-200 uppercase tracking-wider">
+              <GitBranch size={13} />
+              {tr('Mchakato wa Mtoano wa Viongozi (Bila AI · Kura Halisi)', 'Multi-Stage Leader Elimination (Zero AI · Pure Votes)')}
+            </div>
+            <h2 className="text-base sm:text-xl font-extrabold leading-tight truncate">
+              {tr('Chakata Wagombea 30–300 Hatua kwa Hatua', 'Eliminate 30–300 Candidates Step-by-Step')}
+            </h2>
+          </div>
+        </div>
+      </div>
+
+      <div className="p-4 sm:p-6 space-y-6">
+        {/* Section 1: Election Metadata & Format */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-1.5 md:col-span-2">
+            <label className="block text-xs font-extrabold text-[#0F172A]">
+              {tr('Kichwa cha Uchaguzi / Mchakato *', 'Election / Process Title *')}
+            </label>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder={tr(
+                'Mfano: Uchaguzi wa Mwenyekiti wa Mtaa · Au Wabunge 5 wa Bunge la Shule',
+                'e.g., Local Chairperson Election · or 5 Student Council Seats'
+              )}
+              className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-xl bg-white text-[#0F172A] focus:outline-none focus:ring-2 focus:ring-[#1D4E89]/30"
+              required
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="block text-xs font-extrabold text-[#0F172A]">
+              {tr('Eneo / Shule / Taasisi', 'Area / School / Organization')}
+            </label>
+            <input
+              type="text"
+              value={institutionName}
+              onChange={(e) => setInstitutionName(e.target.value)}
+              placeholder={tr('Mfano: Mtaa wa Kijitonyama / Shule ya Azania', 'e.g., Kijitonyama Street / Azania School')}
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl bg-white text-[#0F172A] focus:outline-none focus:ring-2 focus:ring-[#1D4E89]/30"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-2.5">
+            <div className="space-y-1.5">
+              <label className="block text-xs font-extrabold text-[#0F172A]">
+                {tr('Mtindo wa Kadi', 'Card Format')}
+              </label>
+              <select
+                value={pollStyle}
+                onChange={(e) => setPollStyle(e.target.value as 'local_govt' | 'school_election')}
+                className="w-full px-3 py-2 text-xs font-bold border border-slate-300 rounded-xl bg-white text-[#0F172A]"
+              >
+                <option value="local_govt">{tr('Serikali za Mitaa', 'Local Govt')}</option>
+                <option value="school_election">{tr('Kura ya Shule / Chuo', 'School Election')}</option>
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="block text-xs font-extrabold text-[#0F172A]">
+                {tr('Kategoria', 'Category')}
+              </label>
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value as PollCategory)}
+                className="w-full px-3 py-2 text-xs font-bold border border-slate-300 rounded-xl bg-white text-[#0F172A]"
+              >
+                {POLL_CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="space-y-1.5 md:col-span-2">
+            <label className="block text-xs font-extrabold text-[#0F172A]">
+              {tr('Cheo Kinachogombewa (Chaguo-msingi)', 'Position Title (Default)')}
+            </label>
+            <input
+              type="text"
+              value={positionTitle}
+              onChange={(e) => setPositionTitle(e.target.value)}
+              placeholder={tr('Mfano: Mwenyekiti, Katibu, Mhasibu, Mjumbe...', 'e.g., Chairperson, Secretary, Treasurer...')}
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl bg-white text-[#0F172A] focus:outline-none focus:ring-2 focus:ring-[#1D4E89]/30"
+            />
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {CANDIDATE_ROLE_PRESETS.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => setPositionTitle(preset)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                    positionTitle === preset
+                      ? 'bg-[#0A2540] border-[#0A2540] text-white'
+                      : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  {preset}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-1.5 md:col-span-2">
+            <label className="block text-xs font-extrabold text-[#0F172A]">
+              {tr('Maelezo kwa Wapiga Kura (Hiari)', 'Instructions for Voters (Optional)')}
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={2}
+              placeholder={tr(
+                'Mfano: Kila kundi litachuana kwa kura za wazi; washindi wataingia hatua inayofuata hadi wapate washindi rasmi.',
+                'e.g., Each group votes openly; top candidates advance to the next stage until winners are crowned.'
+              )}
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl bg-white text-[#0F172A]"
+            />
+          </div>
+        </div>
+
+        {/* Section 2: Winner Targets & Gender Quota Rules */}
+        <div className="rounded-2xl border border-[#1D4E89]/20 bg-[#F8FBFF] p-4 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-extrabold text-[#0A2540]">
+                {tr('Idadi ya Washindi & Vigezo vya Jinsia', 'Target Winners & Gender Quotas')}
+              </h3>
+              <p className="text-[11px] text-slate-600">
+                {tr(
+                  'Mfano: Wagombea 100, unahitaji viongozi 5 (au Wavulana 3 na Wasichana 2).',
+                  'Example: 100 candidates, need 5 winners (or 3 Male and 2 Female).'
+                )}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="space-y-1">
+              <label className="block text-xs font-bold text-[#0F172A]">
+                {tr('Idadi ya Washindi Wanaohitajika', 'Total Winners Needed')}
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={50}
+                value={targetWinnersCount}
+                onChange={(e) => handleTargetWinnersChange(Number(e.target.value))}
+                className="w-full px-3 py-2 text-sm font-extrabold border border-slate-300 rounded-xl bg-white text-[#0F172A]"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-xs font-bold text-[#0F172A]">
+                {tr('Wagombea kwa Kundi (3–12)', 'Candidates per Group (3–12)')}
+              </label>
+              <input
+                type="number"
+                min={3}
+                max={12}
+                value={groupSize}
+                onChange={(e) => setGroupSize(Math.max(3, Math.min(12, Number(e.target.value) || 8)))}
+                className="w-full px-3 py-2 text-sm font-extrabold border border-slate-300 rounded-xl bg-white text-[#0F172A]"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-xs font-bold text-[#0F172A]">
+                {tr('Muda wa Kila Hatua', 'Duration per Stage')}
+              </label>
+              <div className="flex flex-wrap gap-1">
+                {TOURNAMENT_DURATION_PRESETS.map((p) => (
+                  <button
+                    key={p.mins}
+                    type="button"
+                    onClick={() => setRoundDurationMinutes(p.mins)}
+                    className={`px-2 py-1 rounded-lg text-[11px] font-bold border ${
+                      roundDurationMinutes === p.mins
+                        ? 'bg-[#1D4E89] border-[#1D4E89] text-white'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    {tr(p.labelSw, p.labelEn)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Gender Quota Toggle */}
+          <div className="pt-2 border-t border-[#1D4E89]/15 space-y-3">
+            <label className="flex items-center justify-between gap-3 cursor-pointer">
+              <div>
+                <div className="text-xs font-extrabold text-[#0A2540]">
+                  {tr('Weka Vigezo vya Jinsia (Wavulana / Wasichana)', 'Enable Gender Quotas (Males / Females)')}
+                </div>
+                <div className="text-[11px] text-slate-600">
+                  {tr(
+                    'Mfumo utatenganisha makundi ya Wavulana na Wasichana hadi idadi ya kila upande itimie.',
+                    'Separates male & female tracks until each quota is met.'
+                  )}
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={useGenderQuota}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setUseGenderQuota(checked);
+                  if (checked) {
+                    const halfMale = Math.ceil(targetWinnersCount / 2);
+                    setRequiredMaleCount(halfMale);
+                    setRequiredFemaleCount(Math.max(0, targetWinnersCount - halfMale));
+                  }
+                }}
+                className="w-5 h-5 accent-[#1D4E89] rounded"
+              />
+            </label>
+
+            {useGenderQuota && (
+              <div className="grid grid-cols-2 gap-3 bg-white p-3 rounded-xl border border-slate-200">
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold text-sky-800">
+                    {tr('Wavulana Wanaohitajika', 'Males Needed')}
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={targetWinnersCount}
+                    value={requiredMaleCount}
+                    onChange={(e) => {
+                      const val = Math.max(0, Math.min(targetWinnersCount, Number(e.target.value) || 0));
+                      setRequiredMaleCount(val);
+                      setRequiredFemaleCount(Math.max(0, targetWinnersCount - val));
+                    }}
+                    className="w-full px-3 py-1.5 text-sm font-extrabold border border-sky-200 rounded-lg bg-sky-50/40 text-[#0F172A]"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold text-rose-800">
+                    {tr('Wasichana Wanaohitajika', 'Females Needed')}
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={targetWinnersCount}
+                    value={requiredFemaleCount}
+                    onChange={(e) => {
+                      const val = Math.max(0, Math.min(targetWinnersCount, Number(e.target.value) || 0));
+                      setRequiredFemaleCount(val);
+                      setRequiredMaleCount(Math.max(0, targetWinnersCount - val));
+                    }}
+                    className="w-full px-3 py-1.5 text-sm font-extrabold border border-rose-200 rounded-lg bg-rose-50/40 text-[#0F172A]"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Section 3: Bulk Paste & Gender Toggle Roster */}
+        <div className="rounded-2xl border border-slate-200 p-4 space-y-3 bg-white">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-extrabold text-[#0F172A]">
+                {tr('Bandika (Paste) Majina ya Wagombea Wote (Hadi 300)', 'Paste All Candidate Names (Up to 300)')}
+              </h3>
+              <p className="text-[11px] text-slate-500">
+                {tr(
+                  'Jina moja kila mstari (au tenganisha kwa koma). Unaweza kuandika (M) au (F) mwishoni au kubadili jinsia hapa chini kwa mguso 1.',
+                  'One name per line (or comma-separated). Optionally add (M)/(F) or toggle gender below in 1 tap.'
+                )}
+              </p>
+            </div>
+            <div className="text-xs font-extrabold text-[#1D4E89] tabular-nums">
+              {candidates.length} {tr('wagombea', 'candidates')} ({maleCount} {tr('Me', 'M')} · {femaleCount}{' '}
+              {tr('Ke', 'F')})
+            </div>
+          </div>
+
+          <textarea
+            value={pasteText}
+            onChange={(e) => setPasteText(e.target.value)}
+            rows={4}
+            placeholder={tr(
+              'Mfano:\n1. Asha Juma (F)\n2. Bakari Mohamed (M)\n3. Neema Peter\n4. John Kelvin...',
+              'Example:\n1. Asha Juma (F)\n2. Bakari Mohamed (M)\n3. Neema Peter...'
+            )}
+            className="w-full px-3.5 py-2.5 text-xs sm:text-sm border border-slate-300 rounded-xl bg-slate-50/60 text-[#0F172A] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1D4E89]/30 font-mono"
+          />
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => handleLoadBulkText(candidates.length === 0)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#0A2540] hover:bg-[#102D54] text-white text-xs font-bold transition-colors"
+            >
+              <Plus size={14} />
+              {candidates.length === 0
+                ? tr('Pakia Majina Kwenye Orodha', 'Load Names to List')
+                : tr('Ongeza Kwenye Orodha', 'Append to List')}
+            </button>
+            {candidates.length > 0 && pasteText.trim() && (
+              <button
+                type="button"
+                onClick={() => handleLoadBulkText(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700"
+              >
+                {tr('Badilisha Orodha Yote', 'Replace Entire List')}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleAddSingleCandidate}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700"
+            >
+              <Plus size={13} />
+              {tr('Ongeza Mmoja', 'Add One')}
+            </button>
+          </div>
+
+          {candidates.length > 0 && (
+            <div className="pt-2 space-y-2.5">
+              {/* Bulk Gender & Filter Strip */}
+              <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 border border-slate-200 rounded-xl p-2.5">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[11px] font-bold text-slate-600 mr-1">
+                    {tr('Weka Jinsia Haraka:', 'Bulk Gender:')}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => applyGenderToAll('male')}
+                    className="px-2.5 py-1 rounded-lg bg-sky-100 hover:bg-sky-200 text-sky-900 text-[11px] font-bold"
+                  >
+                    {tr('Wote Wavulana', 'All Male')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyGenderToAll('female')}
+                    className="px-2.5 py-1 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-900 text-[11px] font-bold"
+                  >
+                    {tr('Wote Wasichana', 'All Female')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCandidates([])}
+                    className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 hover:bg-rose-50 text-rose-700 text-[11px] font-bold"
+                  >
+                    {tr('Futa Wote', 'Clear All')}
+                  </button>
+                </div>
+
+                {candidates.length > 6 && (
+                  <div className="relative flex-1 min-w-[160px] max-w-xs">
+                    <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="text"
+                      value={candidateSearch}
+                      onChange={(e) => setCandidateSearch(e.target.value)}
+                      placeholder={tr('Chuja jina...', 'Filter name...')}
+                      className="w-full h-7 pl-7 pr-2 text-xs border border-slate-200 rounded-lg bg-white text-[#0F172A]"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Scrollable Roster with 1-Tap Gender & Role Editing */}
+              <div className="max-h-[340px] overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100">
+                {visibleCandidates.map((cand, idx) => (
+                  <div
+                    key={cand.id}
+                    className="p-2 sm:p-2.5 flex flex-wrap sm:flex-nowrap items-center gap-2 bg-white hover:bg-slate-50/70"
+                  >
+                    <span className="text-[11px] font-extrabold text-slate-400 w-7 text-center tabular-nums shrink-0">
+                      #{idx + 1}
+                    </span>
+
+                    <input
+                      type="text"
+                      value={cand.name}
+                      onChange={(e) => updateCandidate(cand.id, { name: e.target.value })}
+                      className="flex-1 min-w-[140px] px-2.5 py-1.5 text-xs font-bold border border-slate-200 rounded-lg bg-white text-[#0F172A]"
+                    />
+
+                    <input
+                      type="text"
+                      value={cand.positionTitle || ''}
+                      onChange={(e) => updateCandidate(cand.id, { positionTitle: e.target.value })}
+                      placeholder={positionTitle || tr('Cheo', 'Role')}
+                      className="w-28 sm:w-32 px-2 py-1.5 text-[11px] font-semibold border border-slate-200 rounded-lg bg-white text-slate-700"
+                    />
+
+                    {/* 1-Tap Gender Selector */}
+                    <div className="inline-flex rounded-lg border border-slate-200 overflow-hidden shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => updateCandidate(cand.id, { gender: 'male' })}
+                        className={`px-2.5 py-1 text-[11px] font-bold transition-colors ${
+                          cand.gender === 'male'
+                            ? 'bg-sky-600 text-white'
+                            : 'bg-white text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        {tr('Mvulana', 'Boy')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateCandidate(cand.id, { gender: 'female' })}
+                        className={`px-2.5 py-1 text-[11px] font-bold transition-colors ${
+                          cand.gender === 'female'
+                            ? 'bg-rose-600 text-white'
+                            : 'bg-white text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        {tr('Msichana', 'Girl')}
+                      </button>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => removeCandidate(cand.id)}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 shrink-0"
+                      aria-label={tr('Ondoa mgombea', 'Remove candidate')}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Section 4: Live Deterministic Roadmap Preview (Zero AI) */}
+        <div
+          className={`rounded-2xl border p-4 space-y-3 ${
+            roadmap.valid
+              ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
+              : 'bg-amber-50/80 border-amber-200 text-amber-950'
+          }`}
+        >
+          <div className="flex items-center gap-2 text-xs font-extrabold">
+            <ShieldCheck size={16} className={roadmap.valid ? 'text-emerald-700' : 'text-amber-700'} />
+            {tr('Mpango wa Hatua za Mchakato (Kielelezo Kabla ya Kuanza)', 'Deterministic Elimination Roadmap Preview')}
+          </div>
+
+          {!roadmap.valid ? (
+            <p className="text-xs font-bold text-rose-700">
+              {tr(roadmap.errorSw || '', roadmap.errorEn || '')}
+            </p>
+          ) : roadmap.rounds.length === 0 ? (
+            <p className="text-xs font-semibold text-emerald-800">
+              {tr(
+                'Idadi ya wagombea inalingana tayari na idadi ya washindi — watathibitishwa moja kwa moja.',
+                'Candidate count already matches required winners.'
+              )}
+            </p>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              {roadmap.rounds.map((r, i) => (
+                <React.Fragment key={r.round}>
+                  <div className="rounded-xl bg-white border border-emerald-200 px-3 py-2 text-xs shadow-2xs">
+                    <div className="font-extrabold text-[#0A2540]">{tr(r.labelSw, r.labelEn)}</div>
+                    <div className="text-[11px] text-slate-600 tabular-nums mt-0.5">
+                      {tr(
+                        `Makundi ${r.totalGroups} · Wagombea ${r.startCount} → Wanavuka ${r.advanceTotal}`,
+                        `${r.totalGroups} groups · ${r.startCount} → ${r.advanceTotal} advance`
+                      )}
+                    </div>
+                  </div>
+                  {i < roadmap.rounds.length - 1 && (
+                    <ArrowRight size={15} className="text-emerald-700 shrink-0" />
+                  )}
+                </React.Fragment>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Form Footer */}
+        <div className="flex flex-wrap items-center justify-end gap-2.5 pt-2 border-t border-slate-200">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700"
+          >
+            {tr('Ghairi', 'Cancel')}
+          </button>
+          <button
+            type="submit"
+            disabled={submitting || !roadmap.valid}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#0A2540] hover:bg-[#1D4E89] disabled:opacity-50 text-white text-xs sm:text-sm font-extrabold shadow-sm transition-colors"
+          >
+            <GitBranch size={15} />
+            {submitting
+              ? tr('Inaunda Kadi za Hatua ya 1...', 'Creating Round 1 Ballots...')
+              : tr('Anzisha Mchakato & Unda Kura Sasa', 'Launch Process & Create Ballots')}
+          </button>
+        </div>
+      </div>
+    </form>
+  );
+};
+
+// ============================================================================
+// TOURNAMENT LIVE GUIDANCE & ROUND ADVANCEMENT TRACKER CARD
+// ============================================================================
+interface TournamentTrackerCardProps {
+  tournament: PollTournament;
+  allPolls: Poll[];
+  userBallots: Record<string, PollBallot>;
+  user: User | null;
+  userDisplayName: string;
+  userPhoto: string;
+  isAdmin: boolean;
+  isSelectedFilter: boolean;
+  onToggleFilter: () => void;
+  onFocusGroupPoll?: (pollId: string) => void;
+  onToast: (text: string, kind?: 'success' | 'error') => void;
+}
+
+const TournamentTrackerCard: React.FC<TournamentTrackerCardProps> = ({
+  tournament,
+  allPolls,
+  userBallots,
+  user,
+  userDisplayName,
+  userPhoto,
+  isAdmin,
+  isSelectedFilter,
+  onToggleFilter,
+  onFocusGroupPoll,
+  onToast,
+}) => {
+  const { tr } = useLanguage();
+  const [advancing, setAdvancing] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const candidateMap = useMemo(
+    () => new Map(tournament.candidates.map((c) => [c.id, c])),
+    [tournament.candidates]
+  );
+
+  const linkedPolls = useMemo(
+    () => allPolls.filter((p) => p.tournamentId === tournament.id),
+    [allPolls, tournament.id]
+  );
+  const pollMap = useMemo(() => new Map(linkedPolls.map((p) => [p.id, p])), [linkedPolls]);
+
+  const activeStage = useMemo(
+    () =>
+      tournament.stages.find((s) => s.status === 'active' || s.status === 'awaiting_tiebreaker') ||
+      null,
+    [tournament.stages]
+  );
+
+  const stageVotesTotal = useMemo(() => {
+    if (!activeStage) return 0;
+    return activeStage.groups.reduce((sum, g) => sum + (pollMap.get(g.pollId)?.totalBallots || 0), 0);
+  }, [activeStage, pollMap]);
+
+  const votedGroupsCount = useMemo(() => {
+    if (!activeStage || !user) return 0;
+    return activeStage.groups.filter((g) => Boolean(userBallots[g.pollId]?.selectedOptionIds?.length))
+      .length;
+  }, [activeStage, user, userBallots]);
+
+  const handleAdvanceStage = async () => {
+    if (!user) return;
+    setAdvancing(true);
+    try {
+      const res = await resolveAndAdvanceTournament(
+        tournament,
+        allPolls,
+        user,
+        userDisplayName,
+        userPhoto
+      );
+      onToast(tr(res.messageSw, res.messageEn), 'success');
+    } catch (err) {
+      onToast(
+        err instanceof Error ? err.message : tr('Imeshindwa kuchakata hatua hii.', 'Failed to advance stage.'),
+        'error'
+      );
+    } finally {
+      setAdvancing(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      await deletePollTournament(tournament, linkedPolls);
+      onToast(tr('Mchakato wa mtoano na kadi zake umefutwa.', 'Tournament deleted.'), 'success');
+    } catch (err) {
+      onToast(
+        err instanceof Error ? err.message : tr('Imeshindwa kufuta mchakato.', 'Delete failed.'),
+        'error'
+      );
+    } finally {
+      setDeleting(false);
+      setConfirmDelete(false);
+    }
+  };
+
+  const isCompleted = tournament.status === 'completed';
+
+  return (
+    <div
+      className={`bg-white text-[#0F172A] border rounded-2xl overflow-hidden shadow-sm transition-all ${
+        isCompleted ? 'border-emerald-300' : 'border-indigo-200'
+      }`}
+    >
+      <div
+        className={`h-1.5 ${
+          isCompleted
+            ? 'bg-gradient-to-r from-emerald-500 via-teal-500 to-amber-500'
+            : 'bg-gradient-to-r from-[#0A2540] via-indigo-600 to-sky-500'
+        }`}
+      />
+
+      <div className="p-3.5 sm:p-5 space-y-3.5">
+        {/* Top Row: Title & Meta */}
+        <div className="flex flex-wrap items-start justify-between gap-2.5">
+          <div className="min-w-0 flex-1 space-y-1">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wide ${
+                  isCompleted
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : 'bg-indigo-100 text-indigo-800'
+                }`}
+              >
+                {isCompleted ? <Trophy size={11} /> : <GitBranch size={11} />}
+                {isCompleted
+                  ? tr('Uchaguzi Umekamilika', 'Process Completed')
+                  : tr(
+                      `Mtoano · Hatua ${tournament.currentRound}/${tournament.totalPlannedRounds}`,
+                      `Elimination · Round ${tournament.currentRound}/${tournament.totalPlannedRounds}`
+                    )}
+              </span>
+              {tournament.positionTitle && (
+                <span className="px-2 py-0.5 rounded-md bg-slate-100 text-[#0A2540] text-[10px] font-extrabold">
+                  {tournament.positionTitle}
+                </span>
+              )}
+              {tournament.useGenderQuota && (
+                <span className="px-2 py-0.5 rounded-md bg-sky-50 border border-sky-200 text-sky-800 text-[10px] font-bold">
+                  {tr(
+                    `Vigezo: Wavulana ${tournament.requiredMaleCount} · Wasichana ${tournament.requiredFemaleCount}`,
+                    `Quota: ${tournament.requiredMaleCount}M · ${tournament.requiredFemaleCount}F`
+                  )}
+                </span>
+              )}
+            </div>
+
+            <h3 className="text-base sm:text-lg font-extrabold text-[#0A2540] leading-snug">
+              {tournament.title}
+            </h3>
+
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-600">
+              {tournament.institutionName && (
+                <span className="font-semibold text-slate-700">{tournament.institutionName}</span>
+              )}
+              <span>
+                {tr('Wagombea:', 'Candidates:')} <strong>{tournament.candidates.length}</strong>
+              </span>
+              <span>
+                {tr('Washindi wanaohitajika:', 'Winners needed:')}{' '}
+                <strong>{tournament.targetWinnersCount}</strong>
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={onToggleFilter}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
+                isSelectedFilter
+                  ? 'bg-[#0A2540] border-[#0A2540] text-white'
+                  : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              {isSelectedFilter
+                ? tr('Inachuja Hizi Tu', 'Filtered')
+                : tr('Onyesha Kura Zake', 'Filter Ballots')}
+            </button>
+
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => setConfirmDelete((v) => !v)}
+                className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-rose-50 hover:text-rose-600"
+                title={tr('Futa mchakato', 'Delete process')}
+              >
+                <Trash2 size={14} />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Live Automatic Guidance Banner (Muongozo wa Mfumo) */}
+        {isCompleted ? (
+          <div className="rounded-xl bg-gradient-to-br from-emerald-50 via-teal-50/60 to-amber-50/50 border border-emerald-200 p-3.5 sm:p-4 space-y-3">
+            <div className="flex items-center gap-2 text-xs font-extrabold text-emerald-900">
+              <Crown size={16} className="text-amber-600" />
+              {tr(
+                `Washindi Rasmi Wametangazwa Kupitia Kura Huru (${tournament.winnerIds.length})`,
+                `Official Elected Winners Declared by Votes (${tournament.winnerIds.length})`
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {tournament.winnerIds.map((wid, idx) => {
+                const cand = candidateMap.get(wid);
+                const votes = tournament.winnerVotes?.[wid] ?? 0;
+                return (
+                  <div
+                    key={wid}
+                    className="flex items-center justify-between gap-2.5 bg-white border border-emerald-200 rounded-xl px-3 py-2.5 shadow-2xs"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className="w-7 h-7 rounded-full bg-emerald-600 text-white font-extrabold text-xs flex items-center justify-center shrink-0">
+                        #{idx + 1}
+                      </span>
+                      <div className="min-w-0">
+                        <div className="text-xs sm:text-sm font-extrabold text-[#0A2540] truncate">
+                          {cand?.name || wid}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1 text-[10px] text-slate-600">
+                          {(cand?.positionTitle || tournament.positionTitle) && (
+                            <span className="font-bold text-emerald-700">
+                              {cand?.positionTitle || tournament.positionTitle}
+                            </span>
+                          )}
+                          {cand?.gender && (
+                            <span>
+                              · {cand.gender === 'female' ? tr('Msichana', 'Female') : tr('Mvulana', 'Male')}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    {Boolean(user) && (
+                      <span className="text-xs font-extrabold text-emerald-800 tabular-nums shrink-0">
+                        {votes.toLocaleString()} {tr('kura', 'votes')}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          activeStage && (
+            <div className="rounded-xl bg-[#EEF4FC] border border-[#1D4E89]/20 p-3.5 space-y-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="space-y-1 min-w-0 flex-1">
+                  <div className="inline-flex items-center gap-1.5 text-xs font-extrabold text-[#0A2540]">
+                    <Sparkles size={14} className="text-[#1D4E89]" />
+                    {tr('Muongozo wa Mfumo · Sahivi Tunaenda:', 'System Guide · Current Step:')}{' '}
+                    <span className="text-[#1D4E89]">{activeStage.title}</span>
+                  </div>
+                  <p className="text-[11px] sm:text-xs text-slate-700 leading-relaxed">
+                    {activeStage.isTieBreaker
+                      ? tr(
+                          'Kuna wagombea waliolingana kura (sare). Wapiga kura waamue kupitia kadi ya mtoano wa sare hapa chini.',
+                          'A vote tie occurred at the cutoff. Voters decide via the tie-breaker ballot below.'
+                        )
+                      : activeStage.isFinal
+                        ? tr(
+                            `Hii ni hatua ya Fainali! Piga kura kwenye kadi ${activeStage.groups.length} ili kutangaza washindi ${tournament.targetWinnersCount} wa mwisho.`,
+                            `This is the Final stage! Vote on the ${activeStage.groups.length} ballot(s) to crown ${tournament.targetWinnersCount} winner(s).`
+                          )
+                        : tr(
+                            `Piga kura kwenye makundi ${activeStage.groups.length} hapo chini. Kura zikikamilika, mmiliki atabofya kuchakata hatua na kufungua mchujo unaofuata kiotomatiki.`,
+                            `Vote in the ${activeStage.groups.length} group(s) below. Once done, advance to automatically launch the next round.`
+                          )}
+                  </p>
+                </div>
+
+                {user && (
+                  <span className="px-2.5 py-1 rounded-lg bg-white border border-[#1D4E89]/20 text-[11px] font-extrabold text-[#0A2540] tabular-nums shrink-0">
+                    {tr(
+                      `Umepiga: ${votedGroupsCount}/${activeStage.groups.length}`,
+                      `Voted: ${votedGroupsCount}/${activeStage.groups.length}`
+                    )}
+                  </span>
+                )}
+              </div>
+
+              {/* Group Ballot Quick Navigation Chips */}
+              <div className="flex flex-wrap gap-1.5">
+                {activeStage.groups.map((g) => {
+                  const gPoll = pollMap.get(g.pollId);
+                  const hasVotedGroup = Boolean(userBallots[g.pollId]?.selectedOptionIds?.length);
+                  return (
+                    <button
+                      key={g.pollId}
+                      type="button"
+                      onClick={() => onFocusGroupPoll?.(g.pollId)}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                        hasVotedGroup
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                          : 'bg-white border-slate-200 text-[#0A2540] hover:border-[#1D4E89]'
+                      }`}
+                    >
+                      {hasVotedGroup ? (
+                        <CheckCircle2 size={12} className="text-emerald-600" />
+                      ) : (
+                        <Vote size={12} className="text-[#1D4E89]" />
+                      )}
+                      <span>{g.label}</span>
+                      {Boolean(user) && (
+                        <span className="text-[10px] text-slate-500 tabular-nums">
+                          ({gPoll?.totalBallots || 0})
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Admin Deterministic Stage Resolution Button */}
+              {isAdmin && (
+                <div className="pt-2 border-t border-[#1D4E89]/15 flex flex-wrap items-center justify-between gap-2.5">
+                  <div className="text-[11px] text-slate-600 tabular-nums">
+                    {tr('Jumla ya kura hatua hii:', 'Stage ballots cast:')}{' '}
+                    <strong className="text-[#0A2540]">{stageVotesTotal.toLocaleString()}</strong>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={advancing}
+                    onClick={handleAdvanceStage}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#0A2540] hover:bg-[#1D4E89] disabled:opacity-60 text-white text-xs font-extrabold shadow-xs transition-colors"
+                  >
+                    <RefreshCw size={13} className={advancing ? 'animate-spin' : ''} />
+                    {advancing
+                      ? tr('Inachakata Matokeo...', 'Processing Votes...')
+                      : activeStage.isFinal
+                        ? tr('Chakata Kura & Tangaza Washindi Rasmi', 'Tally Votes & Crown Winners')
+                        : tr('Chakata Kura & Endelea Hatua Inayofuata', 'Tally Votes & Launch Next Round')}
+                  </button>
+                </div>
+              )}
+            </div>
+          )
+        )}
+
+        {/* Stage Timeline Summary */}
+        {tournament.stages.length > 0 && (
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pt-0.5">
+            {tournament.stages.map((st, sIdx) => (
+              <div
+                key={`${st.round}_${sIdx}`}
+                className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border shrink-0 flex items-center gap-1 ${
+                  st.status === 'completed'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : 'bg-indigo-50 border-indigo-200 text-indigo-800'
+                }`}
+              >
+                {st.status === 'completed' ? <Check size={11} /> : <Clock size={11} />}
+                <span>{st.title}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Inline Delete Confirmation */}
+        {isAdmin && confirmDelete && (
+          <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <span className="font-bold text-rose-900">
+              {tr(
+                'Futa mchakato huu wa mtoano na kadi zake zote za kura?',
+                'Delete this elimination process and all its linked ballots?'
+              )}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(false)}
+                className="px-2.5 py-1 rounded-lg border border-rose-200 bg-white font-semibold text-slate-700"
+              >
+                {tr('Ghairi', 'Cancel')}
+              </button>
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={handleDelete}
+                className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 font-bold text-white"
+              >
+                {deleting ? tr('Inafuta...', 'Deleting...') : tr('Thibitisha Futa', 'Confirm Delete')}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
+// MAIN MPOLL HUB (ZERO MODALS: LIST / BUILDER / TOURNAMENT / RESULTS)
 // ============================================================================
 export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
   polls,
@@ -4901,13 +7266,16 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
   isSuspended,
   selectedPollId,
   onClearSelectedPoll,
+  mpollBgTheme = 'darkblue',
+  onToggleMpollBgTheme,
   onBack,
   onSignIn,
   onToast,
   onRequestConfirm,
 }) => {
   const { tr } = useLanguage();
-  const [viewMode, setViewMode] = useState<'list' | 'builder' | 'results'>('list');
+  const isDarkBlue = mpollBgTheme === 'darkblue';
+  const [viewMode, setViewMode] = useState<'list' | 'builder' | 'results' | 'tournament'>('list');
   const [editingPoll, setEditingPoll] = useState<Poll | null>(null);
   const [resultsPollId, setResultsPollId] = useState<string | null>(null);
   const [resultsTallies, setResultsTallies] = useState<Record<string, number>>({});
@@ -4916,6 +7284,13 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [deepLinkPoll, setDeepLinkPoll] = useState<Poll | null>(null);
   const [loadingDeepLink, setLoadingDeepLink] = useState(false);
+  const [tournaments, setTournaments] = useState<PollTournament[]>([]);
+  const [selectedTournamentIdFilter, setSelectedTournamentIdFilter] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unsub = subscribePollTournaments(setTournaments);
+    return () => unsub();
+  }, []);
 
   // Fallback fetch when someone opens a short share link `/?p=<id>` that isn't in initial list
   useEffect(() => {
@@ -4964,6 +7339,10 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
   };
 
   const openResultsView = (pollId: string, initialTallies: Record<string, number>) => {
+    if (!user) {
+      onSignIn('vote');
+      return;
+    }
     setResultsPollId(pollId);
     setResultsTallies(initialTallies);
     setViewMode('results');
@@ -4980,11 +7359,17 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
   }, [polls, deepLinkPoll, resultsPollId]);
 
   useEffect(() => {
-    if (viewMode !== 'results' || !activeResultsPoll) return;
+    if (viewMode !== 'results' || !activeResultsPoll || !user) return;
     const hasVoted = Boolean(userBallots[activeResultsPoll.id]?.selectedOptionIds?.length);
-    const allowed = canViewPollResults(activeResultsPoll, hasVoted, isAdmin);
+    const allowed = canViewPollResults(
+      activeResultsPoll,
+      hasVoted,
+      isAdmin,
+      Date.now(),
+      Boolean(user)
+    );
     return subscribePollTallies(activeResultsPoll, allowed, setResultsTallies);
-  }, [viewMode, activeResultsPoll, userBallots, isAdmin]);
+  }, [viewMode, activeResultsPoll, user, userBallots, isAdmin]);
 
   const handleDeletePollInline = async (poll: Poll) => {
     try {
@@ -5017,6 +7402,7 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
     }
     const q = searchQuery.trim().toLowerCase();
     return combinedPolls.filter((p) => {
+      if (selectedTournamentIdFilter && p.tournamentId !== selectedTournamentIdFilter) return false;
       if (categoryFilter !== 'all' && p.category !== categoryFilter) return false;
       const openNow = isPollEffectivelyOpen(p);
       if (statusFilter === 'open' && !openNow) return false;
@@ -5030,11 +7416,20 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
         p.options.some(
           (o) =>
             o.label.toLowerCase().includes(q) ||
-            (o.subtitle && o.subtitle.toLowerCase().includes(q))
+            (o.subtitle && o.subtitle.toLowerCase().includes(q)) ||
+            (o.positionTitle && o.positionTitle.toLowerCase().includes(q))
         )
       );
     });
-  }, [combinedPolls, selectedPollId, searchQuery, categoryFilter, statusFilter, userBallots]);
+  }, [
+    combinedPolls,
+    selectedPollId,
+    selectedTournamentIdFilter,
+    searchQuery,
+    categoryFilter,
+    statusFilter,
+    userBallots,
+  ]);
 
   const openCount = useMemo(
     () => polls.filter((p) => isPollEffectivelyOpen(p)).length,
@@ -5048,7 +7443,7 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
   // SUB-VIEW 1: INLINE MPOLL BUILDER (ZERO POPUPS)
   if (viewMode === 'builder' && isAdmin && user) {
     return (
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-4xl mx-auto px-3 sm:px-5 py-4 sm:py-6">
         <InlinePollBuilder
           editingPoll={editingPoll}
           user={user}
@@ -5064,6 +7459,34 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
             setViewMode('list');
             scrollToTop();
           }}
+          onOpenTournamentStudio={() => {
+            setEditingPoll(null);
+            setViewMode('tournament');
+            scrollToTop();
+          }}
+          onToast={onToast}
+        />
+      </div>
+    );
+  }
+
+  // SUB-VIEW 1B: INLINE DETERMINISTIC MULTI-STAGE TOURNAMENT STUDIO
+  if (viewMode === 'tournament' && isAdmin && user) {
+    return (
+      <div className="max-w-4xl mx-auto px-3 sm:px-5 py-4 sm:py-6">
+        <InlineTournamentBuilder
+          user={user}
+          userDisplayName={userDisplayName}
+          userPhoto={userPhoto}
+          onCancel={() => {
+            setViewMode('list');
+            scrollToTop();
+          }}
+          onCreated={(tournamentId) => {
+            setSelectedTournamentIdFilter(tournamentId);
+            setViewMode('list');
+            scrollToTop();
+          }}
           onToast={onToast}
         />
       </div>
@@ -5071,9 +7494,9 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
   }
 
   // SUB-VIEW 2: INLINE RESULTS & PROFESSIONAL ANALYTICS PAGE (ZERO POPUPS)
-  if (viewMode === 'results' && activeResultsPoll) {
+  if (viewMode === 'results' && activeResultsPoll && user) {
     return (
-      <div className="max-w-5xl mx-auto">
+      <div className="max-w-5xl mx-auto px-3 sm:px-5 py-4 sm:py-6">
         <InlinePollResultsPage
           poll={activeResultsPoll}
           tallies={resultsTallies}
@@ -5093,72 +7516,177 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
 
   // SUB-VIEW 3: MAIN MPOLL FEED
   return (
-    <div className="max-w-4xl mx-auto space-y-4">
-      {/* Header Banner */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 shadow-xs space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
+    <div className="max-w-4xl mx-auto px-3 sm:px-5 py-4 sm:py-6 space-y-3.5 sm:space-y-4">
+      {/* Compact Modern Header Banner */}
+      <div
+        className={`border rounded-2xl p-3 sm:p-4 space-y-2.5 transition-colors duration-200 ${
+          isDarkBlue
+            ? 'bg-[#0B2242]/95 border-[#2B5D9E]/45 text-white shadow-lg'
+            : 'bg-white border-slate-200 shadow-xs text-[#0F172A]'
+        }`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
             {onBack && (
               <button
                 type="button"
                 onClick={onBack}
-                className="w-10 h-10 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 flex items-center justify-center shrink-0"
+                className={`w-9 h-9 rounded-xl border flex items-center justify-center shrink-0 transition-colors ${
+                  isDarkBlue
+                    ? 'border-[#2B5D9E]/50 bg-[#102D54] hover:bg-[#173D70] text-sky-100'
+                    : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700'
+                }`}
                 aria-label={tr('Rudi', 'Back')}
               >
-                <ArrowLeft size={18} />
+                <ArrowLeft size={17} />
               </button>
             )}
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="w-8 h-8 rounded-lg bg-[#1D4E89] text-white flex items-center justify-center">
-                  <Vote size={17} />
-                </span>
-                <div>
-                  <h1 className="text-lg sm:text-xl font-extrabold text-[#0F172A] tracking-tight leading-none">
-                    Mpoll
-                  </h1>
-                  <p className="text-xs text-slate-500 mt-1">
-                    {tr(
-                      'Kura za Wagombea, Shule, Serikali za Mitaa, X, WhatsApp & Mjadala wa Maoni Huru.',
-                      'Candidate, School, Local Govt, X, WhatsApp Polls & Open Opinion Discussions.'
-                    )}
-                  </p>
-                </div>
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span
+                className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 shadow-2xs ${
+                  isDarkBlue ? 'bg-sky-400 text-[#041226]' : 'bg-[#1D4E89] text-white'
+                }`}
+              >
+                <Vote size={16} />
+              </span>
+              <div className="min-w-0">
+                <h1
+                  className={`text-base sm:text-xl font-extrabold tracking-tight leading-none ${
+                    isDarkBlue ? 'text-white' : 'text-[#0F172A]'
+                  }`}
+                >
+                  Mpoll Studio
+                </h1>
+                <p
+                  className={`hidden sm:block text-xs mt-1 truncate ${
+                    isDarkBlue ? 'text-sky-100/75' : 'text-slate-500'
+                  }`}
+                >
+                  {tr(
+                    'Kura za Wagombea, Shule, Serikali za Mitaa, X, WhatsApp & Mjadala wa Maoni Huru.',
+                    'Candidate, School, Local Govt, X, WhatsApp Polls & Open Opinion Discussions.'
+                  )}
+                </p>
               </div>
             </div>
           </div>
 
-          {isAdmin && (
-            <button
-              type="button"
-              onClick={openBuilderForNew}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#1D4E89] hover:bg-[#163d6c] text-white text-xs font-bold transition-colors shadow-xs"
-            >
-              <Plus size={16} />
-              {tr('Tengeneza Mpoll Mpya', 'Create New Mpoll')}
-            </button>
-          )}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {onToggleMpollBgTheme && (
+              <button
+                type="button"
+                onClick={onToggleMpollBgTheme}
+                title={
+                  isDarkBlue
+                    ? tr('Badili mandhari kwenda rangi ya awali (Mwanga)', 'Switch Mpoll background to Light')
+                    : tr('Badili mandhari kwenda Dark Blue', 'Switch Mpoll background to Dark Blue')
+                }
+                aria-label={
+                  isDarkBlue
+                    ? tr('Badili mandhari kwenda Mwanga', 'Switch to Light background')
+                    : tr('Badili mandhari kwenda Dark Blue', 'Switch to Dark Blue background')
+                }
+                className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl border text-xs font-bold transition-colors shrink-0 ${
+                  isDarkBlue
+                    ? 'border-[#2B5D9E]/60 bg-[#102D54] hover:bg-[#173D70] text-sky-100'
+                    : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-[#0A2540]'
+                }`}
+              >
+                {isDarkBlue ? (
+                  <>
+                    <Sun size={14} className="text-amber-300 shrink-0" />
+                    <span className="hidden xs:inline sm:inline">{tr('Mwanga', 'Light')}</span>
+                  </>
+                ) : (
+                  <>
+                    <Moon size={14} className="text-[#0A2540] shrink-0" />
+                    <span className="hidden xs:inline sm:inline">Dark Blue</span>
+                  </>
+                )}
+              </button>
+            )}
+
+            {isAdmin && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingPoll(null);
+                    setViewMode('tournament');
+                    scrollToTop();
+                  }}
+                  title={tr('Mchakato wa Mtoano wa Viongozi (30–300)', 'Multi-Stage Leader Elimination')}
+                  className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl border text-xs font-bold transition-colors shrink-0 ${
+                    isDarkBlue
+                      ? 'border-indigo-400/50 bg-indigo-500/25 hover:bg-indigo-500/40 text-sky-100'
+                      : 'border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-800'
+                  }`}
+                >
+                  <GitBranch size={14} />
+                  <span className="hidden md:inline">{tr('Mtoano (30–300)', 'Elimination')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={openBuilderForNew}
+                  className={`inline-flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-colors shadow-xs shrink-0 ${
+                    isDarkBlue
+                      ? 'bg-sky-400 hover:bg-sky-300 text-[#041226]'
+                      : 'bg-[#1D4E89] hover:bg-[#163d6c] text-white'
+                  }`}
+                >
+                  <Plus size={15} />
+                  <span className="sm:hidden">{tr('Tengeneza', 'New Mpoll')}</span>
+                  <span className="hidden sm:inline">{tr('Tengeneza Mpoll Mpya', 'Create New Mpoll')}</span>
+                </button>
+              </>
+            )}
+          </div>
         </div>
 
-        {/* Clean Metrics Line (no pill bloat) */}
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-600 pt-2 border-t border-slate-100 tabular-nums">
+        {/* Clean Single-Row Metrics Strip (horizontal scroll on extra-narrow phones) */}
+        <div
+          className={`flex items-center gap-x-3 text-[11px] sm:text-xs pt-2 border-t tabular-nums overflow-x-auto no-scrollbar whitespace-nowrap ${
+            isDarkBlue
+              ? 'text-sky-100/80 border-[#2B5D9E]/35'
+              : 'text-slate-600 border-slate-100'
+          }`}
+        >
           <span>
-            <strong className="text-[#0F172A]">{polls.length}</strong>{' '}
-            {tr('kura zote', 'total polls')}
+            <strong className={isDarkBlue ? 'text-white' : 'text-[#0F172A]'}>{polls.length}</strong>{' '}
+            {tr('maswali', 'polls')}
           </span>
-          <span className="text-slate-300">·</span>
+          <span className={isDarkBlue ? 'text-sky-400/40' : 'text-slate-300'}>·</span>
           <span>
-            <strong className="text-emerald-700">{openCount}</strong>{' '}
-            {tr('zipo wazi sasa', 'open now')}
+            <strong className={isDarkBlue ? 'text-emerald-300' : 'text-emerald-700'}>
+              {openCount}
+            </strong>{' '}
+            {tr('wazi', 'open')}
           </span>
-          <span className="text-slate-300">·</span>
-          <span>
-            <strong className="text-[#1D4E89]">{totalParticipations.toLocaleString()}</strong>{' '}
-            {tr('ushiriki wa wapiga kura', 'total ballots cast')}
-          </span>
-          <span className="text-slate-300">·</span>
-          <span className="inline-flex items-center gap-1 text-slate-500">
-            <ShieldCheck size={13} className="text-emerald-600" />
+          <span className={isDarkBlue ? 'text-sky-400/40' : 'text-slate-300'}>·</span>
+          {Boolean(user) ? (
+            <span>
+              <strong className={isDarkBlue ? 'text-sky-300' : 'text-[#1D4E89]'}>
+                {totalParticipations.toLocaleString()}
+              </strong>{' '}
+              {tr('kura zilizopigwa', 'ballots')}
+            </span>
+          ) : (
+            <span
+              className={`inline-flex items-center gap-1 font-semibold ${
+                isDarkBlue ? 'text-amber-300' : 'text-amber-700'
+              }`}
+            >
+              <EyeOff size={12} />
+              {tr('Matokeo: Wanachama Tu', 'Tallies: Members Only')}
+            </span>
+          )}
+          <span className={isDarkBlue ? 'text-sky-400/40' : 'text-slate-300'}>·</span>
+          <span
+            className={`inline-flex items-center gap-1 ${
+              isDarkBlue ? 'text-sky-100/75' : 'text-slate-500'
+            }`}
+          >
+            <ShieldCheck size={12} className={isDarkBlue ? 'text-emerald-300' : 'text-emerald-600'} />
             {tr('Akaunti 1 = Kura 1', '1 Account = 1 Vote')}
           </span>
         </div>
@@ -5166,8 +7694,14 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
 
       {/* Shared Deep-Link Focus Strip */}
       {selectedPollId && (
-        <div className="bg-sky-50 border border-sky-200 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-2 text-xs">
-          <div className="flex items-center gap-2 font-bold text-[#1D4E89]">
+        <div
+          className={`border rounded-xl p-3 flex flex-wrap items-center justify-between gap-2 text-xs ${
+            isDarkBlue
+              ? 'bg-[#0B2242]/95 border-[#2B5D9E]/50 text-sky-100'
+              : 'bg-sky-50 border-sky-200 text-[#1D4E89]'
+          }`}
+        >
+          <div className="flex items-center gap-2 font-bold">
             <ExternalLink size={15} />
             {tr(
               'Umefungua kiungo kifupi cha Mpoll hii moja kwa moja.',
@@ -5178,7 +7712,11 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
             <button
               type="button"
               onClick={onClearSelectedPoll}
-              className="px-3 py-1.5 rounded-lg bg-white border border-sky-200 font-bold text-[#1D4E89] hover:bg-sky-100/50"
+              className={`px-3 py-1.5 rounded-lg border font-bold transition-colors ${
+                isDarkBlue
+                  ? 'bg-[#102D54] border-[#2B5D9E]/60 text-white hover:bg-[#173D70]'
+                  : 'bg-white border-sky-200 text-[#1D4E89] hover:bg-sky-100/50'
+              }`}
             >
               {tr('Onyesha Mpoll Zote', 'Show All Mpolls')}
             </button>
@@ -5186,77 +7724,190 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
         </div>
       )}
 
-      {/* Search & Filters (when not locked to single shared link) */}
+      {/* Compact Mobile-First Search + Inline Status + Horizontal Category Tabs */}
       {!selectedPollId && (
-        <div className="bg-white border border-slate-200 rounded-xl p-3 sm:p-4 space-y-2.5 shadow-xs">
-          <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
-            <div className="sm:col-span-6 relative">
+        <div
+          className={`border rounded-2xl p-2.5 sm:p-3 space-y-2 transition-colors duration-200 ${
+            isDarkBlue
+              ? 'bg-[#0B2242]/95 border-[#2B5D9E]/45 text-white shadow-md'
+              : 'bg-white border-slate-200 shadow-xs text-[#0F172A]'
+          }`}
+        >
+          {/* Row 1: Search & Status always side-by-side even on narrow phones */}
+          <div className="flex items-center gap-2">
+            <div className="flex-1 min-w-0 relative">
               <Search
-                size={15}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                size={14}
+                className={`absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none ${
+                  isDarkBlue ? 'text-sky-300/70' : 'text-slate-400'
+                }`}
               />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder={tr(
-                  'Tafuta swali, mgombea, shule, au mtaa...',
-                  'Search question, candidate, school, or ward...'
-                )}
-                className="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1D4E89]/25 focus:bg-white"
+                placeholder={tr('Tafuta swali, mgombea...', 'Search poll or candidate...')}
+                className={`w-full h-9 pl-8 pr-7 text-xs border rounded-xl focus:outline-none focus:ring-2 ${
+                  isDarkBlue
+                    ? 'bg-[#07172E] border-[#2B5D9E]/50 text-white placeholder:text-sky-200/50 focus:ring-sky-400/35'
+                    : 'bg-slate-50 border-slate-200 text-[#0F172A] focus:ring-[#1D4E89]/25 focus:bg-white'
+                }`}
               />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className={`absolute right-2 top-1/2 -translate-y-1/2 ${
+                    isDarkBlue ? 'text-sky-200/70 hover:text-white' : 'text-slate-400 hover:text-slate-600'
+                  }`}
+                  aria-label={tr('Futa utafutaji', 'Clear search')}
+                >
+                  <X size={13} />
+                </button>
+              )}
             </div>
 
-            <div className="sm:col-span-3">
-              <select
-                value={statusFilter}
-                onChange={(e) =>
-                  setStatusFilter(e.target.value as 'all' | 'open' | 'closed' | 'voted')
-                }
-                className="w-full px-3 py-2 text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1D4E89]/25"
-              >
-                <option value="all">{tr('Hali Zote', 'All Statuses')}</option>
-                <option value="open">{tr('Zipo Wazi Sasa', 'Open Now')}</option>
-                <option value="closed">{tr('Zilizofungwa', 'Closed / Ended')}</option>
-                {user && <option value="voted">{tr('Nilizopiga Kura', 'Voted by Me')}</option>}
-              </select>
-            </div>
-
-            <div className="sm:col-span-3">
-              <select
-                value={categoryFilter}
-                onChange={(e) => setCategoryFilter(e.target.value)}
-                className="w-full px-3 py-2 text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1D4E89]/25"
-              >
-                <option value="all">{tr('Kategoria Zote', 'All Categories')}</option>
-                {POLL_CATEGORIES.map((cat) => (
-                  <option key={cat} value={cat}>
-                    {cat}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <select
+              value={statusFilter}
+              onChange={(e) =>
+                setStatusFilter(e.target.value as 'all' | 'open' | 'closed' | 'voted')
+              }
+              aria-label={tr('Chuja kwa hali', 'Filter by status')}
+              className={`w-[116px] sm:w-40 shrink-0 h-9 px-2.5 text-xs font-semibold border rounded-xl focus:outline-none focus:ring-2 ${
+                isDarkBlue
+                  ? 'bg-[#07172E] border-[#2B5D9E]/50 text-white focus:ring-sky-400/35'
+                  : 'bg-slate-50 border-slate-200 text-[#0F172A] focus:ring-[#1D4E89]/25'
+              }`}
+            >
+              <option value="all" className="bg-white text-[#0F172A]">{tr('Hali Zote', 'All Status')}</option>
+              <option value="open" className="bg-white text-[#0F172A]">{tr('Wazi Sasa', 'Open Now')}</option>
+              <option value="closed" className="bg-white text-[#0F172A]">{tr('Zimefungwa', 'Closed')}</option>
+              {user && <option value="voted" className="bg-white text-[#0F172A]">{tr('Nilizopiga', 'Voted')}</option>}
+            </select>
           </div>
+
+          {/* Row 2: Slim Horizontal Category Filter Bar */}
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pt-0.5">
+            <button
+              type="button"
+              onClick={() => setCategoryFilter('all')}
+              className={`h-7 px-2.5 rounded-lg text-[11px] font-bold shrink-0 transition-colors ${
+                categoryFilter === 'all'
+                  ? isDarkBlue
+                    ? 'bg-sky-400 text-[#041226]'
+                    : 'bg-[#1D4E89] text-white'
+                  : isDarkBlue
+                    ? 'bg-[#102D54] hover:bg-[#173D70] text-sky-100'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+              }`}
+            >
+              {tr('Zote', 'All')}
+            </button>
+            {POLL_CATEGORIES.map((cat) => (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => setCategoryFilter(cat)}
+                className={`h-7 px-2.5 rounded-lg text-[11px] font-bold shrink-0 transition-colors ${
+                  categoryFilter === cat
+                    ? isDarkBlue
+                      ? 'bg-sky-400 text-[#041226]'
+                      : 'bg-[#1D4E89] text-white'
+                    : isDarkBlue
+                      ? 'bg-[#102D54] hover:bg-[#173D70] text-sky-100'
+                      : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+                }`}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Active & Completed Multi-Stage Leader Elimination Processes */}
+      {!selectedPollId && tournaments.length > 0 && (
+        <div className="space-y-3">
+          {selectedTournamentIdFilter && (
+            <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-indigo-50 border border-indigo-200 text-xs text-indigo-900 font-bold">
+              <span>
+                {tr('Unaona kadi za mchakato mmoja wa mtoano.', 'Filtered to selected elimination process.')}
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedTournamentIdFilter(null)}
+                className="px-2.5 py-1 rounded-lg bg-white border border-indigo-200 hover:bg-indigo-100 text-indigo-800"
+              >
+                {tr('Onyesha Mpoll Zote', 'Show All Polls')}
+              </button>
+            </div>
+          )}
+
+          {tournaments
+            .filter((t) => !selectedTournamentIdFilter || t.id === selectedTournamentIdFilter)
+            .map((t) => (
+              <TournamentTrackerCard
+                key={t.id}
+                tournament={t}
+                allPolls={combinedPolls}
+                userBallots={userBallots}
+                user={user}
+                userDisplayName={userDisplayName}
+                userPhoto={userPhoto}
+                isAdmin={isAdmin}
+                isSelectedFilter={selectedTournamentIdFilter === t.id}
+                onToggleFilter={() =>
+                  setSelectedTournamentIdFilter((prev) => (prev === t.id ? null : t.id))
+                }
+                onFocusGroupPoll={(pid) => {
+                  const el = document.getElementById(`poll-card-${pid}`);
+                  if (el) {
+                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  } else {
+                    setSelectedTournamentIdFilter(t.id);
+                    setStatusFilter('all');
+                    setCategoryFilter('all');
+                  }
+                }}
+                onToast={onToast}
+              />
+            ))}
         </div>
       )}
 
       {/* Polls Feed */}
       {loading || loadingDeepLink ? (
-        <div className="bg-white border border-slate-200 rounded-xl p-10 text-center text-xs font-semibold text-slate-500">
+        <div
+          className={`border rounded-xl p-10 text-center text-xs font-semibold ${
+            isDarkBlue
+              ? 'bg-[#0B2242]/95 border-[#2B5D9E]/45 text-sky-100'
+              : 'bg-white border-slate-200 text-slate-500'
+          }`}
+        >
           {tr('Inapakia Mpoll...', 'Loading Mpolls...')}
         </div>
       ) : filteredPolls.length === 0 ? (
-        <div className="bg-white border border-slate-200 rounded-xl p-10 text-center space-y-3">
-          <div className="w-12 h-12 rounded-xl bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
+        <div
+          className={`border rounded-xl p-10 text-center space-y-3 ${
+            isDarkBlue
+              ? 'bg-[#0B2242]/95 border-[#2B5D9E]/45 text-white'
+              : 'bg-white border-slate-200 text-[#0F172A]'
+          }`}
+        >
+          <div
+            className={`w-12 h-12 rounded-xl flex items-center justify-center mx-auto ${
+              isDarkBlue ? 'bg-[#102D54] text-sky-300' : 'bg-slate-100 text-slate-400'
+            }`}
+          >
             <Vote size={24} />
           </div>
           <div className="space-y-1">
-            <h3 className="text-sm font-bold text-[#0F172A]">
+            <h3 className={`text-sm font-bold ${isDarkBlue ? 'text-white' : 'text-[#0F172A]'}`}>
               {selectedPollId
                 ? tr('Mpoll hii haikupatikana.', 'This Mpoll could not be found.')
                 : tr('Hakuna Mpoll zilizopatikana.', 'No Mpolls found.')}
             </h3>
-            <p className="text-xs text-slate-500">
+            <p className={`text-xs ${isDarkBlue ? 'text-sky-100/75' : 'text-slate-500'}`}>
               {isAdmin && !selectedPollId
                 ? tr(
                     'Bofya "Tengeneza Mpoll Mpya" kuanzisha kura au uchaguzi.',
@@ -5269,7 +7920,9 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
             <button
               type="button"
               onClick={openBuilderForNew}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#1D4E89] text-white text-xs font-bold"
+              className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold ${
+                isDarkBlue ? 'bg-sky-400 hover:bg-sky-300 text-[#041226]' : 'bg-[#1D4E89] text-white'
+              }`}
             >
               <Plus size={14} />
               {tr('Tengeneza Mpoll Mpya', 'Create New Mpoll')}
@@ -5279,24 +7932,25 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
       ) : (
         <div className="space-y-4">
           {filteredPolls.map((poll) => (
-            <PollCard
-              key={poll.id}
-              poll={poll}
-              userBallot={userBallots[poll.id]}
-              onBallotSaved={onBallotSaved}
-              user={user}
-              userDisplayName={userDisplayName}
-              userPhoto={userPhoto}
-              isAdmin={isAdmin}
-              isSuspended={isSuspended}
-              onSignIn={onSignIn}
-              onToast={onToast}
-              onRequestConfirm={onRequestConfirm}
-              onEdit={openBuilderForEdit}
-              onOpenResults={openResultsView}
-              onDeleteInline={handleDeletePollInline}
-              isHighlighted={selectedPollId === poll.id}
-            />
+            <div key={poll.id} id={`poll-card-${poll.id}`}>
+              <PollCard
+                poll={poll}
+                userBallot={userBallots[poll.id]}
+                onBallotSaved={onBallotSaved}
+                user={user}
+                userDisplayName={userDisplayName}
+                userPhoto={userPhoto}
+                isAdmin={isAdmin}
+                isSuspended={isSuspended}
+                onSignIn={onSignIn}
+                onToast={onToast}
+                onRequestConfirm={onRequestConfirm}
+                onEdit={openBuilderForEdit}
+                onOpenResults={openResultsView}
+                onDeleteInline={handleDeletePollInline}
+                isHighlighted={selectedPollId === poll.id}
+              />
+            </div>
           ))}
         </div>
       )}

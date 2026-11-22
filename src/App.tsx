@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Lock, Plus } from 'lucide-react';
 import {
   User,
-  getRedirectResult,
   onAuthStateChanged,
   signOut,
   updateProfile,
@@ -28,6 +27,8 @@ import {
 import {
   AuthPromptReason,
   ChatMessage,
+  ContentRetentionPeriod,
+  ContentRetentionSettings,
   DirectChatThread,
   MchartNote,
   MchartStatus,
@@ -55,7 +56,10 @@ import {
   normalizeVerificationBadge,
 } from './types';
 import {
+  DEFAULT_CONTENT_RETENTION_SETTINGS,
+  READ_NOTIFICATION_TTL_MS,
   checkUserVideoLikesBatch,
+  cleanupExpiredReadNotifications,
   createTopic,
   deleteTopic,
   editTopic,
@@ -63,12 +67,16 @@ import {
   getPrivateUserInfo,
   markAllUserNotificationsRead,
   markUserNotificationRead,
+  runKijiweniRetentionCleanup,
+  runVideoRetentionCleanup,
   seedStarterTopics,
   submitReport,
+  subscribeContentRetentionSettings,
   subscribeSiteNavSettings,
   syncUserProfile,
   toggleTopicPin,
   toggleTopicVote,
+  updateContentRetentionSettings,
   updateHideVideoTabForUsers,
   updatePrivatePhoneNumber,
   updateReportStatus,
@@ -117,7 +125,9 @@ const READ_NOTE_IDS_KEY = 'malosha_read_note_ids_v1';
 const BOARD_LAST_SEEN_KEY = 'malosha_board_last_seen_v1';
 const READ_TOPIC_IDS_KEY = 'malosha_read_topic_ids_v1';
 const VIDEO_LAST_SEEN_KEY = 'malosha_videos_last_seen_ms_v1';
+const VOTES_LAST_SEEN_KEY = 'malosha_votes_last_seen_ms_v1';
 const ADMIN_SIGNUP_LAST_SEEN_KEY = 'malosha_admin_signup_last_seen_v1';
+const MPOLL_BG_THEME_KEY = 'malosha_mpoll_bg_theme_v1';
 
 function getStartOfTodayBoundaryMs(): number {
   const now = new Date();
@@ -153,9 +163,60 @@ function ForumShell() {
       return defaultCutoff;
     }
   });
+  const [votesLastSeenMs, setVotesLastSeenMs] = useState<number>(() => {
+    const defaultCutoff = Date.now() - 14 * 86_400_000;
+    if (typeof window === 'undefined') return defaultCutoff;
+    try {
+      const saved = Number(window.localStorage.getItem(VOTES_LAST_SEEN_KEY) || 0);
+      return Number.isFinite(saved) && saved > 0 ? saved : defaultCutoff;
+    } catch {
+      return defaultCutoff;
+    }
+  });
+  const [mpollBgTheme, setMpollBgTheme] = useState<'darkblue' | 'light'>(() => {
+    if (typeof window === 'undefined') return 'darkblue';
+    try {
+      const saved = window.localStorage.getItem(MPOLL_BG_THEME_KEY);
+      return saved === 'light' ? 'light' : 'darkblue';
+    } catch {
+      return 'darkblue';
+    }
+  });
+
+  const handleToggleMpollBgTheme = useCallback(() => {
+    setMpollBgTheme((prev) => {
+      const next = prev === 'darkblue' ? 'light' : 'darkblue';
+      try {
+        window.localStorage.setItem(MPOLL_BG_THEME_KEY, next);
+      } catch {
+        // Ignore storage errors
+      }
+      return next;
+    });
+  }, []);
   const [reports, setReports] = useState<Report[]>([]);
   const [userNotifications, setUserNotifications] = useState<UserNotification[]>([]);
   const [hideVideoTabForUsers, setHideVideoTabForUsers] = useState(false);
+  const [retentionSettings, setRetentionSettings] = useState<ContentRetentionSettings>(() => ({
+    ...DEFAULT_CONTENT_RETENTION_SETTINGS,
+  }));
+  const [retentionProgress, setRetentionProgress] = useState<{
+    runningKijiweni: boolean;
+    runningVideo: boolean;
+    kijiweniDeleted: number;
+    kijiweniTotal: number;
+    videoDeleted: number;
+    videoTotal: number;
+    currentLabel: string;
+  }>({
+    runningKijiweni: false,
+    runningVideo: false,
+    kijiweniDeleted: 0,
+    kijiweniTotal: 0,
+    videoDeleted: 0,
+    videoTotal: 0,
+    currentLabel: '',
+  });
   const [adminRecentSignups, setAdminRecentSignups] = useState<UserProfile[]>([]);
   const [adminSignupLastSeenMs, setAdminSignupLastSeenMs] = useState<number>(() => {
     const fallback = Date.now() - 86_400_000;
@@ -390,6 +451,11 @@ function ForumShell() {
   const selectedTopicIdRef = useRef<string | null>(selectedTopicId);
   const checkedVoteKeysRef = useRef<Set<string>>(new Set());
   const feedScrollYRef = useRef<number>(0);
+  const retentionSettingsRef = useRef<ContentRetentionSettings>(retentionSettings);
+  const isAdminRef = useRef(false);
+  const kijiweniCleanupActiveRef = useRef(false);
+  const videoCleanupActiveRef = useRef(false);
+  const cleaningNotifIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     activeTabRef.current = activeTab;
@@ -407,6 +473,10 @@ function ForumShell() {
     selectedTopicIdRef.current = selectedTopicId;
   }, [selectedTopicId]);
 
+  useEffect(() => {
+    retentionSettingsRef.current = retentionSettings;
+  }, [retentionSettings]);
+
   const pwa = usePWAInstall();
 
   const showToast = useCallback((text: string, kind: 'success' | 'error' = 'success') => {
@@ -420,36 +490,27 @@ function ForumShell() {
   }, [toast]);
 
   useEffect(() => {
-    void getRedirectResult(auth)
-      .then((result) => {
-        if (result?.user) {
-          showToast(
-            tr(
-              'Karibu Malosha Forums! Umeingia kikamilifu.',
-              'Welcome to Malosha Forums! You are signed in.'
-            )
-          );
-        }
-      })
-      .catch((err) => {
-        console.error('Redirect auth result error:', err);
-      });
-
-    const unsub = onAuthStateChanged(auth, async (currentUser) => {
+    const unsub = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       setAuthReady(true);
       if (currentUser) {
-        try {
-          await syncUserProfile(currentUser);
-          const [adminSnap, privInfo] = await Promise.all([
-            getDoc(doc(db, 'admins', currentUser.uid)),
-            getPrivateUserInfo(currentUser.uid),
-          ]);
-          setIsAdminDoc(adminSnap.exists());
-          setUserPhone(privInfo?.phoneNumber || '');
-        } catch (err) {
-          console.error(err);
-        }
+        void (async () => {
+          try {
+            const [, adminSnap, privInfo] = await Promise.all([
+              syncUserProfile(currentUser).catch((err) => {
+                console.warn('Background profile sync warning:', err);
+              }),
+              getDoc(doc(db, 'admins', currentUser.uid)).catch(() => null),
+              getPrivateUserInfo(currentUser.uid).catch(() => null),
+            ]);
+            setIsAdminDoc(Boolean(adminSnap && adminSnap.exists()));
+            if (privInfo?.phoneNumber) {
+              setUserPhone(privInfo.phoneNumber);
+            }
+          } catch (err) {
+            console.error(err);
+          }
+        })();
       } else {
         setUserProfile(null);
         setUserPhone('');
@@ -457,12 +518,16 @@ function ForumShell() {
       }
     });
     return () => unsub();
-  }, [showToast, tr]);
+  }, []);
 
   const isAdmin = useMemo(() => {
     if (!user) return false;
     return (user.email === ADMIN_EMAIL && user.emailVerified) || isAdminDoc;
   }, [user, isAdminDoc]);
+
+  useEffect(() => {
+    isAdminRef.current = isAdmin;
+  }, [isAdmin]);
 
   const isSuspended = useMemo(() => {
     if (!user || isAdmin) return false;
@@ -1493,6 +1558,26 @@ function ForumShell() {
     });
   }, [activeTab, selectedTopicId, videos]);
 
+  // Clear Mpoll notification badge permanently once user opens Mpoll until a newer poll arrives
+  useEffect(() => {
+    if (activeTab !== 'votes' || selectedTopicId) return;
+    let latestMs = Date.now();
+    polls.forEach((p) => {
+      const ms = p.createdAt ? p.createdAt.toMillis() : 0;
+      if (ms > latestMs) latestMs = ms;
+    });
+    const nextMs = latestMs + 500;
+    setVotesLastSeenMs((prev) => {
+      if (prev >= nextMs) return prev;
+      try {
+        window.localStorage.setItem(VOTES_LAST_SEEN_KEY, String(nextMs));
+      } catch {
+        // Ignore storage errors
+      }
+      return nextMs;
+    });
+  }, [activeTab, selectedTopicId, polls]);
+
   const memberDirectoryCandidates = useMemo<MemberDirectoryCandidate[]>(() => {
     const map = new Map<string, MemberDirectoryCandidate>();
     const addCandidate = (
@@ -1586,8 +1671,9 @@ function ForumShell() {
         ? 0
         : polls.filter((p) => {
             if (!isPollEffectivelyOpen(p)) return false;
-            if (user?.uid && userPollBallots[p.id]) return false;
-            return true;
+            if (user?.uid && (userPollBallots[p.id] || p.createdBy === user.uid)) return false;
+            const ms = p.createdAt ? p.createdAt.toMillis() : 0;
+            return ms > votesLastSeenMs;
           }).length;
 
     return {
@@ -1606,6 +1692,7 @@ function ForumShell() {
     selectedTopicId,
     videos,
     videosLastSeenMs,
+    votesLastSeenMs,
     user?.uid,
     readTopicIds,
     unreadChatCount,
@@ -1628,6 +1715,195 @@ function ForumShell() {
     });
     return () => unsub();
   }, [authReady]);
+
+  // Owner-only real-time content auto-retention settings listener (Kijiweni & Video)
+  useEffect(() => {
+    if (!authReady || !user || !isAdmin) {
+      setRetentionSettings({ ...DEFAULT_CONTENT_RETENTION_SETTINGS });
+      return;
+    }
+    const unsub = subscribeContentRetentionSettings((settings) => {
+      setRetentionSettings(settings);
+    });
+    return () => unsub();
+  }, [authReady, user, isAdmin]);
+
+  const runContentRetentionSweep = useCallback(
+    async (
+      target: 'kijiweni' | 'video' | 'both',
+      overrideSettings?: ContentRetentionSettings,
+      showSummaryToast = false
+    ) => {
+      if (!user || !isAdminRef.current) return;
+      const cfg = overrideSettings || retentionSettingsRef.current;
+      let totalDeletedKijiweni = 0;
+      let totalDeletedVideo = 0;
+
+      if ((target === 'kijiweni' || target === 'both') && cfg.kijiweniEnabled && !kijiweniCleanupActiveRef.current) {
+        kijiweniCleanupActiveRef.current = true;
+        setRetentionProgress((prev) => ({
+          ...prev,
+          runningKijiweni: true,
+          kijiweniDeleted: 0,
+          kijiweniTotal: 0,
+          currentLabel: '',
+        }));
+        try {
+          const res = await runKijiweniRetentionCleanup(cfg.kijiweniPeriod, {
+            shouldContinue: () =>
+              retentionSettingsRef.current.kijiweniEnabled && isAdminRef.current,
+            onProgress: (deleted, total, currentLabel) => {
+              setRetentionProgress((prev) => ({
+                ...prev,
+                runningKijiweni: true,
+                kijiweniDeleted: deleted,
+                kijiweniTotal: total,
+                currentLabel,
+              }));
+            },
+          });
+          totalDeletedKijiweni = res.deletedCount;
+        } catch (err) {
+          console.error('Kijiweni retention sweep error:', err);
+        } finally {
+          kijiweniCleanupActiveRef.current = false;
+          setRetentionProgress((prev) => ({
+            ...prev,
+            runningKijiweni: false,
+            currentLabel: '',
+          }));
+        }
+      }
+
+      if ((target === 'video' || target === 'both') && cfg.videoEnabled && !videoCleanupActiveRef.current) {
+        videoCleanupActiveRef.current = true;
+        setRetentionProgress((prev) => ({
+          ...prev,
+          runningVideo: true,
+          videoDeleted: 0,
+          videoTotal: 0,
+          currentLabel: '',
+        }));
+        try {
+          const res = await runVideoRetentionCleanup(cfg.videoPeriod, {
+            shouldContinue: () =>
+              retentionSettingsRef.current.videoEnabled && isAdminRef.current,
+            onProgress: (deleted, total, currentLabel) => {
+              setRetentionProgress((prev) => ({
+                ...prev,
+                runningVideo: true,
+                videoDeleted: deleted,
+                videoTotal: total,
+                currentLabel,
+              }));
+            },
+          });
+          totalDeletedVideo = res.deletedCount;
+        } catch (err) {
+          console.error('Video retention sweep error:', err);
+        } finally {
+          videoCleanupActiveRef.current = false;
+          setRetentionProgress((prev) => ({
+            ...prev,
+            runningVideo: false,
+            currentLabel: '',
+          }));
+        }
+      }
+
+      if (showSummaryToast) {
+        const sum = totalDeletedKijiweni + totalDeletedVideo;
+        if (sum > 0) {
+          showToast(
+            tr(
+              `Usafishaji wa database umekamilika: machapisho ${sum} yamefutwa moja baada ya nyingine.`,
+              `Database cleanup finished: deleted ${sum} expired post(s) sequentially.`
+            )
+          );
+        } else {
+          showToast(
+            tr(
+              'Hakuna chapisho lililopitiliza muda uliowekwa kwa sasa.',
+              'No posts currently exceed the configured retention age.'
+            )
+          );
+        }
+      }
+    },
+    [user, showToast, tr]
+  );
+
+  // Automatic background retention runner while Owner is active
+  useEffect(() => {
+    if (!authReady || !user || !isAdmin) return;
+    if (!retentionSettings.kijiweniEnabled && !retentionSettings.videoEnabled) return;
+
+    void runContentRetentionSweep('both', retentionSettings, false);
+    const intervalId = window.setInterval(() => {
+      void runContentRetentionSweep('both', undefined, false);
+    }, 5 * 60_000);
+
+    return () => window.clearInterval(intervalId);
+  }, [
+    authReady,
+    user,
+    isAdmin,
+    retentionSettings.kijiweniEnabled,
+    retentionSettings.kijiweniPeriod,
+    retentionSettings.videoEnabled,
+    retentionSettings.videoPeriod,
+    runContentRetentionSweep,
+  ]);
+
+  const handleUpdateRetentionSettings = useCallback(
+    async (patch: {
+      kijiweniEnabled?: boolean;
+      kijiweniPeriod?: ContentRetentionPeriod;
+      videoEnabled?: boolean;
+      videoPeriod?: ContentRetentionPeriod;
+    }) => {
+      if (!user || !isAdmin) return;
+      const next: ContentRetentionSettings = {
+        ...retentionSettingsRef.current,
+        kijiweniEnabled:
+          typeof patch.kijiweniEnabled === 'boolean'
+            ? patch.kijiweniEnabled
+            : retentionSettingsRef.current.kijiweniEnabled,
+        kijiweniPeriod: patch.kijiweniPeriod || retentionSettingsRef.current.kijiweniPeriod,
+        videoEnabled:
+          typeof patch.videoEnabled === 'boolean'
+            ? patch.videoEnabled
+            : retentionSettingsRef.current.videoEnabled,
+        videoPeriod: patch.videoPeriod || retentionSettingsRef.current.videoPeriod,
+        updatedBy: user.uid,
+        updatedAt: retentionSettingsRef.current.updatedAt,
+      };
+      retentionSettingsRef.current = next;
+      setRetentionSettings(next);
+      try {
+        await updateContentRetentionSettings(user.uid, {
+          kijiweniEnabled: next.kijiweniEnabled,
+          kijiweniPeriod: next.kijiweniPeriod,
+          videoEnabled: next.videoEnabled,
+          videoPeriod: next.videoPeriod,
+        });
+        showToast(
+          tr(
+            'Mpango wa kufuta machapisho ya zamani umehifadhiwa.',
+            'Auto-delete retention schedule saved.'
+          )
+        );
+      } catch (err) {
+        showToast(
+          err instanceof Error
+            ? err.message
+            : tr('Imeshindwa kuhifadhi mpango wa kufuta.', 'Failed to save retention schedule.'),
+          'error'
+        );
+      }
+    },
+    [user, isAdmin, showToast, tr]
+  );
 
   const hideVideoTabForCurrentUser = hideVideoTabForUsers && !isAdmin;
 
@@ -1819,7 +2095,8 @@ function ForumShell() {
     const unsub = onSnapshot(
       q,
       (snapshot) => {
-        const list: UserNotification[] = snapshot.docs.map((d) => {
+        const nowMs = Date.now();
+        const allList: UserNotification[] = snapshot.docs.map((d) => {
           const data = d.data();
           const rawType = String(data.type || 'comment_reply');
           const nType: UserNotificationType =
@@ -1846,28 +2123,65 @@ function ForumShell() {
             ruleTitle: String(data.ruleTitle || ''),
             isRead: Boolean(data.isRead),
             createdAt: data.createdAt || null,
+            readAt: data.readAt || null,
           };
         });
 
-        list.sort((a, b) => {
+        // Auto-delete READ notifications older than 24h from Firestore; keep UNREAD notifications until read
+        const expiredRead = allList.filter((n) => {
+          if (!n.isRead) return false;
+          if (cleaningNotifIdsRef.current.has(n.id)) return false;
+          const readMs = n.readAt
+            ? n.readAt.toMillis()
+            : n.createdAt
+              ? n.createdAt.toMillis()
+              : 0;
+          return readMs > 0 && nowMs - readMs >= READ_NOTIFICATION_TTL_MS;
+        });
+
+        if (expiredRead.length > 0) {
+          expiredRead.forEach((n) => cleaningNotifIdsRef.current.add(n.id));
+          void cleanupExpiredReadNotifications(user.uid, expiredRead).finally(() => {
+            expiredRead.forEach((n) => cleaningNotifIdsRef.current.delete(n.id));
+          });
+        }
+
+        const activeList = allList.filter((n) => {
+          if (!n.isRead) return true;
+          const readMs = n.readAt
+            ? n.readAt.toMillis()
+            : n.createdAt
+              ? n.createdAt.toMillis()
+              : 0;
+          return readMs === 0 || nowMs - readMs < READ_NOTIFICATION_TTL_MS;
+        });
+
+        activeList.sort((a, b) => {
           const am = a.createdAt ? a.createdAt.toMillis() : Date.now();
           const bm = b.createdAt ? b.createdAt.toMillis() : Date.now();
           return bm - am;
         });
 
-        const capped = list.slice(0, 40);
-        setUserNotifications(capped);
+        // Never drop unread notifications: keep all unread plus recent read up to 60 total
+        const unreadItems = activeList.filter((n) => !n.isRead);
+        const recentReadItems = activeList.filter((n) => n.isRead).slice(0, Math.max(0, 60 - unreadItems.length));
+        const visibleList = [...unreadItems, ...recentReadItems].sort((a, b) => {
+          const am = a.createdAt ? a.createdAt.toMillis() : Date.now();
+          const bm = b.createdAt ? b.createdAt.toMillis() : Date.now();
+          return bm - am;
+        });
+        setUserNotifications(visibleList);
 
         if (!initialUserNotifsLoadedRef.current) {
-          knownUserNotifIdsRef.current = new Set(capped.map((n) => n.id));
+          knownUserNotifIdsRef.current = new Set(visibleList.map((n) => n.id));
           initialUserNotifsLoadedRef.current = true;
           return;
         }
 
-        const newestUnread = capped.find(
+        const newestUnread = visibleList.find(
           (n) => !n.isRead && !knownUserNotifIdsRef.current.has(n.id)
         );
-        capped.forEach((n) => knownUserNotifIdsRef.current.add(n.id));
+        visibleList.forEach((n) => knownUserNotifIdsRef.current.add(n.id));
 
         if (newestUnread) {
           const isModerationAlert =
@@ -1925,6 +2239,31 @@ function ForumShell() {
 
     return () => unsub();
   }, [authReady, user, showToast, tr]);
+
+  // Periodic 60s sweep so read notifications get deleted right when their 24h window expires
+  useEffect(() => {
+    if (!authReady || !user) return;
+    const sweepExpiredRead = () => {
+      const now = Date.now();
+      const expired = userNotifications.filter((n) => {
+        if (!n.isRead || cleaningNotifIdsRef.current.has(n.id)) return false;
+        const readMs = n.readAt
+          ? n.readAt.toMillis()
+          : n.createdAt
+            ? n.createdAt.toMillis()
+            : 0;
+        return readMs > 0 && now - readMs >= READ_NOTIFICATION_TTL_MS;
+      });
+      if (expired.length === 0) return;
+      expired.forEach((n) => cleaningNotifIdsRef.current.add(n.id));
+      void cleanupExpiredReadNotifications(user.uid, expired).finally(() => {
+        expired.forEach((n) => cleaningNotifIdsRef.current.delete(n.id));
+      });
+    };
+
+    const timer = window.setInterval(sweepExpiredRead, 60_000);
+    return () => window.clearInterval(timer);
+  }, [authReady, user, userNotifications]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -2298,6 +2637,23 @@ function ForumShell() {
     }
     if (tab !== 'votes') {
       setSelectedPollId(null);
+    }
+    if (tab === 'votes') {
+      let latestMs = Date.now();
+      polls.forEach((p) => {
+        const ms = p.createdAt ? p.createdAt.toMillis() : 0;
+        if (ms > latestMs) latestMs = ms;
+      });
+      const nextMs = latestMs + 500;
+      setVotesLastSeenMs((prev) => {
+        const next = Math.max(prev, nextMs);
+        try {
+          window.localStorage.setItem(VOTES_LAST_SEEN_KEY, String(next));
+        } catch {
+          // Ignore storage errors
+        }
+        return next;
+      });
     }
     setActiveTab(tab);
     setSelectedTopicId(null);
@@ -2773,11 +3129,15 @@ function ForumShell() {
   const appReady = authReady;
   const isMchartView = activeTab === 'chat' && !selectedTopic && !selectedTopicId;
   const isVideoView = activeTab === 'video' && !selectedTopic && !selectedTopicId;
+  const isMpollView = activeTab === 'votes' && !selectedTopic && !selectedTopicId;
+  const isMpollDarkBlue = isMpollView && mpollBgTheme === 'darkblue';
+  const isAuthView = activeTab === 'auth' && !user;
   const isFullStageView = isMchartView || isVideoView;
+  const lockViewportToScreen = isFullStageView || isAuthView;
   const [mobileKeyboardOpen, setMobileKeyboardOpen] = useState(false);
 
   useEffect(() => {
-    if (!isFullStageView || typeof window === 'undefined') {
+    if (!lockViewportToScreen || typeof window === 'undefined') {
       setMobileKeyboardOpen(false);
       return;
     }
@@ -2813,7 +3173,7 @@ function ForumShell() {
       vv?.removeEventListener('resize', checkKeyboard);
       setMobileKeyboardOpen(false);
     };
-  }, [isFullStageView]);
+  }, [lockViewportToScreen]);
 
   return (
     <UserPresenceProvider
@@ -2823,47 +3183,57 @@ function ForumShell() {
       activeArea={activePresenceArea}
       isSuspended={isSuspended}
     >
-    <div className="min-h-screen flex flex-col bg-[#F1F4F8] text-slate-900">
+    <div
+      className={`min-h-screen flex flex-col text-slate-900 transition-colors duration-300 ${
+        isMpollDarkBlue
+          ? 'bg-gradient-to-b from-[#041024] via-[#081D3A] to-[#0D2B54]'
+          : 'bg-[#F1F4F8]'
+      }`}
+    >
       <AppLaunchLoader ready={appReady} />
       <OfflineIndicator />
 
-      <div className={isVideoView ? 'hidden md:block' : ''}>
-        <Header
-          activeTab={activeTab}
-          onSelectTab={handleSelectTab}
-          onOpenTopic={openTopicFromFeed}
-          topics={topics}
-          userUid={user?.uid || null}
-          userProfile={userProfile}
-          userDisplayName={user?.displayName || 'Mwanachama'}
-          userPhoto={user?.photoURL || ''}
-          isAdmin={isAdmin}
-          isSuspended={isSuspended}
-          onSignIn={handleSignIn}
-          onSignOut={handleSignOut}
-          authBusy={authBusy}
-          onToast={showToast}
-          unreadCounts={unreadCounts}
-          userNotifications={userNotifications}
-          onMarkNotificationRead={handleMarkNotificationRead}
-          onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
-          hideVideoTab={hideVideoTabForCurrentUser}
-          recentSignups={adminRecentSignups}
-          unreadSignupCount={unreadSignupCount}
-          signupLastSeenMs={adminSignupLastSeenMs}
-          onMarkSignupsSeen={markAdminSignupsSeen}
-          onOpenAdminMembers={handleOpenAdminMembers}
-        />
-      </div>
+      {!isAuthView && (
+        <div className={isVideoView ? 'hidden md:block' : ''}>
+          <Header
+            activeTab={activeTab}
+            onSelectTab={handleSelectTab}
+            onOpenTopic={openTopicFromFeed}
+            topics={topics}
+            userUid={user?.uid || null}
+            userProfile={userProfile}
+            userDisplayName={user?.displayName || 'Mwanachama'}
+            userPhoto={user?.photoURL || ''}
+            isAdmin={isAdmin}
+            isSuspended={isSuspended}
+            onSignIn={handleSignIn}
+            onSignOut={handleSignOut}
+            authBusy={authBusy}
+            onToast={showToast}
+            unreadCounts={unreadCounts}
+            userNotifications={userNotifications}
+            onMarkNotificationRead={handleMarkNotificationRead}
+            onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
+            hideVideoTab={hideVideoTabForCurrentUser}
+            recentSignups={adminRecentSignups}
+            unreadSignupCount={unreadSignupCount}
+            signupLastSeenMs={adminSignupLastSeenMs}
+            onMarkSignupsSeen={markAdminSignupsSeen}
+            onOpenAdminMembers={handleOpenAdminMembers}
+          />
+        </div>
+      )}
 
       <main
         className={`flex-1 ${
-          isVideoView
-            ? 'pt-0 md:pt-[var(--malosha-header-h,118px)]'
-            : `pt-[var(--malosha-header-h,118px)] ${isFullStageView ? '' : 'pb-16 md:pb-0'}`
+          isAuthView
+            ? 'h-[100dvh] overflow-hidden'
+            : isVideoView
+              ? 'pt-0 md:pt-[var(--malosha-header-h,118px)]'
+              : `pt-[var(--malosha-header-h,118px)] ${isFullStageView ? '' : 'pb-16 md:pb-0'}`
         }`}
       >
-        {isSuspended && !isFullStageView && (
+        {isSuspended && !isFullStageView && !isAuthView && (
           <div className="border-b border-red-200 bg-red-50 px-4 py-3 text-red-900">
             <div className="mx-auto flex max-w-6xl flex-col items-start justify-between gap-2 sm:flex-row sm:items-center">
               <div className="flex items-start gap-2.5 text-xs sm:text-sm">
@@ -2943,79 +3313,84 @@ function ForumShell() {
             onToast={showToast}
             onRequestConfirm={(opts) => setConfirmState(opts)}
           />
-        ) : activeTab === 'auth' && !user ? (
-          <AuthView
-            promptReason={authPromptReason}
-            onBack={() => {
-              const dest = returnDestinationRef.current;
-              setAuthPromptReason(null);
-              const fallbackTab =
-                dest.tab === 'auth' || dest.tab === 'all' ? 'kijiweni' : dest.tab;
-              setActiveTab(fallbackTab);
-              setSelectedCategory(
-                fallbackTab === 'kijiweni'
-                  ? 'Kijiweni'
-                  : fallbackTab === 'fursa'
-                    ? 'Fursa'
-                    : fallbackTab === 'makala'
-                      ? 'Makala'
-                      : 'all'
-              );
-              if (dest.topicId) {
-                setSelectedTopicId(dest.topicId);
-              }
-              if (fallbackTab === 'votes' && dest.pollId) {
-                setSelectedPollId(dest.pollId);
-              }
-            }}
-            onSuccess={async (signedInUser, isNewUser) => {
-              const privInfo = await getPrivateUserInfo(signedInUser.uid).catch(() => null);
-              if (privInfo?.phoneNumber) {
-                setUserPhone(privInfo.phoneNumber);
-              }
-              const dest = returnDestinationRef.current;
-              setAuthPromptReason(null);
-              if (dest.tab === 'votes') {
-                setActiveTab('votes');
-                setSelectedCategory('all');
-                setSelectedTopicId(null);
-                setSelectedPollId(dest.pollId);
-              } else if (dest.topicId && !isNewUser) {
-                const targetTab =
+        ) : activeTab === 'auth' ? (
+          !user ? (
+            <AuthView
+              promptReason={authPromptReason}
+              onBack={() => {
+                const dest = returnDestinationRef.current;
+                setAuthPromptReason(null);
+                const fallbackTab =
                   dest.tab === 'auth' || dest.tab === 'all' ? 'kijiweni' : dest.tab;
-                setActiveTab(targetTab);
+                setActiveTab(fallbackTab);
                 setSelectedCategory(
-                  targetTab === 'kijiweni'
+                  fallbackTab === 'kijiweni'
                     ? 'Kijiweni'
-                    : targetTab === 'fursa'
+                    : fallbackTab === 'fursa'
                       ? 'Fursa'
-                      : targetTab === 'makala'
+                      : fallbackTab === 'makala'
                         ? 'Makala'
                         : 'all'
                 );
-                setSelectedTopicId(dest.topicId);
-              } else if (dest.tab === 'chat' && !isNewUser) {
-                setActiveTab('chat');
-                setSelectedCategory('all');
-                setSelectedTopicId(null);
-              } else {
-                setActiveTab('kijiweni');
-                setSelectedCategory('Kijiweni');
-                setSelectedTopicId(null);
-              }
-              showToast(
-                isNewUser
-                  ? tr(
-                      'Akaunti yako imesajiliwa kikamilifu! Karibu Kijiweni.',
-                      'Your account has been created! Welcome to Kijiweni.'
-                    )
-                  : tr(
-                      'Karibu Kijiweni! Umeingia kikamilifu.',
-                      'Welcome to Kijiweni! You are signed in.'
-                    )
-              );
-            }}
-          />
+                if (dest.topicId) {
+                  setSelectedTopicId(dest.topicId);
+                }
+                if (fallbackTab === 'votes' && dest.pollId) {
+                  setSelectedPollId(dest.pollId);
+                }
+              }}
+              onSuccess={(_signedInUser, isNewUser, phoneFromReg) => {
+                if (phoneFromReg) {
+                  setUserPhone(phoneFromReg);
+                }
+                const dest = returnDestinationRef.current;
+                setAuthPromptReason(null);
+                if (dest.tab === 'votes') {
+                  setActiveTab('votes');
+                  setSelectedCategory('all');
+                  setSelectedTopicId(null);
+                  setSelectedPollId(dest.pollId);
+                } else if (dest.topicId && !isNewUser) {
+                  const targetTab =
+                    dest.tab === 'auth' || dest.tab === 'all' ? 'kijiweni' : dest.tab;
+                  setActiveTab(targetTab);
+                  setSelectedCategory(
+                    targetTab === 'kijiweni'
+                      ? 'Kijiweni'
+                      : targetTab === 'fursa'
+                        ? 'Fursa'
+                        : targetTab === 'makala'
+                          ? 'Makala'
+                          : 'all'
+                  );
+                  setSelectedTopicId(dest.topicId);
+                } else if (dest.tab === 'chat' && !isNewUser) {
+                  setActiveTab('chat');
+                  setSelectedCategory('all');
+                  setSelectedTopicId(null);
+                } else {
+                  setActiveTab('kijiweni');
+                  setSelectedCategory('Kijiweni');
+                  setSelectedTopicId(null);
+                }
+                showToast(
+                  isNewUser
+                    ? tr(
+                        'Akaunti yako imesajiliwa kikamilifu! Karibu Kijiweni.',
+                        'Your account has been created! Welcome to Kijiweni.'
+                      )
+                    : tr(
+                        'Karibu Kijiweni! Umeingia kikamilifu.',
+                        'Welcome to Kijiweni! You are signed in.'
+                      )
+                );
+              }}
+            />
+          ) : (
+            <div className="mx-auto max-w-md px-4 py-16 text-center text-xs font-semibold text-slate-500">
+              {tr('Inakupeleka kwenye jukwaa...', 'Opening forum...')}
+            </div>
+          )
         ) : activeTab === 'safety' ? (
           <SafetyGuidelinesView
             userUid={user?.uid || null}
@@ -3060,6 +3435,14 @@ function ForumShell() {
             onToast={showToast}
             hideVideoTabForUsers={hideVideoTabForUsers}
             onToggleHideVideoTab={isAdmin ? handleToggleHideVideoTab : undefined}
+            retentionSettings={retentionSettings}
+            retentionProgress={retentionProgress}
+            onUpdateRetentionSettings={isAdmin ? handleUpdateRetentionSettings : undefined}
+            onRunRetentionNow={
+              isAdmin
+                ? (target) => void runContentRetentionSweep(target, undefined, true)
+                : undefined
+            }
             openAdminMembersSignal={openAdminMembersSignal}
             signupLastSeenMs={adminSignupLastSeenMs}
           />
@@ -3124,6 +3507,8 @@ function ForumShell() {
             isSuspended={isSuspended}
             selectedPollId={selectedPollId}
             onClearSelectedPoll={() => setSelectedPollId(null)}
+            mpollBgTheme={mpollBgTheme}
+            onToggleMpollBgTheme={handleToggleMpollBgTheme}
             onBack={() => handleSelectTab('kijiweni')}
             onSignIn={handleSignIn}
             onToast={showToast}
@@ -3189,9 +3574,15 @@ function ForumShell() {
         )}
       </main>
 
-      {!isFullStageView && (
-        <footer className="border-t border-slate-200 bg-white py-6 pb-20 md:pb-6">
-          <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 text-xs text-slate-500 sm:flex-row sm:px-6">
+      {!isFullStageView && !isAuthView && (
+        <footer
+          className={`border-t py-6 pb-20 md:pb-6 transition-colors duration-300 ${
+            isMpollDarkBlue
+              ? 'border-[#1D4E89]/40 bg-[#041226] text-slate-300'
+              : 'border-slate-200 bg-white text-slate-500'
+          }`}
+        >
+          <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 text-xs sm:flex-row sm:px-6">
             <p>
               © {new Date().getFullYear()} Malosha Forums. Kijiweni
               {!hideVideoTabForCurrentUser && ' · Video'} · {tr('Fursa', 'Opportunities')} ·{' '}
@@ -3201,7 +3592,7 @@ function ForumShell() {
               <button
                 type="button"
                 onClick={() => handleSelectTab('kijiweni')}
-                className="hover:text-slate-900 hover:underline"
+                className={isMpollDarkBlue ? 'hover:text-white hover:underline' : 'hover:text-slate-900 hover:underline'}
               >
                 Kijiweni
               </button>
@@ -3209,7 +3600,7 @@ function ForumShell() {
                 <button
                   type="button"
                   onClick={() => handleSelectTab('video')}
-                  className="hover:text-slate-900 hover:underline"
+                  className={isMpollDarkBlue ? 'hover:text-white hover:underline' : 'hover:text-slate-900 hover:underline'}
                 >
                   Video
                 </button>
@@ -3217,35 +3608,35 @@ function ForumShell() {
               <button
                 type="button"
                 onClick={() => handleSelectTab('fursa')}
-                className="hover:text-slate-900 hover:underline"
+                className={isMpollDarkBlue ? 'hover:text-white hover:underline' : 'hover:text-slate-900 hover:underline'}
               >
                 {tr('Fursa', 'Opportunities')}
               </button>
               <button
                 type="button"
                 onClick={() => handleSelectTab('makala')}
-                className="hover:text-slate-900 hover:underline"
+                className={isMpollDarkBlue ? 'hover:text-white hover:underline' : 'hover:text-slate-900 hover:underline'}
               >
                 {tr('Makala', 'Articles')}
               </button>
               <button
                 type="button"
                 onClick={() => handleSelectTab('chat')}
-                className="hover:text-slate-900 hover:underline"
+                className={isMpollDarkBlue ? 'hover:text-white hover:underline' : 'hover:text-slate-900 hover:underline'}
               >
                 Mchart
               </button>
               <button
                 type="button"
                 onClick={() => handleSelectTab('votes')}
-                className="hover:text-slate-900 hover:underline"
+                className={isMpollDarkBlue ? 'hover:text-white hover:underline' : 'hover:text-slate-900 hover:underline'}
               >
                 Mpoll
               </button>
               <button
                 type="button"
                 onClick={() => handleSelectTab('safety')}
-                className="hover:text-slate-900 hover:underline"
+                className={isMpollDarkBlue ? 'hover:text-white hover:underline' : 'hover:text-slate-900 hover:underline'}
               >
                 {tr('Kanuni za Usalama', 'Safety Guidelines')}
               </button>
@@ -3254,21 +3645,23 @@ function ForumShell() {
         </footer>
       )}
 
-      <MobileBottomNav
-        activeTab={activeTab}
-        onSelectTab={handleSelectTab}
-        unreadCounts={unreadCounts}
-        hidden={isMchartView && mobileKeyboardOpen}
-        darkTheme={isVideoView}
-        hideVideoTab={hideVideoTabForCurrentUser}
-      />
+      {!isAuthView && (
+        <MobileBottomNav
+          activeTab={activeTab}
+          onSelectTab={handleSelectTab}
+          unreadCounts={unreadCounts}
+          hidden={isMchartView && mobileKeyboardOpen}
+          darkTheme={isVideoView}
+          hideVideoTab={hideVideoTabForCurrentUser}
+        />
+      )}
 
-      {!isFullStageView && (
+      {!isFullStageView && !isAuthView && (
         <FloatingScrollButton resetKey={`${activeTab}:${selectedTopicId || ''}`} />
       )}
 
       {/* Floating Add Topic / Post Action Icon */}
-      {!isFullStageView && activeTab !== 'auth' && activeTab !== 'votes' && (
+      {!isFullStageView && !isAuthView && activeTab !== 'votes' && (
         <button
           type="button"
           onClick={handleOpenNewTopic}

@@ -54,6 +54,8 @@ import {
 } from '../services/notificationService';
 import {
   COMMUNITY_SAFETY_RULES,
+  ContentRetentionPeriod,
+  ContentRetentionSettings,
   MONETIZATION_REQUIREMENTS,
   PrimaryBoard,
   Report,
@@ -114,6 +116,23 @@ interface SafetyGuidelinesViewProps {
   onToast: (message: string, kind?: 'success' | 'error') => void;
   hideVideoTabForUsers?: boolean;
   onToggleHideVideoTab?: () => void | Promise<void>;
+  retentionSettings?: ContentRetentionSettings;
+  retentionProgress?: {
+    runningKijiweni: boolean;
+    runningVideo: boolean;
+    kijiweniDeleted: number;
+    kijiweniTotal: number;
+    videoDeleted: number;
+    videoTotal: number;
+    currentLabel: string;
+  };
+  onUpdateRetentionSettings?: (patch: {
+    kijiweniEnabled?: boolean;
+    kijiweniPeriod?: ContentRetentionPeriod;
+    videoEnabled?: boolean;
+    videoPeriod?: ContentRetentionPeriod;
+  }) => Promise<void>;
+  onRunRetentionNow?: (target: 'kijiweni' | 'video' | 'both') => void;
   openAdminMembersSignal?: number;
   signupLastSeenMs?: number;
 }
@@ -155,6 +174,10 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
   onToast,
   hideVideoTabForUsers = false,
   onToggleHideVideoTab,
+  retentionSettings,
+  retentionProgress,
+  onUpdateRetentionSettings,
+  onRunRetentionNow,
   openAdminMembersSignal = 0,
   signupLastSeenMs = 0,
 }) => {
@@ -723,56 +746,62 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
           )}
         </div>
 
-        {/* Dedicated 3-Tab Bar Separating Profile/Management, Poster Studio & DW-Style Cartoon Studio */}
+        {/* Dedicated Horizontal 3-Tab Bar (Icon-only on mobile, icon + label on larger screens) */}
         {userUid && isAdmin && onPublishPosterTopic && (
           <div
             role="tablist"
             aria-label={tr('Sehemu za Wasifu wa Mmiliki', 'Owner Profile Sections')}
-            className="mt-5 grid grid-cols-1 gap-2 rounded-xl border border-slate-200 bg-slate-100/90 p-1.5 sm:grid-cols-3"
+            className="mt-5 grid grid-cols-3 gap-1.5 rounded-xl border border-slate-200 bg-slate-100/90 p-1.5 sm:gap-2"
           >
             <button
               type="button"
               role="tab"
               aria-selected={profileTab === 'profile'}
+              aria-label={tr('Wasifu & Akaunti', 'Profile & Account')}
+              title={tr('Wasifu & Akaunti', 'Profile & Account')}
               onClick={() => selectProfileTab('profile')}
-              className={`flex min-h-[42px] items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-bold transition-all sm:text-sm ${
+              className={`flex min-h-[44px] items-center justify-center gap-2 rounded-lg px-2 py-2 text-xs font-bold transition-all sm:px-3 sm:text-sm ${
                 profileTab === 'profile'
                   ? 'bg-[#0E2640] text-white shadow-sm'
                   : 'text-slate-700 hover:bg-white/75 hover:text-slate-900'
               }`}
             >
-              <UserCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <span className="truncate">{tr('Wasifu & Akaunti', 'Profile & Account')}</span>
+              <UserCheck className="h-5 w-5 shrink-0 sm:h-4 sm:w-4" aria-hidden="true" />
+              <span className="hidden truncate sm:inline">{tr('Wasifu & Akaunti', 'Profile & Account')}</span>
             </button>
 
             <button
               type="button"
               role="tab"
               aria-selected={profileTab === 'poster'}
+              aria-label={tr('Studio ya Poster', 'Poster Studio')}
+              title={tr('Studio ya Poster', 'Poster Studio')}
               onClick={() => selectProfileTab('poster')}
-              className={`flex min-h-[42px] items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-bold transition-all sm:text-sm ${
+              className={`flex min-h-[44px] items-center justify-center gap-2 rounded-lg px-2 py-2 text-xs font-bold transition-all sm:px-3 sm:text-sm ${
                 profileTab === 'poster'
                   ? 'bg-gradient-to-r from-[#B91C1C] to-[#991B1B] text-white shadow-sm'
                   : 'text-slate-700 hover:bg-white/75 hover:text-slate-900'
               }`}
             >
-              <LayoutTemplate className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <span className="truncate">{tr('Studio ya Poster', 'Poster Studio')}</span>
+              <LayoutTemplate className="h-5 w-5 shrink-0 sm:h-4 sm:w-4" aria-hidden="true" />
+              <span className="hidden truncate sm:inline">{tr('Studio ya Poster', 'Poster Studio')}</span>
             </button>
 
             <button
               type="button"
               role="tab"
               aria-selected={profileTab === 'cartoon'}
+              aria-label={tr('Studio ya Katuni', 'Cartoon Studio')}
+              title={tr('Studio ya Katuni', 'Cartoon Studio')}
               onClick={() => selectProfileTab('cartoon')}
-              className={`flex min-h-[42px] items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-bold transition-all sm:text-sm ${
+              className={`flex min-h-[44px] items-center justify-center gap-2 rounded-lg px-2 py-2 text-xs font-bold transition-all sm:px-3 sm:text-sm ${
                 profileTab === 'cartoon'
                   ? 'bg-gradient-to-r from-[#B45309] to-[#D97706] text-white shadow-sm'
                   : 'text-slate-700 hover:bg-white/75 hover:text-slate-900'
               }`}
             >
-              <PenTool className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <span className="truncate">{tr('Studio ya Katuni', 'Cartoon Studio')}</span>
+              <PenTool className="h-5 w-5 shrink-0 sm:h-4 sm:w-4" aria-hidden="true" />
+              <span className="hidden truncate sm:inline">{tr('Studio ya Katuni', 'Cartoon Studio')}</span>
             </button>
           </div>
         )}
@@ -2233,6 +2262,10 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
                     onToast={onToast}
                     hideVideoTabForUsers={hideVideoTabForUsers}
                     onToggleHideVideoTab={onToggleHideVideoTab}
+                    retentionSettings={retentionSettings}
+                    retentionProgress={retentionProgress}
+                    onUpdateRetentionSettings={onUpdateRetentionSettings}
+                    onRunRetentionNow={onRunRetentionNow}
                     signupLastSeenMs={signupLastSeenMs}
                   />
                 </div>

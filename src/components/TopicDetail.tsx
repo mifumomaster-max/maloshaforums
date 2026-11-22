@@ -396,7 +396,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
               <section
                 id="comments-thread"
                 aria-label={tr('Maoni na majibu', 'Comments and replies')}
-                className="-mx-3.5 border-y border-slate-200 bg-white p-4 sm:mx-0 sm:border sm:p-6"
+                className="scroll-mt-24 -mx-3.5 border-y border-slate-200 bg-white p-4 sm:mx-0 sm:border sm:p-6"
               >
                 <h2 className="mb-3 font-sans text-sm font-black tracking-wide text-slate-900 uppercase">
                   {tr('Maoni ya Wasomaji', 'Reader Comments')} ({topic.repliesCount})
@@ -674,13 +674,18 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
               <span>{tr('Penda', 'Like')}</span>
             </button>
 
-            <a
-              href="#comments-thread"
+            <button
+              type="button"
+              onClick={() => {
+                document
+                  .getElementById('comments-thread')
+                  ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+              }}
               className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-lg font-semibold text-[#1D4E89] hover:bg-sky-50"
             >
               <MessageCircle className="h-4 w-4" aria-hidden="true" />
               <span>{tr('Maoni', 'Comments')}</span>
-            </a>
+            </button>
 
             <button
               type="button"
@@ -986,7 +991,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
         <section
           id="comments-thread"
           aria-label={tr('Maoni na majibu', 'Comments and replies')}
-          className="mt-4 rounded-xl border border-slate-200 bg-white p-4 sm:mt-5 sm:rounded-lg sm:p-5"
+          className="scroll-mt-24 mt-4 rounded-xl border border-slate-200 bg-white p-4 sm:mt-5 sm:rounded-lg sm:p-5"
         >
           <h2 className="mb-3 font-sans text-sm font-bold text-slate-900">
             {tr('Maoni', 'Comments')} ({topic.repliesCount})

@@ -813,6 +813,7 @@ export interface UserNotification {
   ruleTitle?: string;
   isRead: boolean;
   createdAt: Timestamp | null;
+  readAt?: Timestamp | null;
 }
 
 export interface NavUnreadCounts {
@@ -968,6 +969,17 @@ export interface SiteNavSettings {
   updatedAt: Timestamp | null;
 }
 
+export type ContentRetentionPeriod = '1w' | '3m' | '6m' | '1y' | '5y' | '10y';
+
+export interface ContentRetentionSettings {
+  kijiweniEnabled: boolean;
+  kijiweniPeriod: ContentRetentionPeriod;
+  videoEnabled: boolean;
+  videoPeriod: ContentRetentionPeriod;
+  updatedBy: string;
+  updatedAt: Timestamp | null;
+}
+
 export interface OwnerCustomIdCardData {
   cardId: string;
   ownerUid: string;
@@ -1088,11 +1100,28 @@ export type PollStyle =
   | 'open_opinion';
 export type PollStatus = 'open' | 'closed' | 'draft';
 export type PollResultsVisibility = 'always' | 'after_vote' | 'after_close' | 'owner_only';
+export const POLL_THEME_COLORS = [
+  'cobalt',
+  'emerald',
+  'violet',
+  'amber',
+  'crimson',
+  'teal',
+  'indigo',
+  'rose',
+  'cyan',
+  'slate',
+] as const;
+export type PollThemeColor = (typeof POLL_THEME_COLORS)[number];
+
+export type PollGender = 'male' | 'female' | 'other';
 
 export interface PollOption {
   id: string;
   label: string;
   subtitle?: string;
+  positionTitle?: string;
+  gender?: PollGender;
   imageUrl?: string;
   color?: string;
 }
@@ -1106,6 +1135,7 @@ export interface Poll {
   category: PollCategory;
   questionType: PollQuestionType;
   pollStyle: PollStyle;
+  themeColor?: PollThemeColor;
   institutionName: string;
   options: PollOption[];
   optionIds: string[];
@@ -1115,12 +1145,79 @@ export interface Poll {
   allowVoteChange: boolean;
   anonymousMode: boolean;
   showVoterCount: boolean;
+  showLivePercentages?: boolean;
+  shuffleOptions?: boolean;
+  allowComments?: boolean;
+  quorumTarget?: number;
   allowShare: boolean;
   isPinned: boolean;
   hasDeadline: boolean;
   endsAt: Timestamp | null;
   totalBallots: number;
   commentsCount: number;
+  tournamentId?: string;
+  tournamentRound?: number;
+  tournamentGroupLabel?: string;
+  createdBy: string;
+  createdByName: string;
+  createdByPhoto: string;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export interface TournamentCandidate {
+  id: string;
+  name: string;
+  gender: PollGender;
+  positionTitle?: string;
+  subtitle?: string;
+  imageUrl?: string;
+}
+
+export interface TournamentStageGroup {
+  pollId: string;
+  label: string;
+  genderTrack: 'all' | 'male' | 'female';
+  candidateIds: string[];
+  advanceCount: number;
+}
+
+export interface TournamentStageRecord {
+  round: number;
+  title: string;
+  isFinal: boolean;
+  isTieBreaker?: boolean;
+  groups: TournamentStageGroup[];
+  advancingIds: string[];
+  eliminatedIds: string[];
+  tiedIds?: string[];
+  tiedNeededCount?: number;
+  status: 'active' | 'awaiting_tiebreaker' | 'completed';
+  startedAtMs: number;
+  completedAtMs?: number;
+}
+
+export interface PollTournament {
+  id: string;
+  tournamentId: string;
+  title: string;
+  description: string;
+  institutionName: string;
+  category: PollCategory;
+  positionTitle: string;
+  targetWinnersCount: number;
+  useGenderQuota: boolean;
+  requiredMaleCount: number;
+  requiredFemaleCount: number;
+  groupSize: number;
+  roundDurationMinutes: number;
+  status: 'active' | 'completed';
+  currentRound: number;
+  totalPlannedRounds: number;
+  candidates: TournamentCandidate[];
+  stages: TournamentStageRecord[];
+  winnerIds: string[];
+  winnerVotes?: Record<string, number>;
   createdBy: string;
   createdByName: string;
   createdByPhoto: string;

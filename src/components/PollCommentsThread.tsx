@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { User } from 'firebase/auth';
 import {
+  ChevronUp,
   CornerDownRight,
   Edit3,
   Heart,
@@ -161,9 +162,21 @@ export const PollCommentsThread: React.FC<PollCommentsThreadProps> = ({
     };
   }, [poll.id, comments, userUid]);
 
+  const threadScrollRef = useRef<HTMLDivElement>(null);
+  const [showScrollTopBtn, setShowScrollTopBtn] = useState(false);
+
+  const handleThreadScroll = () => {
+    const el = threadScrollRef.current;
+    if (!el) return;
+    setShowScrollTopBtn(el.scrollTop > 180);
+  };
+
   useEffect(() => {
     if (activeReplyRootId) {
-      const t = window.setTimeout(() => nestedInputRef.current?.focus(), 40);
+      const t = window.setTimeout(
+        () => nestedInputRef.current?.focus({ preventScroll: true }),
+        40
+      );
       return () => window.clearTimeout(t);
     }
   }, [activeReplyRootId]);
@@ -266,6 +279,14 @@ export const PollCommentsThread: React.FC<PollCommentsThreadProps> = ({
       await createPollComment(poll.id, user, userDisplayName, userPhoto, clean, '');
       setNewComment('');
       setLastSubmitAt(Date.now());
+      window.requestAnimationFrame(() => {
+        const el = threadScrollRef.current;
+        if (!el) return;
+        el.scrollTo({
+          top: sortMode === 'oldest' ? el.scrollHeight : 0,
+          behavior: 'smooth',
+        });
+      });
       onToast(tr('Maoni yako yamechapishwa!', 'Your comment has been posted!'), 'success');
     } catch (err) {
       setMainError(
@@ -765,27 +786,33 @@ export const PollCommentsThread: React.FC<PollCommentsThreadProps> = ({
         </form>
       )}
 
-      {/* Facebook-style Thread List */}
-      {loading ? (
-        <div className="space-y-3 py-2">
-          {[1, 2].map((idx) => (
-            <div key={idx} className="flex gap-2.5 animate-pulse">
-              <div className="h-7 w-7 rounded-full bg-slate-200 shrink-0" />
-              <div className="h-14 w-3/4 rounded-2xl bg-white border border-slate-200" />
+      {/* Self-Contained Mchart-Style Scrollable Thread Box */}
+      <div className="relative">
+        <div
+          ref={threadScrollRef}
+          onScroll={handleThreadScroll}
+          className="max-h-[360px] sm:max-h-[430px] touch-pan-y overflow-y-auto overscroll-contain rounded-xl border border-slate-200/80 bg-white p-3 sm:p-4 [overflow-anchor:auto]"
+        >
+          {loading ? (
+            <div className="space-y-3 py-2">
+              {[1, 2].map((idx) => (
+                <div key={idx} className="flex gap-2.5 animate-pulse">
+                  <div className="h-7 w-7 rounded-full bg-slate-200 shrink-0" />
+                  <div className="h-14 w-3/4 rounded-2xl bg-slate-100 border border-slate-200" />
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      ) : rootComments.length === 0 ? (
-        <div className="rounded-xl bg-white border border-dashed border-slate-200 py-5 px-4 text-center">
-          <p className="text-xs font-medium text-slate-500">
-            {tr(
-              'Bado hakuna maoni. Kuwa wa kwanza kuchangia mjadala huu!',
-              'No comments yet. Be the first to join this discussion!'
-            )}
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-3 bg-white rounded-xl border border-slate-200/80 p-3 sm:p-4">
+          ) : rootComments.length === 0 ? (
+            <div className="py-5 px-4 text-center">
+              <p className="text-xs font-medium text-slate-500">
+                {tr(
+                  'Bado hakuna maoni. Kuwa wa kwanza kuchangia mjadala huu!',
+                  'No comments yet. Be the first to join this discussion!'
+                )}
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
           {rootComments.map((root) => {
             const children = childrenByRoot.get(root.id) || [];
             const isExpanded = expandedRootIds.has(root.id);
@@ -967,6 +994,20 @@ export const PollCommentsThread: React.FC<PollCommentsThreadProps> = ({
           })}
         </div>
       )}
+        </div>
+
+        {showScrollTopBtn && (
+          <button
+            type="button"
+            onClick={() => threadScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })}
+            aria-label={tr('Rudi juu kwenye maoni', 'Scroll comments to top')}
+            className="absolute right-3 bottom-3 inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white/95 px-2.5 py-1 text-[11px] font-bold text-[#0E2640] shadow-md backdrop-blur-xs transition-colors hover:bg-slate-50"
+          >
+            <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>{tr('Juu', 'Top')}</span>
+          </button>
+        )}
+      </div>
     </div>
   );
 };

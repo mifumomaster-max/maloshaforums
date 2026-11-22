@@ -322,7 +322,8 @@
         "ruleNumber": { "type": "integer", "description": "Violated community rule number (1-13) for moderation alerts." },
         "ruleTitle": { "type": "string", "maxLength": 140 },
         "isRead": { "type": "boolean" },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "createdAt": { "type": "string", "format": "date-time" },
+        "readAt": { "type": "string", "format": "date-time" }
       },
       "required": [
         "recipientId", "actorId", "actorName", "actorPhoto",
@@ -505,6 +506,20 @@
       },
       "required": ["hideVideoTabForUsers", "updatedBy", "updatedAt"]
     },
+    "ContentRetentionSettings": {
+      "title": "ContentRetentionSettings",
+      "description": "Owner-controlled automated retention & sequential cleanup policy for Kijiweni and Video posts.",
+      "type": "object",
+      "properties": {
+        "kijiweniEnabled": { "type": "boolean" },
+        "kijiweniPeriod": { "type": "string", "enum": ["1w", "3m", "6m", "1y", "5y", "10y"] },
+        "videoEnabled": { "type": "boolean" },
+        "videoPeriod": { "type": "string", "enum": ["1w", "3m", "6m", "1y", "5y", "10y"] },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["kijiweniEnabled", "kijiweniPeriod", "videoEnabled", "videoPeriod", "updatedBy", "updatedAt"]
+    },
     "OwnerCustomIdCard": {
       "title": "OwnerCustomIdCard",
       "description": "Owner-only editable specimen identity card matching the Tanzania citizen ID layout.",
@@ -661,12 +676,16 @@
           "type": "string",
           "enum": ["standard", "social_x", "whatsapp", "candidate_election", "school_election", "local_govt", "open_opinion"]
         },
+        "themeColor": {
+          "type": "string",
+          "enum": ["cobalt", "emerald", "violet", "amber", "crimson", "teal", "indigo", "rose", "cyan", "slate"]
+        },
         "institutionName": { "type": "string", "maxLength": 120 },
         "questionType": {
           "type": "string",
           "enum": ["single", "multiple", "yes_no", "rating", "open_opinion"]
         },
-        "options": { "type": "array", "description": "0 options for open_opinion discussion questions, or 2 to 12 poll option/candidate objects ({ id, label, color, imageUrl, subtitle })." },
+        "options": { "type": "array", "description": "0 options for open_opinion discussion questions, or 2 to 12 poll option/candidate objects ({ id, label, color, imageUrl, subtitle, positionTitle, gender })." },
         "optionIds": { "type": "array", "description": "Matching option ID strings for rule validation (empty for open_opinion)." },
         "maxChoices": { "type": "integer" },
         "status": { "type": "string", "enum": ["open", "closed", "draft"] },
@@ -674,12 +693,19 @@
         "allowVoteChange": { "type": "boolean" },
         "anonymousMode": { "type": "boolean" },
         "showVoterCount": { "type": "boolean" },
+        "showLivePercentages": { "type": "boolean" },
+        "shuffleOptions": { "type": "boolean" },
+        "allowComments": { "type": "boolean" },
+        "quorumTarget": { "type": "integer" },
         "allowShare": { "type": "boolean" },
         "isPinned": { "type": "boolean" },
         "hasDeadline": { "type": "boolean" },
         "endsAt": { "type": "string", "format": "date-time" },
         "totalBallots": { "type": "integer" },
         "commentsCount": { "type": "integer" },
+        "tournamentId": { "type": "string", "maxLength": 128 },
+        "tournamentRound": { "type": "integer" },
+        "tournamentGroupLabel": { "type": "string", "maxLength": 80 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -689,6 +715,44 @@
         "options", "optionIds", "maxChoices", "status", "resultsVisibility",
         "allowVoteChange", "anonymousMode", "showVoterCount", "allowShare",
         "isPinned", "hasDeadline", "endsAt", "totalBallots",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "PollTournament": {
+      "title": "PollTournament",
+      "description": "Multi-stage deterministic knockout leader elimination process (e.g., 30-300 candidates narrowed step-by-step via votes with optional gender quotas).",
+      "type": "object",
+      "properties": {
+        "tournamentId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 4, "maxLength": 200 },
+        "description": { "type": "string", "maxLength": 1500 },
+        "institutionName": { "type": "string", "maxLength": 120 },
+        "category": { "type": "string", "enum": ["Siasa", "Jamii", "Biashara", "Teknolojia", "Elimu", "Michezo", "Uongozi", "Mengineyo"] },
+        "positionTitle": { "type": "string", "maxLength": 80 },
+        "targetWinnersCount": { "type": "integer" },
+        "useGenderQuota": { "type": "boolean" },
+        "requiredMaleCount": { "type": "integer" },
+        "requiredFemaleCount": { "type": "integer" },
+        "groupSize": { "type": "integer" },
+        "roundDurationMinutes": { "type": "integer" },
+        "status": { "type": "string", "enum": ["active", "completed"] },
+        "currentRound": { "type": "integer" },
+        "totalPlannedRounds": { "type": "integer" },
+        "candidates": { "type": "array" },
+        "stages": { "type": "array" },
+        "winnerIds": { "type": "array" },
+        "winnerVotes": { "type": "object" },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdByName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "createdByPhoto": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "tournamentId", "title", "description", "institutionName", "category", "positionTitle",
+        "targetWinnersCount", "useGenderQuota", "requiredMaleCount", "requiredFemaleCount",
+        "groupSize", "roundDurationMinutes", "status", "currentRound", "totalPlannedRounds",
+        "candidates", "stages", "winnerIds", "createdBy", "createdByName", "createdByPhoto",
         "createdAt", "updatedAt"
       ]
     },
@@ -839,7 +903,7 @@
     },
     "/site_settings/{settingId}": {
       "schema": { "$ref": "#/entities/SiteNavSettings" },
-      "description": "Platform navigation and visibility configuration controlled by owner."
+      "description": "Platform navigation visibility (navigation) and owner content retention schedules (retention)."
     },
     "/owner_id_cards/{cardId}": {
       "schema": { "$ref": "#/entities/OwnerCustomIdCard" },
@@ -876,6 +940,10 @@
     "/polls/{pollId}/comments/{commentId}/likes/{userId}": {
       "schema": { "$ref": "#/entities/Vote" },
       "description": "Per-user like records on Mpoll discussion comments."
+    },
+    "/poll_tournaments/{tournamentId}": {
+      "schema": { "$ref": "#/entities/PollTournament" },
+      "description": "Multi-stage deterministic elimination elections linked to Mpoll ballot rounds."
     }
   }
 }

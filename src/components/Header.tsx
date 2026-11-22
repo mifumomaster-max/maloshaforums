@@ -71,8 +71,10 @@ interface HeaderProps {
 }
 
 const NOTIF_READ_IDS_KEY = 'malosha_notif_read_ids_v1';
+const NOTIF_READ_TIMESTAMPS_KEY = 'malosha_notif_read_ts_v2';
 const NOTIF_CLEARED_AT_KEY = 'malosha_notif_cleared_at_v1';
 const NOTIF_BANNER_DISMISSED_KEY = 'malosha_notif_banner_dismissed_v1';
+const NOTIF_READ_TTL_MS = 24 * 60 * 60 * 1000;
 
 const GoogleGIcon: React.FC = () => (
   <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
@@ -169,16 +171,46 @@ export const Header: React.FC<HeaderProps> = ({
     return () => window.removeEventListener('resize', updateHeaderHeightVar);
   }, []);
 
-  const [readIds, setReadIds] = useState<Set<string>>(() => {
-    if (typeof window === 'undefined') return new Set();
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const [readTimestamps, setReadTimestamps] = useState<Record<string, number>>(() => {
+    if (typeof window === 'undefined') return {};
+    const map: Record<string, number> = {};
     try {
-      const raw = window.localStorage.getItem(NOTIF_READ_IDS_KEY);
-      if (!raw) return new Set();
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? new Set(parsed.filter((x) => typeof x === 'string')) : new Set();
+      const rawV2 = window.localStorage.getItem(NOTIF_READ_TIMESTAMPS_KEY);
+      if (rawV2) {
+        const parsed = JSON.parse(rawV2) as Record<string, unknown>;
+        if (parsed && typeof parsed === 'object') {
+          Object.entries(parsed).forEach(([k, v]) => {
+            if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+              map[k] = v;
+            }
+          });
+        }
+      }
+      const rawLegacy = window.localStorage.getItem(NOTIF_READ_IDS_KEY);
+      if (rawLegacy) {
+        const parsedLegacy = JSON.parse(rawLegacy);
+        if (Array.isArray(parsedLegacy)) {
+          const fallbackTs = Date.now();
+          parsedLegacy.forEach((id) => {
+            if (typeof id === 'string' && !map[id]) {
+              map[id] = fallbackTs;
+            }
+          });
+          window.localStorage.setItem(NOTIF_READ_TIMESTAMPS_KEY, JSON.stringify(map));
+          window.localStorage.removeItem(NOTIF_READ_IDS_KEY);
+        }
+      }
     } catch {
-      return new Set();
+      return map;
     }
+    return map;
   });
 
   const [clearedAtMs, setClearedAtMs] = useState<number>(() => {
@@ -191,6 +223,27 @@ export const Header: React.FC<HeaderProps> = ({
       return 0;
     }
   });
+
+  // Prune deleted/removed topic IDs from readTimestamps cache to keep storage clean
+  useEffect(() => {
+    if (topics.length === 0) return;
+    const topicIdsSet = new Set(topics.map((t) => t.id));
+    setReadTimestamps((prev) => {
+      const keys = Object.keys(prev);
+      const hasOrphan = keys.some((k) => !topicIdsSet.has(k));
+      if (!hasOrphan) return prev;
+      const next: Record<string, number> = {};
+      keys.forEach((k) => {
+        if (topicIdsSet.has(k)) next[k] = prev[k];
+      });
+      try {
+        window.localStorage.setItem(NOTIF_READ_TIMESTAMPS_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore storage errors
+      }
+      return next;
+    });
+  }, [topics]);
 
   useEffect(() => {
     const handleOutside = (e: MouseEvent) => {
@@ -206,41 +259,65 @@ export const Header: React.FC<HeaderProps> = ({
     return () => document.removeEventListener('mousedown', handleOutside);
   }, []);
 
+  const getTopicReadAtMs = (topic: Topic): number | null => {
+    const explicit = readTimestamps[topic.id];
+    if (typeof explicit === 'number' && explicit > 0) return explicit;
+    const createdMs = topic.createdAt ? topic.createdAt.toMillis() : nowMs;
+    if (clearedAtMs > 0 && createdMs <= clearedAtMs) return clearedAtMs;
+    return null;
+  };
+
+  const isUnread = (topic: Topic) => getTopicReadAtMs(topic) === null;
+
+  const isExpiredReadTopic = (topic: Topic) => {
+    const readAt = getTopicReadAtMs(topic);
+    return readAt !== null && nowMs - readAt >= NOTIF_READ_TTL_MS;
+  };
+
   const newsNotifications = useMemo(() => {
     return topics
-      .filter((t) => normalizeBoardCategory(t.category) === 'Makala')
+      .filter((t) => normalizeBoardCategory(t.category) === 'Makala' && !isExpiredReadTopic(t))
       .sort((a, b) => {
         const am = a.createdAt ? a.createdAt.toMillis() : Date.now();
         const bm = b.createdAt ? b.createdAt.toMillis() : Date.now();
         return bm - am;
       })
-      .slice(0, 15);
-  }, [topics]);
+      .slice(0, 20);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [topics, readTimestamps, clearedAtMs, nowMs]);
 
   const allNotifications = useMemo(() => {
-    return [...topics]
+    return topics
+      .filter((t) => !isExpiredReadTopic(t))
       .sort((a, b) => {
         const am = a.createdAt ? a.createdAt.toMillis() : Date.now();
         const bm = b.createdAt ? b.createdAt.toMillis() : Date.now();
         return bm - am;
       })
-      .slice(0, 15);
-  }, [topics]);
+      .slice(0, 20);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [topics, readTimestamps, clearedAtMs, nowMs]);
 
-  const isUnread = (topic: Topic) => {
-    if (readIds.has(topic.id)) return false;
-    const createdMs = topic.createdAt ? topic.createdAt.toMillis() : Date.now();
-    return createdMs > clearedAtMs;
-  };
+  const visibleUserNotifications = useMemo(() => {
+    return userNotifications.filter((n) => {
+      if (!n.isRead) return true;
+      const readMs = n.readAt
+        ? n.readAt.toMillis()
+        : n.createdAt
+          ? n.createdAt.toMillis()
+          : 0;
+      return readMs === 0 || nowMs - readMs < NOTIF_READ_TTL_MS;
+    });
+  }, [userNotifications, nowMs]);
 
   const unreadNewsCount = useMemo(() => {
     return newsNotifications.filter((t) => isUnread(t)).length;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [newsNotifications, readIds, clearedAtMs]);
+  }, [newsNotifications, readTimestamps, clearedAtMs]);
 
   const unreadReplyIds = useMemo(
-    () => userNotifications.filter((n) => !n.isRead).map((n) => n.id),
-    [userNotifications]
+    () => visibleUserNotifications.filter((n) => !n.isRead).map((n) => n.id),
+    [visibleUserNotifications]
   );
   const unreadRepliesCount = unreadReplyIds.length;
   const activeUnreadSignupCount = isAdmin ? unreadSignupCount : 0;
@@ -249,11 +326,12 @@ export const Header: React.FC<HeaderProps> = ({
   const visibleNewsOrTopics = notifFilter === 'news' ? newsNotifications : allNotifications;
 
   const markItemRead = (topicId: string) => {
-    setReadIds((prev) => {
-      const next = new Set(prev);
-      next.add(topicId);
+    const now = Date.now();
+    setReadTimestamps((prev) => {
+      if (prev[topicId]) return prev;
+      const next = { ...prev, [topicId]: now };
       try {
-        window.localStorage.setItem(NOTIF_READ_IDS_KEY, JSON.stringify(Array.from(next).slice(-100)));
+        window.localStorage.setItem(NOTIF_READ_TIMESTAMPS_KEY, JSON.stringify(next));
       } catch {
         // Ignore storage failure
       }
@@ -264,12 +342,14 @@ export const Header: React.FC<HeaderProps> = ({
   const markAllRead = () => {
     const now = Date.now();
     setClearedAtMs(now);
-    const nextIds = new Set(readIds);
-    allNotifications.forEach((t) => nextIds.add(t.id));
-    setReadIds(nextIds);
+    const nextMap = { ...readTimestamps };
+    allNotifications.forEach((t) => {
+      if (!nextMap[t.id]) nextMap[t.id] = now;
+    });
+    setReadTimestamps(nextMap);
     try {
       window.localStorage.setItem(NOTIF_CLEARED_AT_KEY, String(now));
-      window.localStorage.setItem(NOTIF_READ_IDS_KEY, JSON.stringify(Array.from(nextIds).slice(-100)));
+      window.localStorage.setItem(NOTIF_READ_TIMESTAMPS_KEY, JSON.stringify(nextMap));
     } catch {
       // Ignore storage failure
     }
@@ -784,7 +864,7 @@ export const Header: React.FC<HeaderProps> = ({
                           {tr('Ingia / Jisajili', 'Sign In / Register')}
                         </button>
                       </div>
-                    ) : userNotifications.length === 0 ? (
+                    ) : visibleUserNotifications.length === 0 ? (
                       <div className="px-5 py-9 text-center">
                         <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-slate-100 text-slate-400">
                           <CornerDownRight className="h-5 w-5" aria-hidden="true" />
@@ -800,7 +880,7 @@ export const Header: React.FC<HeaderProps> = ({
                         </p>
                       </div>
                     ) : (
-                      userNotifications.map((notif) => {
+                      visibleUserNotifications.map((notif) => {
                         const isModerationAlert =
                           notif.type === 'account_moderation' ||
                           notif.type === 'video_moderation' ||
@@ -1103,8 +1183,14 @@ export const Header: React.FC<HeaderProps> = ({
                   )}
                 </div>
 
-                {/* Footer Action */}
-                <div className="border-t border-slate-100 bg-slate-50 px-4 py-2.5">
+                {/* Footer Action & Auto-Cleanup Policy Notice */}
+                <div className="border-t border-slate-100 bg-slate-50 px-4 py-2.5 space-y-1.5">
+                  <p className="text-[10.5px] leading-snug text-slate-500">
+                    {tr(
+                      'Arifa zilizosomwa hufutwa kiotomatiki baada ya saa 24; ambazo hazijasomwa hubaki hadi uzisome.',
+                      'Read alerts auto-delete after 24h; unread alerts remain until read.'
+                    )}
+                  </p>
                   <button
                     type="button"
                     onClick={() => {

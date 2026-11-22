@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckCircle2,
+  ChevronUp,
   CornerDownRight,
   Edit3,
   Flag,
@@ -117,11 +118,19 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
   const [savingEdit, setSavingEdit] = useState(false);
 
   const [lastSubmitAt, setLastSubmitAt] = useState(0);
+  const threadScrollRef = useRef<HTMLDivElement>(null);
+  const [showScrollTopBtn, setShowScrollTopBtn] = useState(false);
+
+  const handleThreadScroll = () => {
+    const el = threadScrollRef.current;
+    if (!el) return;
+    setShowScrollTopBtn(el.scrollTop > 180);
+  };
 
   useEffect(() => {
     if (autoFocus && userUid && topic.status === 'open') {
       const timer = window.setTimeout(() => {
-        mainInputRef.current?.focus();
+        mainInputRef.current?.focus({ preventScroll: true });
       }, 60);
       return () => window.clearTimeout(timer);
     }
@@ -130,7 +139,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
   useEffect(() => {
     if (activeReplyThreadId) {
       const timer = window.setTimeout(() => {
-        nestedInputRef.current?.focus();
+        nestedInputRef.current?.focus({ preventScroll: true });
       }, 40);
       return () => window.clearTimeout(timer);
     }
@@ -328,6 +337,14 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
       });
       setNewComment('');
       setLastSubmitAt(Date.now());
+      window.requestAnimationFrame(() => {
+        const el = threadScrollRef.current;
+        if (!el) return;
+        el.scrollTo({
+          top: sortMode === 'oldest' ? el.scrollHeight : 0,
+          behavior: 'smooth',
+        });
+      });
       onToast(tr('Maoni yako yamechapishwa.', 'Your comment has been posted.'));
     } catch (err) {
       setMainError(
@@ -833,25 +850,35 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
         </form>
       )}
 
-      {/* Thread List */}
-      {loadingReplies ? (
-        <div className="space-y-3 py-2">
-          {[1, 2].map((idx) => (
-            <div key={idx} className="flex gap-2.5 animate-pulse">
-              <div className="h-7 w-7 rounded-full bg-slate-200 shrink-0" />
-              <div className="h-14 w-3/4 rounded-2xl bg-slate-100" />
+      {/* Self-Contained Mchart-Style Scrollable Thread Viewport (never stretches or shakes outer page) */}
+      <div className="relative">
+        <div
+          ref={threadScrollRef}
+          onScroll={handleThreadScroll}
+          className={`${
+            compact
+              ? 'max-h-[300px] sm:max-h-[350px]'
+              : 'max-h-[390px] sm:max-h-[460px]'
+          } touch-pan-y overflow-y-auto overscroll-contain rounded-xl border border-slate-200/85 bg-[#F8FAFC]/70 p-3 sm:p-3.5 [overflow-anchor:auto]`}
+        >
+          {loadingReplies ? (
+            <div className="space-y-3 py-2">
+              {[1, 2].map((idx) => (
+                <div key={idx} className="flex gap-2.5 animate-pulse">
+                  <div className="h-7 w-7 rounded-full bg-slate-200 shrink-0" />
+                  <div className="h-14 w-3/4 rounded-2xl bg-slate-100" />
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      ) : rootComments.length === 0 ? (
-        <p className="py-2 text-center text-xs text-slate-500">
-          {tr(
-            'Bado hakuna maoni. Kuwa wa kwanza kutoa maoni yako!',
-            'No comments yet. Be the first to comment!'
-          )}
-        </p>
-      ) : (
-        <div className="space-y-3">
+          ) : rootComments.length === 0 ? (
+            <p className="py-3 text-center text-xs text-slate-500">
+              {tr(
+                'Bado hakuna maoni. Kuwa wa kwanza kutoa maoni yako!',
+                'No comments yet. Be the first to comment!'
+              )}
+            </p>
+          ) : (
+            <div className="space-y-3">
           {rootComments.map((root) => {
             const children = childrenByRoot.get(root.id) || [];
             const isExpanded = expandedThreadIds.has(root.id);
@@ -1037,6 +1064,20 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
           })}
         </div>
       )}
+        </div>
+
+        {showScrollTopBtn && (
+          <button
+            type="button"
+            onClick={() => threadScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })}
+            aria-label={tr('Rudi juu kwenye maoni', 'Scroll comments to top')}
+            className="absolute right-3 bottom-3 inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white/95 px-2.5 py-1 text-[11px] font-bold text-[#0E2640] shadow-md backdrop-blur-xs transition-colors hover:bg-slate-50"
+          >
+            <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>{tr('Juu', 'Top')}</span>
+          </button>
+        )}
+      </div>
     </div>
   );
 };

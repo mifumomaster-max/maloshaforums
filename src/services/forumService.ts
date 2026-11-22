@@ -9,6 +9,7 @@ import {
   increment,
   limit,
   onSnapshot,
+  orderBy,
   query,
   serverTimestamp,
   setDoc,
@@ -20,6 +21,8 @@ import { ADMIN_EMAIL, auth, db, handleFirestoreError, OperationType } from '../f
 import {
   AccountStatus,
   ChatAttachmentType,
+  ContentRetentionPeriod,
+  ContentRetentionSettings,
   DirectChatThread,
   MAKALA_COVERS,
   MchartNote,
@@ -38,6 +41,7 @@ import {
   TopicCategory,
   TopicStatus,
   TrainingCertificateData,
+  UserNotification,
   UserNotificationType,
   UserProfile,
   VerificationBadgeType,
@@ -121,11 +125,18 @@ async function runSyncUserProfile(
   let dirPhoto = safePhoto;
   let dirBadge: VerificationBadgeType = isPlatformOwner ? 'owner' : 'none';
   let dirIsActive = true;
+  let isSuspendedAccount = false;
 
-  try {
-    const snap = await getDoc(userRef);
-    if (!snap.exists()) {
-      await setDoc(userRef, {
+  const [snap, privSnap] = await Promise.all([
+    getDoc(userRef).catch((error) => handleFirestoreError(error, OperationType.GET, userPath)),
+    getDoc(privateRef).catch((error) => handleFirestoreError(error, OperationType.GET, privatePath)),
+  ]);
+
+  const writeTasks: Promise<unknown>[] = [];
+
+  if (!snap.exists()) {
+    writeTasks.push(
+      setDoc(userRef, {
         uid: user.uid,
         displayName: safeName,
         photoURL: safePhoto,
@@ -137,72 +148,82 @@ async function runSyncUserProfile(
         repliesCount: 0,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      });
-    } else {
-      const existingData = snap.data();
-      const updates: Record<string, unknown> = {};
-      if (
-        isPlatformOwner &&
-        (!existingData.verificationBadge || existingData.verificationBadge === 'none')
-      ) {
-        updates.verificationBadge = 'owner';
-      }
-      if (effectiveDisplayName && existingData.displayName !== safeName) {
-        updates.displayName = safeName;
-      }
-      if (Object.keys(updates).length > 0) {
-        updates.updatedAt = serverTimestamp();
-        await updateDoc(userRef, updates);
-      }
-      dirDisplayName =
-        (typeof updates.displayName === 'string' && updates.displayName) ||
-        (typeof existingData.displayName === 'string' && existingData.displayName) ||
-        safeName;
-      dirPhoto =
-        (typeof existingData.photoURL === 'string' ? existingData.photoURL : '') || safePhoto;
-      dirBadge = normalizeVerificationBadge(
-        (updates.verificationBadge as string) || (existingData.verificationBadge as string)
-      );
-      dirIsActive = existingData.accountStatus !== 'suspended';
+      }).catch((error) => handleFirestoreError(error, OperationType.WRITE, userPath))
+    );
+  } else {
+    const existingData = snap.data();
+    isSuspendedAccount = existingData.accountStatus === 'suspended';
+    const updates: Record<string, unknown> = {};
+    if (
+      isPlatformOwner &&
+      (!existingData.verificationBadge || existingData.verificationBadge === 'none')
+    ) {
+      updates.verificationBadge = 'owner';
     }
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, userPath);
+    if (!isSuspendedAccount && effectiveDisplayName && existingData.displayName !== safeName) {
+      updates.displayName = safeName;
+    }
+    if (Object.keys(updates).length > 0) {
+      updates.updatedAt = serverTimestamp();
+      writeTasks.push(
+        updateDoc(userRef, updates).catch((error) =>
+          handleFirestoreError(error, OperationType.UPDATE, userPath)
+        )
+      );
+    }
+    dirDisplayName =
+      (typeof updates.displayName === 'string' && updates.displayName) ||
+      (typeof existingData.displayName === 'string' && existingData.displayName) ||
+      safeName;
+    dirPhoto =
+      (typeof existingData.photoURL === 'string' ? existingData.photoURL : '') || safePhoto;
+    dirBadge = normalizeVerificationBadge(
+      (updates.verificationBadge as string) || (existingData.verificationBadge as string)
+    );
+    dirIsActive = !isSuspendedAccount;
   }
 
   if (dirIsActive) {
-    await upsertMemberDirectoryEntry(user.uid, {
-      displayName: dirDisplayName,
-      photoURL: dirPhoto,
-      verificationBadge: dirBadge,
-      isActive: true,
-    });
+    writeTasks.push(
+      upsertMemberDirectoryEntry(user.uid, {
+        displayName: dirDisplayName,
+        photoURL: dirPhoto,
+        verificationBadge: dirBadge,
+        isActive: true,
+      })
+    );
   }
 
-  try {
-    const privSnap = await getDoc(privateRef);
-    if (!privSnap.exists()) {
-      await setDoc(privateRef, {
+  if (!privSnap.exists()) {
+    writeTasks.push(
+      setDoc(privateRef, {
         uid: user.uid,
         email: safeEmail,
         ...(safePhone ? { phoneNumber: safePhone } : {}),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      });
-    } else {
-      const privUpdates: Record<string, unknown> = {};
-      if (privSnap.data().email !== safeEmail) {
-        privUpdates.email = safeEmail;
-      }
-      if (safePhone && privSnap.data().phoneNumber !== safePhone) {
-        privUpdates.phoneNumber = safePhone;
-      }
-      if (Object.keys(privUpdates).length > 0) {
-        privUpdates.updatedAt = serverTimestamp();
-        await updateDoc(privateRef, privUpdates);
-      }
+      }).catch((error) => handleFirestoreError(error, OperationType.WRITE, privatePath))
+    );
+  } else if (!isSuspendedAccount) {
+    const privUpdates: Record<string, unknown> = {};
+    if (privSnap.data().email !== safeEmail) {
+      privUpdates.email = safeEmail;
     }
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, privatePath);
+    if (safePhone && privSnap.data().phoneNumber !== safePhone) {
+      privUpdates.phoneNumber = safePhone;
+    }
+    if (Object.keys(privUpdates).length > 0) {
+      privUpdates.updatedAt = serverTimestamp();
+      writeTasks.push(
+        updateDoc(privateRef, privUpdates).catch((error) =>
+          handleFirestoreError(error, OperationType.UPDATE, privatePath)
+        )
+      );
+    }
+  }
+
+  if (writeTasks.length > 0) {
+    await Promise.all(writeTasks);
   }
 
   if (emailKey && pendingMeta) {
@@ -745,6 +766,8 @@ export async function createReply(
   }
 }
 
+export const READ_NOTIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
+
 export async function markUserNotificationRead(
   uid: string,
   notificationId: string
@@ -753,6 +776,7 @@ export async function markUserNotificationRead(
   try {
     await updateDoc(doc(db, 'users', uid, 'notifications', notificationId), {
       isRead: true,
+      readAt: serverTimestamp(),
     });
   } catch {
     // Non-fatal if already deleted or offline
@@ -769,13 +793,61 @@ export async function markAllUserNotificationsRead(
       const chunk = notificationIds.slice(i, i + 450);
       const batch = writeBatch(db);
       chunk.forEach((nid) => {
-        batch.update(doc(db, 'users', uid, 'notifications', nid), { isRead: true });
+        batch.update(doc(db, 'users', uid, 'notifications', nid), {
+          isRead: true,
+          readAt: serverTimestamp(),
+        });
       });
       await batch.commit();
     }
   } catch {
     // Non-fatal
   }
+}
+
+export async function cleanupExpiredReadNotifications(
+  uid: string,
+  notifications: UserNotification[]
+): Promise<string[]> {
+  if (!uid || notifications.length === 0) return [];
+  const now = Date.now();
+  const expiredIds = notifications
+    .filter((n) => {
+      if (!n.isRead) return false;
+      const readMs = n.readAt
+        ? n.readAt.toMillis()
+        : n.createdAt
+          ? n.createdAt.toMillis()
+          : 0;
+      return readMs > 0 && now - readMs >= READ_NOTIFICATION_TTL_MS;
+    })
+    .map((n) => n.id);
+
+  if (expiredIds.length === 0) return [];
+
+  const deleted: string[] = [];
+  for (let i = 0; i < expiredIds.length; i += 450) {
+    const chunk = expiredIds.slice(i, i + 450);
+    try {
+      const batch = writeBatch(db);
+      chunk.forEach((nid) => {
+        batch.delete(doc(db, 'users', uid, 'notifications', nid));
+      });
+      await batch.commit();
+      deleted.push(...chunk);
+    } catch {
+      // Fallback per-doc delete if one fails
+      for (const nid of chunk) {
+        try {
+          await deleteDoc(doc(db, 'users', uid, 'notifications', nid));
+          deleted.push(nid);
+        } catch {
+          // Ignore individual failures
+        }
+      }
+    }
+  }
+  return deleted;
 }
 
 export async function editReply(
@@ -4009,5 +4081,214 @@ export async function deleteOwnerPhotoFolder(folderId: string): Promise<void> {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
+
+export const CONTENT_RETENTION_PERIOD_MS: Record<ContentRetentionPeriod, number> = {
+  '1w': 7 * 86_400_000,
+  '3m': 90 * 86_400_000,
+  '6m': 180 * 86_400_000,
+  '1y': 365 * 86_400_000,
+  '5y': 5 * 365 * 86_400_000,
+  '10y': 10 * 365 * 86_400_000,
+};
+
+export const DEFAULT_CONTENT_RETENTION_SETTINGS: ContentRetentionSettings = {
+  kijiweniEnabled: false,
+  kijiweniPeriod: '1y',
+  videoEnabled: false,
+  videoPeriod: '1y',
+  updatedBy: '',
+  updatedAt: null,
+};
+
+export function normalizeRetentionPeriod(raw: unknown): ContentRetentionPeriod {
+  if (
+    raw === '1w' ||
+    raw === '3m' ||
+    raw === '6m' ||
+    raw === '1y' ||
+    raw === '5y' ||
+    raw === '10y'
+  ) {
+    return raw;
+  }
+  return '1y';
+}
+
+export function subscribeContentRetentionSettings(
+  onUpdate: (settings: ContentRetentionSettings) => void
+): () => void {
+  const settingsRef = doc(db, 'site_settings', 'retention');
+  return onSnapshot(
+    settingsRef,
+    (snap) => {
+      if (!snap.exists()) {
+        onUpdate({ ...DEFAULT_CONTENT_RETENTION_SETTINGS });
+        return;
+      }
+      const data = snap.data();
+      onUpdate({
+        kijiweniEnabled: Boolean(data?.kijiweniEnabled),
+        kijiweniPeriod: normalizeRetentionPeriod(data?.kijiweniPeriod),
+        videoEnabled: Boolean(data?.videoEnabled),
+        videoPeriod: normalizeRetentionPeriod(data?.videoPeriod),
+        updatedBy: String(data?.updatedBy || ''),
+        updatedAt: (data?.updatedAt as Timestamp | null) || null,
+      });
+    },
+    () => {
+      onUpdate({ ...DEFAULT_CONTENT_RETENTION_SETTINGS });
+    }
+  );
+}
+
+export async function updateContentRetentionSettings(
+  ownerUid: string,
+  payload: {
+    kijiweniEnabled: boolean;
+    kijiweniPeriod: ContentRetentionPeriod;
+    videoEnabled: boolean;
+    videoPeriod: ContentRetentionPeriod;
+  }
+): Promise<void> {
+  const path = 'site_settings/retention';
+  try {
+    await setDoc(doc(db, 'site_settings', 'retention'), {
+      kijiweniEnabled: Boolean(payload.kijiweniEnabled),
+      kijiweniPeriod: normalizeRetentionPeriod(payload.kijiweniPeriod),
+      videoEnabled: Boolean(payload.videoEnabled),
+      videoPeriod: normalizeRetentionPeriod(payload.videoPeriod),
+      updatedBy: ownerUid,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+async function deleteDocRefsInBatches(refs: ReturnType<typeof doc>[]): Promise<void> {
+  for (let i = 0; i < refs.length; i += 400) {
+    const chunk = refs.slice(i, i + 400);
+    const batch = writeBatch(db);
+    chunk.forEach((r) => batch.delete(r));
+    await batch.commit();
+  }
+}
+
+export async function deleteTopicCascade(topicId: string): Promise<void> {
+  const path = `topics/${topicId}`;
+  try {
+    const subRefs: ReturnType<typeof doc>[] = [];
+
+    const repliesSnap = await getDocs(collection(db, 'topics', topicId, 'replies'));
+    for (const replyDoc of repliesSnap.docs) {
+      const replyVotesSnap = await getDocs(
+        collection(db, 'topics', topicId, 'replies', replyDoc.id, 'votes')
+      );
+      replyVotesSnap.docs.forEach((v) => subRefs.push(v.ref));
+      subRefs.push(replyDoc.ref);
+    }
+
+    const topicVotesSnap = await getDocs(collection(db, 'topics', topicId, 'votes'));
+    topicVotesSnap.docs.forEach((v) => subRefs.push(v.ref));
+
+    if (subRefs.length > 0) {
+      await deleteDocRefsInBatches(subRefs);
+    }
+
+    await deleteDoc(doc(db, 'topics', topicId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function deleteVideoCascade(videoId: string): Promise<void> {
+  const path = `videos/${videoId}`;
+  try {
+    const subRefs: ReturnType<typeof doc>[] = [];
+
+    const commentsSnap = await getDocs(collection(db, 'videos', videoId, 'comments'));
+    commentsSnap.docs.forEach((c) => subRefs.push(c.ref));
+
+    const likesSnap = await getDocs(collection(db, 'videos', videoId, 'likes'));
+    likesSnap.docs.forEach((l) => subRefs.push(l.ref));
+
+    if (subRefs.length > 0) {
+      await deleteDocRefsInBatches(subRefs);
+    }
+
+    await deleteDoc(doc(db, 'videos', videoId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function runKijiweniRetentionCleanup(
+  period: ContentRetentionPeriod,
+  options?: {
+    onProgress?: (deleted: number, total: number, currentLabel: string) => void;
+    shouldContinue?: () => boolean;
+  }
+): Promise<{ deletedCount: number; totalMatched: number }> {
+  const cutoffTs = Timestamp.fromMillis(Date.now() - CONTENT_RETENTION_PERIOD_MS[period]);
+  const q = query(
+    collection(db, 'topics'),
+    where('createdAt', '<=', cutoffTs),
+    orderBy('createdAt', 'asc'),
+    limit(500)
+  );
+  const snap = await getDocs(q);
+  const matched = snap.docs.filter(
+    (d) => normalizeBoardCategory(String(d.data().category || '')) === 'Kijiweni'
+  );
+
+  let deletedCount = 0;
+  const totalMatched = matched.length;
+  for (let i = 0; i < totalMatched; i += 1) {
+    if (options?.shouldContinue && !options.shouldContinue()) {
+      break;
+    }
+    const item = matched[i];
+    const label = String(item.data().title || item.data().body || item.id).slice(0, 60);
+    await deleteTopicCascade(item.id);
+    deletedCount += 1;
+    options?.onProgress?.(deletedCount, totalMatched, label);
+    await new Promise((resolve) => setTimeout(resolve, 90));
+  }
+  return { deletedCount, totalMatched };
+}
+
+export async function runVideoRetentionCleanup(
+  period: ContentRetentionPeriod,
+  options?: {
+    onProgress?: (deleted: number, total: number, currentLabel: string) => void;
+    shouldContinue?: () => boolean;
+  }
+): Promise<{ deletedCount: number; totalMatched: number }> {
+  const cutoffTs = Timestamp.fromMillis(Date.now() - CONTENT_RETENTION_PERIOD_MS[period]);
+  const q = query(
+    collection(db, 'videos'),
+    where('createdAt', '<=', cutoffTs),
+    orderBy('createdAt', 'asc'),
+    limit(500)
+  );
+  const snap = await getDocs(q);
+  const matched = snap.docs;
+
+  let deletedCount = 0;
+  const totalMatched = matched.length;
+  for (let i = 0; i < totalMatched; i += 1) {
+    if (options?.shouldContinue && !options.shouldContinue()) {
+      break;
+    }
+    const item = matched[i];
+    const label = String(item.data().caption || item.data().soundName || item.id).slice(0, 60);
+    await deleteVideoCascade(item.id);
+    deletedCount += 1;
+    options?.onProgress?.(deletedCount, totalMatched, label);
+    await new Promise((resolve) => setTimeout(resolve, 90));
+  }
+  return { deletedCount, totalMatched };
+}
+
 
 

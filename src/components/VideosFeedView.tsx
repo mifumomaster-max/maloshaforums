@@ -415,6 +415,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
   const [commentText, setCommentText] = useState('');
   const [replyingToComment, setReplyingToComment] = useState<VideoComment | null>(null);
   const [sendingComment, setSendingComment] = useState(false);
+  const commentsScrollRef = useRef<HTMLDivElement>(null);
 
   // Settings / Post Options / Sound Drawer states
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1913,6 +1914,12 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
       });
       setCommentText('');
       setReplyingToComment(null);
+      window.requestAnimationFrame(() => {
+        const el = commentsScrollRef.current;
+        if (el) {
+          el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+        }
+      });
     } catch (err) {
       onToast(
         err instanceof Error ? err.message : tr('Imeshindwa kutuma maoni.', 'Failed to send comment.'),
@@ -2639,7 +2646,9 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
         <div
           ref={feedScrollRef}
           onScroll={handleFeedScroll}
-          className="h-full w-full snap-y snap-mandatory overflow-y-scroll scroll-smooth [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          className={`h-full w-full snap-y snap-mandatory ${
+            commentsVideoId ? 'overflow-hidden' : 'overflow-y-scroll'
+          } scroll-smooth [scrollbar-width:none] [&::-webkit-scrollbar]:hidden`}
         >
           {visibleVideos.map((video, idx) => {
             const isActive = idx === activeIndex;
@@ -3506,12 +3515,12 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
       {/* Slide-Up Comments Drawer (Threaded + Creator Auto-Reply + Lock Support) */}
       {commentsVideoId && (
         <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-[2px] md:items-center"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-[2px] overscroll-contain md:items-center"
           onClick={() => setCommentsVideoId(null)}
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="flex h-[76dvh] w-full flex-col rounded-t-3xl bg-white text-slate-900 shadow-2xl md:h-[600px] md:max-w-md md:rounded-2xl"
+            className="flex h-[76dvh] max-h-[76dvh] w-full flex-col overflow-hidden overscroll-contain rounded-t-3xl bg-white text-slate-900 shadow-2xl md:h-[600px] md:max-h-[600px] md:max-w-md md:rounded-2xl"
           >
             <div className="mx-auto mt-2.5 h-1.5 w-10 rounded-full bg-slate-300 md:hidden" />
             <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
@@ -3538,7 +3547,10 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
               </button>
             </div>
 
-            <div className="flex-1 space-y-3.5 overflow-y-auto px-4 py-3">
+            <div
+              ref={commentsScrollRef}
+              className="min-h-0 flex-1 space-y-3.5 touch-pan-y overflow-y-auto overscroll-contain px-4 py-3 [overflow-anchor:auto]"
+            >
               {loadingComments ? (
                 <div className="flex items-center justify-center py-10 text-xs text-slate-500">
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />

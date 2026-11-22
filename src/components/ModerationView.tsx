@@ -3,13 +3,16 @@ import {
   AlertTriangle,
   Calendar,
   Check,
+  Clock,
   ExternalLink,
   Eye,
   EyeOff,
   FileText,
+  Loader2,
   Lock,
   Mail,
   Phone,
+  Play,
   RotateCcw,
   Search,
   ShieldCheck,
@@ -23,8 +26,10 @@ import { collection, onSnapshot } from 'firebase/firestore';
 import { useLanguage } from '../context/LanguageContext';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import {
-  deleteTopic,
-  deleteVideoPost,
+  CONTENT_RETENTION_PERIOD_MS,
+  DEFAULT_CONTENT_RETENTION_SETTINGS,
+  deleteTopicCascade,
+  deleteVideoCascade,
   getAdminUserPrivateDetails,
   moderateVideoPost,
   updateTopicStatus,
@@ -34,6 +39,8 @@ import {
 import {
   AccountStatus,
   COMMUNITY_SAFETY_RULES,
+  ContentRetentionPeriod,
+  ContentRetentionSettings,
   Report,
   Topic,
   UserProfile,
@@ -62,8 +69,38 @@ interface ModerationViewProps {
   embedded?: boolean;
   hideVideoTabForUsers?: boolean;
   onToggleHideVideoTab?: () => void | Promise<void>;
+  retentionSettings?: ContentRetentionSettings;
+  retentionProgress?: {
+    runningKijiweni: boolean;
+    runningVideo: boolean;
+    kijiweniDeleted: number;
+    kijiweniTotal: number;
+    videoDeleted: number;
+    videoTotal: number;
+    currentLabel: string;
+  };
+  onUpdateRetentionSettings?: (patch: {
+    kijiweniEnabled?: boolean;
+    kijiweniPeriod?: ContentRetentionPeriod;
+    videoEnabled?: boolean;
+    videoPeriod?: ContentRetentionPeriod;
+  }) => Promise<void>;
+  onRunRetentionNow?: (target: 'kijiweni' | 'video' | 'both') => void;
   signupLastSeenMs?: number;
 }
+
+const RETENTION_DURATION_OPTIONS: Array<{
+  value: ContentRetentionPeriod;
+  labelSw: string;
+  labelEn: string;
+}> = [
+  { value: '1w', labelSw: 'Wiki 1 (Siku 7)', labelEn: '1 Week (7 days)' },
+  { value: '3m', labelSw: 'Miezi 3 (Siku 90)', labelEn: '3 Months (90 days)' },
+  { value: '6m', labelSw: 'Miezi 6 (Siku 180)', labelEn: '6 Months (180 days)' },
+  { value: '1y', labelSw: 'Mwaka 1 (Siku 365)', labelEn: '1 Year (365 days)' },
+  { value: '5y', labelSw: 'Miaka 5', labelEn: '5 Years' },
+  { value: '10y', labelSw: 'Miaka 10', labelEn: '10 Years' },
+];
 
 type AdminSection = 'members' | 'verify_id' | 'posts' | 'videos' | 'reports';
 type MemberFilter = 'all' | 'active' | 'suspended';
@@ -80,6 +117,10 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
   embedded = false,
   hideVideoTabForUsers = false,
   onToggleHideVideoTab,
+  retentionSettings = DEFAULT_CONTENT_RETENTION_SETTINGS,
+  retentionProgress,
+  onUpdateRetentionSettings,
+  onRunRetentionNow,
   signupLastSeenMs = 0,
 }) => {
   const {
@@ -520,7 +561,7 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
   const handlePermanentDeletePost = async (topicId: string) => {
     setUpdatingTopicId(topicId);
     try {
-      await deleteTopic(topicId);
+      await deleteTopicCascade(topicId);
       setConfirmDeleteTopicId(null);
       onToast(tr('Chapisho limefutwa kabisa.', 'Post permanently deleted.'));
     } catch (err) {
@@ -568,7 +609,7 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
   const handlePermanentDeleteVideo = async (videoId: string) => {
     setUpdatingVideoId(videoId);
     try {
-      await deleteVideoPost(videoId);
+      await deleteVideoCascade(videoId);
       setConfirmDeleteVideoId(null);
       onToast(tr('Video imefutwa kabisa.', 'Video permanently deleted.'));
     } catch (err) {
@@ -825,6 +866,259 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
               </>
             )}
           </button>
+        </div>
+      )}
+
+      {/* Owner Automated Content Retention & Sequential Database Cleanup Plan (Kijiweni & Video) */}
+      {onUpdateRetentionSettings && (
+        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+          <div className="flex flex-col justify-between gap-3 border-b border-slate-100 pb-3 sm:flex-row sm:items-center">
+            <div className="flex items-start gap-2.5">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-800">
+                <Clock className="h-4 w-4" aria-hidden="true" />
+              </span>
+              <div>
+                <h3 className="text-xs font-bold text-slate-900 sm:text-sm">
+                  {tr(
+                    'Mpango wa Kufuta Machapisho ya Zamani (Database Auto-Clean)',
+                    'Automated Content Retention & Database Cleanup'
+                  )}
+                </h3>
+                <p className="mt-0.5 text-[11px] leading-snug text-slate-600">
+                  {tr(
+                    'Weka muda kwa Kijiweni au Video. Ukiwasha swichi, machapisho yote yaliyopitiliza muda huo yatafutwa moja baada ya nyingine hadi kwenye database.',
+                    'Set retention age for Kijiweni or Video posts. Turning a switch ON deletes expired items sequentially one-by-one from the database.'
+                  )}
+                </p>
+              </div>
+            </div>
+
+            {(retentionSettings.kijiweniEnabled || retentionSettings.videoEnabled) && onRunRetentionNow && (
+              <button
+                type="button"
+                disabled={Boolean(retentionProgress?.runningKijiweni || retentionProgress?.runningVideo)}
+                onClick={() => onRunRetentionNow('both')}
+                className="inline-flex min-h-[38px] shrink-0 items-center justify-center gap-1.5 rounded-lg bg-[#0E2640] px-3 py-1.5 text-xs font-bold text-white transition-colors hover:bg-[#163A5F] disabled:opacity-60"
+              >
+                {retentionProgress?.runningKijiweni || retentionProgress?.runningVideo ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                    <span>{tr('Inafuta...', 'Cleaning...')}</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>{tr('Kagua & Futa Sasa', 'Scan & Clean Now')}</span>
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+
+          <div className="mt-3.5 grid grid-cols-1 gap-3 md:grid-cols-2">
+            {/* Plan 1: Kijiweni Posts */}
+            {(() => {
+              const cutoffMs = Date.now() - CONTENT_RETENTION_PERIOD_MS[retentionSettings.kijiweniPeriod];
+              const matchingCount = allTopics.filter((t) => {
+                if (normalizeBoardCategory(t.category) !== 'Kijiweni') return false;
+                const ms = t.createdAt ? t.createdAt.toMillis() : 0;
+                return ms > 0 && ms <= cutoffMs;
+              }).length;
+              const isRunning = Boolean(retentionProgress?.runningKijiweni);
+
+              return (
+                <div
+                  className={`rounded-xl border p-3.5 transition-colors ${
+                    retentionSettings.kijiweniEnabled
+                      ? 'border-amber-300 bg-amber-50/45'
+                      : 'border-slate-200 bg-slate-50/70'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <FileText className="h-4 w-4 text-[#1D4E89]" aria-hidden="true" />
+                      <div>
+                        <p className="text-xs font-bold text-slate-900 sm:text-sm">
+                          {tr('Machapisho ya Kijiweni', 'Kijiweni Posts')}
+                        </p>
+                        <p className="text-[11px] text-slate-600 tabular-nums">
+                          {tr(
+                            `Yaliyopitiliza muda: ${matchingCount}`,
+                            `Expired matching posts: ${matchingCount}`
+                          )}
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={retentionSettings.kijiweniEnabled}
+                      aria-label={tr(
+                        'Washa au zima kufuta Kijiweni kiotomatiki',
+                        'Toggle Kijiweni auto-delete'
+                      )}
+                      onClick={() =>
+                        void onUpdateRetentionSettings({
+                          kijiweniEnabled: !retentionSettings.kijiweniEnabled,
+                        })
+                      }
+                      className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full p-0.5 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1D4E89] ${
+                        retentionSettings.kijiweniEnabled ? 'bg-rose-600' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-6 w-6 transform rounded-full bg-white shadow transition-transform ${
+                          retentionSettings.kijiweniEnabled ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  <div className="mt-3">
+                    <label className="block text-[11px] font-semibold text-slate-700">
+                      {tr('Futa post za Kijiweni zilizozidi:', 'Delete Kijiweni posts older than:')}
+                    </label>
+                    <select
+                      value={retentionSettings.kijiweniPeriod}
+                      onChange={(e) =>
+                        void onUpdateRetentionSettings({
+                          kijiweniPeriod: e.target.value as ContentRetentionPeriod,
+                        })
+                      }
+                      className="mt-1 min-h-[40px] w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 focus:border-[#1D4E89] focus:outline-none"
+                    >
+                      {RETENTION_DURATION_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {tr(opt.labelSw, opt.labelEn)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {isRunning && retentionProgress && (
+                    <div className="mt-2.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-[11px] text-rose-900 tabular-nums">
+                      <div className="flex items-center justify-between gap-2 font-bold">
+                        <span className="inline-flex items-center gap-1.5">
+                          <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                          <span>{tr('Inafuta 1 kwa 1:', 'Deleting 1-by-1:')}</span>
+                        </span>
+                        <span>
+                          {retentionProgress.kijiweniDeleted} / {retentionProgress.kijiweniTotal || matchingCount}
+                        </span>
+                      </div>
+                      {retentionProgress.currentLabel && (
+                        <p className="mt-0.5 truncate text-[10.5px] text-rose-700">
+                          {retentionProgress.currentLabel}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Plan 2: Video Posts */}
+            {(() => {
+              const cutoffMs = Date.now() - CONTENT_RETENTION_PERIOD_MS[retentionSettings.videoPeriod];
+              const matchingCount = allVideos.filter((v) => {
+                const ms = v.createdAt ? v.createdAt.toMillis() : 0;
+                return ms > 0 && ms <= cutoffMs;
+              }).length;
+              const isRunning = Boolean(retentionProgress?.runningVideo);
+
+              return (
+                <div
+                  className={`rounded-xl border p-3.5 transition-colors ${
+                    retentionSettings.videoEnabled
+                      ? 'border-amber-300 bg-amber-50/45'
+                      : 'border-slate-200 bg-slate-50/70'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <VideoIcon className="h-4 w-4 text-[#B91C1C]" aria-hidden="true" />
+                      <div>
+                        <p className="text-xs font-bold text-slate-900 sm:text-sm">
+                          {tr('Machapisho ya Video', 'Video Posts')}
+                        </p>
+                        <p className="text-[11px] text-slate-600 tabular-nums">
+                          {tr(
+                            `Zilizopitiliza muda: ${matchingCount}`,
+                            `Expired matching videos: ${matchingCount}`
+                          )}
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={retentionSettings.videoEnabled}
+                      aria-label={tr(
+                        'Washa au zima kufuta Video kiotomatiki',
+                        'Toggle Video auto-delete'
+                      )}
+                      onClick={() =>
+                        void onUpdateRetentionSettings({
+                          videoEnabled: !retentionSettings.videoEnabled,
+                        })
+                      }
+                      className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full p-0.5 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1D4E89] ${
+                        retentionSettings.videoEnabled ? 'bg-rose-600' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-6 w-6 transform rounded-full bg-white shadow transition-transform ${
+                          retentionSettings.videoEnabled ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  <div className="mt-3">
+                    <label className="block text-[11px] font-semibold text-slate-700">
+                      {tr('Futa Video zilizozidi muda:', 'Delete videos older than:')}
+                    </label>
+                    <select
+                      value={retentionSettings.videoPeriod}
+                      onChange={(e) =>
+                        void onUpdateRetentionSettings({
+                          videoPeriod: e.target.value as ContentRetentionPeriod,
+                        })
+                      }
+                      className="mt-1 min-h-[40px] w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 focus:border-[#1D4E89] focus:outline-none"
+                    >
+                      {RETENTION_DURATION_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {tr(opt.labelSw, opt.labelEn)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {isRunning && retentionProgress && (
+                    <div className="mt-2.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-[11px] text-rose-900 tabular-nums">
+                      <div className="flex items-center justify-between gap-2 font-bold">
+                        <span className="inline-flex items-center gap-1.5">
+                          <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                          <span>{tr('Inafuta 1 kwa 1:', 'Deleting 1-by-1:')}</span>
+                        </span>
+                        <span>
+                          {retentionProgress.videoDeleted} / {retentionProgress.videoTotal || matchingCount}
+                        </span>
+                      </div>
+                      {retentionProgress.currentLabel && (
+                        <p className="mt-0.5 truncate text-[10.5px] text-rose-700">
+                          {retentionProgress.currentLabel}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
         </div>
       )}
 

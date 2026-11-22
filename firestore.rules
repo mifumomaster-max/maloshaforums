@@ -37,12 +37,15 @@ service cloud.firestore {
       );
     }
 
+    function isAccountActiveData(userData) {
+      return !('accountStatus' in userData) || userData.accountStatus != 'suspended';
+    }
+
     function isNotSuspended() {
       return isSignedIn() && (
         isAdmin() ||
         !exists(/databases/$(database)/documents/users/$(request.auth.uid)) ||
-        !('accountStatus' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data) ||
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountStatus != 'suspended'
+        isAccountActiveData(get(/databases/$(database)/documents/users/$(request.auth.uid)).data)
       );
     }
 
@@ -510,7 +513,7 @@ service cloud.firestore {
           'recipientId', 'actorId', 'actorName', 'actorPhoto',
           'type', 'topicId', 'topicTitle', 'topicCategory',
           'replyId', 'parentReplyId', 'replyPreview',
-          'ruleNumber', 'ruleTitle', 'isRead', 'createdAt'
+          'ruleNumber', 'ruleTitle', 'isRead', 'createdAt', 'readAt'
         ])
         && data.recipientId is string && data.recipientId == userId && isValidId(data.recipientId)
         && data.actorId is string && isValidId(data.actorId)
@@ -526,7 +529,8 @@ service cloud.firestore {
         && (!('ruleNumber' in data) || (data.ruleNumber is int && data.ruleNumber >= 0 && data.ruleNumber <= 13))
         && (!('ruleTitle' in data) || (data.ruleTitle is string && data.ruleTitle.size() <= 140))
         && data.isRead is bool
-        && data.createdAt is timestamp;
+        && data.createdAt is timestamp
+        && (!('readAt' in data) || data.readAt == null || data.readAt is timestamp);
     }
 
     function isValidPhotoUrlsList(urls) {
@@ -622,6 +626,25 @@ service cloud.firestore {
       return data.keys().hasAll(['hideVideoTabForUsers', 'updatedBy', 'updatedAt'])
         && data.keys().hasOnly(['hideVideoTabForUsers', 'updatedBy', 'updatedAt'])
         && data.hideVideoTabForUsers is bool
+        && data.updatedBy is string && isValidId(data.updatedBy)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidContentRetentionSettings(data) {
+      return data.keys().hasAll([
+          'kijiweniEnabled', 'kijiweniPeriod',
+          'videoEnabled', 'videoPeriod',
+          'updatedBy', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'kijiweniEnabled', 'kijiweniPeriod',
+          'videoEnabled', 'videoPeriod',
+          'updatedBy', 'updatedAt'
+        ])
+        && data.kijiweniEnabled is bool
+        && data.kijiweniPeriod in ['1w', '3m', '6m', '1y', '5y', '10y']
+        && data.videoEnabled is bool
+        && data.videoPeriod in ['1w', '3m', '6m', '1y', '5y', '10y']
         && data.updatedBy is string && isValidId(data.updatedBy)
         && data.updatedAt is timestamp;
     }
@@ -806,12 +829,14 @@ service cloud.firestore {
     function isValidPollOption(opt, expectedId) {
       return opt is map
         && opt.keys().hasAll(['id', 'label'])
-        && opt.keys().hasOnly(['id', 'label', 'color', 'imageUrl', 'subtitle'])
+        && opt.keys().hasOnly(['id', 'label', 'color', 'imageUrl', 'subtitle', 'positionTitle', 'gender'])
         && opt.id is string && isValidId(opt.id) && opt.id == expectedId
         && opt.label is string && opt.label.size() >= 1 && opt.label.size() <= 160
         && (!('color' in opt) || (opt.color is string && opt.color.size() <= 30))
         && (!('imageUrl' in opt) || (opt.imageUrl is string && opt.imageUrl.size() <= 500))
-        && (!('subtitle' in opt) || (opt.subtitle is string && opt.subtitle.size() <= 160));
+        && (!('subtitle' in opt) || (opt.subtitle is string && opt.subtitle.size() <= 160))
+        && (!('positionTitle' in opt) || (opt.positionTitle is string && opt.positionTitle.size() <= 80))
+        && (!('gender' in opt) || (opt.gender is string && opt.gender in ['male', 'female', 'other']));
     }
 
     function isValidPoll(data, pollId) {
@@ -824,10 +849,12 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'pollId', 'question', 'description', 'imageUrl', 'category', 'questionType',
-          'pollStyle', 'institutionName',
+          'pollStyle', 'themeColor', 'institutionName',
           'options', 'optionIds', 'maxChoices', 'status', 'resultsVisibility',
-          'allowVoteChange', 'anonymousMode', 'showVoterCount', 'allowShare',
-          'isPinned', 'hasDeadline', 'endsAt', 'totalBallots', 'commentsCount',
+          'allowVoteChange', 'anonymousMode', 'showVoterCount',
+          'showLivePercentages', 'shuffleOptions', 'allowComments', 'quorumTarget',
+          'allowShare', 'isPinned', 'hasDeadline', 'endsAt', 'totalBallots', 'commentsCount',
+          'tournamentId', 'tournamentRound', 'tournamentGroupLabel',
           'createdBy', 'createdByName', 'createdByPhoto', 'createdAt', 'updatedAt'
         ])
         && data.pollId is string && data.pollId == pollId && isValidId(data.pollId)
@@ -837,6 +864,7 @@ service cloud.firestore {
         && data.category in ['Siasa', 'Jamii', 'Biashara', 'Teknolojia', 'Elimu', 'Michezo', 'Uongozi', 'Mengineyo']
         && data.questionType in ['single', 'multiple', 'yes_no', 'rating', 'open_opinion']
         && (!('pollStyle' in data) || (data.pollStyle is string && data.pollStyle in ['standard', 'social_x', 'whatsapp', 'candidate_election', 'school_election', 'local_govt', 'open_opinion']))
+        && (!('themeColor' in data) || (data.themeColor is string && data.themeColor in ['cobalt', 'emerald', 'violet', 'amber', 'crimson', 'teal', 'indigo', 'rose', 'cyan', 'slate']))
         && (!('institutionName' in data) || (data.institutionName is string && data.institutionName.size() <= 120))
         && data.options is list
         && data.optionIds is list
@@ -861,12 +889,60 @@ service cloud.firestore {
         && data.allowVoteChange is bool
         && data.anonymousMode is bool
         && data.showVoterCount is bool
+        && (!('showLivePercentages' in data) || data.showLivePercentages is bool)
+        && (!('shuffleOptions' in data) || data.shuffleOptions is bool)
+        && (!('allowComments' in data) || data.allowComments is bool)
+        && (!('quorumTarget' in data) || (data.quorumTarget is int && data.quorumTarget >= 0 && data.quorumTarget <= 1000000))
         && data.allowShare is bool
         && data.isPinned is bool
         && data.hasDeadline is bool
         && data.endsAt is timestamp
         && data.totalBallots is int && data.totalBallots >= 0
         && (!('commentsCount' in data) || (data.commentsCount is int && data.commentsCount >= 0))
+        && (!('tournamentId' in data) || (data.tournamentId is string && data.tournamentId.size() <= 128))
+        && (!('tournamentRound' in data) || (data.tournamentRound is int && data.tournamentRound >= 1 && data.tournamentRound <= 20))
+        && (!('tournamentGroupLabel' in data) || (data.tournamentGroupLabel is string && data.tournamentGroupLabel.size() <= 80))
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
+        && data.createdByName is string && data.createdByName.size() >= 1 && data.createdByName.size() <= 80
+        && data.createdByPhoto is string && data.createdByPhoto.size() <= 500
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPollTournament(data, tournamentId) {
+      return data.keys().hasAll([
+          'tournamentId', 'title', 'description', 'institutionName', 'category', 'positionTitle',
+          'targetWinnersCount', 'useGenderQuota', 'requiredMaleCount', 'requiredFemaleCount',
+          'groupSize', 'roundDurationMinutes', 'status', 'currentRound', 'totalPlannedRounds',
+          'candidates', 'stages', 'winnerIds',
+          'createdBy', 'createdByName', 'createdByPhoto', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'tournamentId', 'title', 'description', 'institutionName', 'category', 'positionTitle',
+          'targetWinnersCount', 'useGenderQuota', 'requiredMaleCount', 'requiredFemaleCount',
+          'groupSize', 'roundDurationMinutes', 'status', 'currentRound', 'totalPlannedRounds',
+          'candidates', 'stages', 'winnerIds', 'winnerVotes',
+          'createdBy', 'createdByName', 'createdByPhoto', 'createdAt', 'updatedAt'
+        ])
+        && data.tournamentId is string && data.tournamentId == tournamentId && isValidId(data.tournamentId)
+        && data.title is string && data.title.size() >= 4 && data.title.size() <= 200
+        && data.description is string && data.description.size() <= 1500
+        && data.institutionName is string && data.institutionName.size() <= 120
+        && data.category in ['Siasa', 'Jamii', 'Biashara', 'Teknolojia', 'Elimu', 'Michezo', 'Uongozi', 'Mengineyo']
+        && data.positionTitle is string && data.positionTitle.size() <= 80
+        && data.targetWinnersCount is int && data.targetWinnersCount >= 1 && data.targetWinnersCount <= 50
+        && data.useGenderQuota is bool
+        && data.requiredMaleCount is int && data.requiredMaleCount >= 0 && data.requiredMaleCount <= 50
+        && data.requiredFemaleCount is int && data.requiredFemaleCount >= 0 && data.requiredFemaleCount <= 50
+        && data.groupSize is int && data.groupSize >= 3 && data.groupSize <= 12
+        && data.roundDurationMinutes is int && data.roundDurationMinutes >= 5 && data.roundDurationMinutes <= 525600
+        && data.status in ['active', 'completed']
+        && data.currentRound is int && data.currentRound >= 1 && data.currentRound <= 20
+        && data.totalPlannedRounds is int && data.totalPlannedRounds >= 1 && data.totalPlannedRounds <= 20
+        && data.candidates is list && data.candidates.size() >= 2 && data.candidates.size() <= 300
+        && data.stages is list && data.stages.size() >= 1 && data.stages.size() <= 20
+        && data.winnerIds is list && data.winnerIds.size() <= 50
+        && (!('winnerVotes' in data) || data.winnerVotes is map)
         && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
         && data.createdByName is string && data.createdByName.size() >= 1 && data.createdByName.size() <= 80
         && data.createdByPhoto is string && data.createdByPhoto.size() <= 500
@@ -922,27 +998,101 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/polls/$(pollId)).data;
     }
 
-    function canReadPollResults(pollId) {
-      return isAdmin() || (
-        exists(/databases/$(database)/documents/polls/$(pollId))
-        && pollDocData(pollId).status != 'draft'
-        && (
-          pollDocData(pollId).resultsVisibility == 'always' ||
-          (
-            pollDocData(pollId).resultsVisibility == 'after_close' && (
-              pollDocData(pollId).status == 'closed' ||
-              (pollDocData(pollId).hasDeadline && pollDocData(pollId).endsAt <= request.time)
-            )
-          ) ||
-          (
-            pollDocData(pollId).resultsVisibility == 'after_vote' && (
-              (isSignedIn() && exists(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid))) ||
-              pollDocData(pollId).status == 'closed' ||
-              (pollDocData(pollId).hasDeadline && pollDocData(pollId).endsAt <= request.time)
-            )
+    function isPollOpenData(pollData) {
+      return pollData.status == 'open'
+        && (!pollData.hasDeadline || pollData.endsAt > request.time);
+    }
+
+    function canReadPollResultsWithData(pollId, pollData) {
+      return isSignedIn() && pollData.status != 'draft' && (
+        pollData.resultsVisibility == 'always' ||
+        (
+          pollData.resultsVisibility == 'after_close' && (
+            pollData.status == 'closed' ||
+            (pollData.hasDeadline && pollData.endsAt <= request.time)
+          )
+        ) ||
+        (
+          pollData.resultsVisibility == 'after_vote' && (
+            exists(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid)) ||
+            pollData.status == 'closed' ||
+            (pollData.hasDeadline && pollData.endsAt <= request.time)
           )
         )
       );
+    }
+
+    function canReadPollResults(pollId) {
+      return isAdmin() || (
+        isSignedIn() &&
+        exists(/databases/$(database)/documents/polls/$(pollId)) &&
+        canReadPollResultsWithData(pollId, pollDocData(pollId))
+      );
+    }
+
+    function canCreateBallotWithPoll(data, pollId, pollData) {
+      return isPollOpenData(pollData)
+        && data.selectedOptionIds.size() <= pollData.maxChoices
+        && pollData.optionIds.hasAll(data.selectedOptionIds)
+        && (pollData.questionType != 'multiple' ? data.selectedOptionIds.size() == 1 : true)
+        && getAfter(/databases/$(database)/documents/polls/$(pollId)).data.totalBallots == pollData.totalBallots + 1;
+    }
+
+    function canUpdateBallotWithPoll(data, pollData) {
+      return isPollOpenData(pollData)
+        && pollData.allowVoteChange == true
+        && data.selectedOptionIds.size() <= pollData.maxChoices
+        && pollData.optionIds.hasAll(data.selectedOptionIds)
+        && (pollData.questionType != 'multiple' ? data.selectedOptionIds.size() == 1 : true);
+    }
+
+    function canCreateCommentWithPoll(pollId, pollData) {
+      return isPollOpenData(pollData)
+        && (!('allowComments' in pollData) || pollData.allowComments == true)
+        && (
+          (
+            !('commentsCount' in pollData) &&
+            getAfter(/databases/$(database)/documents/polls/$(pollId)).data.commentsCount == 1
+          ) ||
+          (
+            'commentsCount' in pollData &&
+            getAfter(/databases/$(database)/documents/polls/$(pollId)).data.commentsCount == pollData.commentsCount + 1
+          )
+        );
+    }
+
+    function canChangeExistingTallyWithBallots(optionId, beforeBallotData, afterBallotData) {
+      return (
+        incoming().votesCount == existing().votesCount + 1
+        && optionId in afterBallotData.selectedOptionIds
+        && !(optionId in beforeBallotData.selectedOptionIds)
+      ) || (
+        existing().votesCount >= 1
+        && incoming().votesCount == existing().votesCount - 1
+        && optionId in beforeBallotData.selectedOptionIds
+        && !(optionId in afterBallotData.selectedOptionIds)
+      );
+    }
+
+    function canVoterSyncTallyWithBatch(pollId, optionId, afterBallotData) {
+      return afterBallotData.updatedAt == request.time
+        && afterBallotData.pollId == pollId
+        && afterBallotData.userId == request.auth.uid
+        && (
+          (
+            !exists(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid))
+            && incoming().votesCount == existing().votesCount + 1
+            && optionId in afterBallotData.selectedOptionIds
+          ) ||
+          (
+            exists(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid))
+            && canChangeExistingTallyWithBallots(
+              optionId,
+              get(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid)).data,
+              afterBallotData
+            )
+          )
+        );
     }
 
     // 4. Admins Collection
@@ -1091,7 +1241,8 @@ service cloud.firestore {
           && incoming().topicId == existing().topicId
           && incoming().replyId == existing().replyId
           && incoming().createdAt == existing().createdAt
-          && incoming().diff(existing()).affectedKeys().hasOnly(['isRead']);
+          && (!('readAt' in incoming()) || incoming().readAt == null || incoming().readAt == request.time)
+          && incoming().diff(existing()).affectedKeys().hasOnly(['isRead', 'readAt']);
 
         allow delete: if isSignedIn()
           && isValidId(userId)
@@ -1213,8 +1364,8 @@ service cloud.firestore {
 
       // Topic Votes
       match /votes/{userId} {
-        allow get: if isSignedIn() && isValidId(topicId) && isValidId(userId) && userId == request.auth.uid;
-        allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+        allow get: if isSignedIn() && isValidId(topicId) && isValidId(userId) && (userId == request.auth.uid || isAdmin());
+        allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
 
         allow create: if isNotSuspended()
           && isValidId(topicId)
@@ -1225,7 +1376,7 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/topics/$(topicId));
 
         allow update: if false;
-        allow delete: if isNotSuspended() && isValidId(topicId) && isValidId(userId) && userId == request.auth.uid;
+        allow delete: if isValidId(topicId) && isValidId(userId) && (isAdmin() || (isNotSuspended() && userId == request.auth.uid));
       }
 
       // Topic Replies Subcollection
@@ -1314,8 +1465,8 @@ service cloud.firestore {
 
         // Reply Votes
         match /votes/{userId} {
-          allow get: if isSignedIn() && isValidId(topicId) && isValidId(replyId) && isValidId(userId) && userId == request.auth.uid;
-          allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+          allow get: if isSignedIn() && isValidId(topicId) && isValidId(replyId) && isValidId(userId) && (userId == request.auth.uid || isAdmin());
+          allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
 
           allow create: if isNotSuspended()
             && isValidId(topicId)
@@ -1327,7 +1478,7 @@ service cloud.firestore {
             && exists(/databases/$(database)/documents/topics/$(topicId)/replies/$(replyId));
 
           allow update: if false;
-          allow delete: if isNotSuspended() && isValidId(topicId) && isValidId(replyId) && isValidId(userId) && userId == request.auth.uid;
+          allow delete: if isValidId(topicId) && isValidId(replyId) && isValidId(userId) && (isAdmin() || (isNotSuspended() && userId == request.auth.uid));
         }
       }
     }
@@ -1896,8 +2047,8 @@ service cloud.firestore {
         && (isAdmin() || (isNotSuspended() && existing().authorId == request.auth.uid));
 
       match /likes/{userId} {
-        allow get: if isSignedIn() && isValidId(videoId) && isValidId(userId) && userId == request.auth.uid;
-        allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+        allow get: if isSignedIn() && isValidId(videoId) && isValidId(userId) && (userId == request.auth.uid || isAdmin());
+        allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
 
         allow create: if isNotSuspended()
           && isValidId(videoId)
@@ -1910,10 +2061,9 @@ service cloud.firestore {
 
         allow update: if false;
 
-        allow delete: if isNotSuspended()
-          && isValidId(videoId)
+        allow delete: if isValidId(videoId)
           && isValidId(userId)
-          && userId == request.auth.uid;
+          && (isAdmin() || (isNotSuspended() && userId == request.auth.uid));
       }
 
       match /comments/{commentId} {
@@ -1983,21 +2133,23 @@ service cloud.firestore {
       }
     }
 
-    // 15. Owner-Controlled Navigation Settings
+    // 15. Owner-Controlled Navigation & Retention Settings
     match /site_settings/{settingId} {
-      allow get: if isValidId(settingId) && settingId == 'navigation';
+      allow get: if isValidId(settingId) && (settingId == 'navigation' || (settingId == 'retention' && isAdmin()));
       allow list: if false;
 
       allow create, update: if isAdmin()
         && isValidId(settingId)
-        && settingId == 'navigation'
-        && isValidSiteNavSettings(incoming())
+        && (
+          (settingId == 'navigation' && isValidSiteNavSettings(incoming())) ||
+          (settingId == 'retention' && isValidContentRetentionSettings(incoming()))
+        )
         && incoming().updatedBy == request.auth.uid
         && incoming().updatedAt == request.time;
 
       allow delete: if isAdmin()
         && isValidId(settingId)
-        && settingId == 'navigation';
+        && (settingId == 'navigation' || settingId == 'retention');
     }
 
     // 16. Owner-Only Editable Specimen Identity Cards
@@ -2110,26 +2262,25 @@ service cloud.firestore {
         && incoming().updatedAt == request.time;
 
       allow update: if isValidId(pollId)
-        && isValidPoll(incoming(), pollId)
         && incoming().pollId == existing().pollId
         && incoming().createdBy == existing().createdBy
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          isAdmin() ||
+          (isAdmin() && isValidPoll(incoming(), pollId)) ||
           (
             isNotSuspended()
-            && existing().status == 'open'
-            && (!existing().hasDeadline || existing().endsAt > request.time)
+            && isPollOpenData(existing())
             && incoming().diff(existing()).affectedKeys().hasOnly(['totalBallots', 'updatedAt'])
+            && incoming().totalBallots is int
             && incoming().totalBallots == existing().totalBallots + 1
             && !exists(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid))
             && existsAfter(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid))
           ) ||
           (
             isNotSuspended()
-            && existing().status == 'open'
-            && (!existing().hasDeadline || existing().endsAt > request.time)
+            && isPollOpenData(existing())
+            && (!('allowComments' in existing()) || existing().allowComments == true)
             && incoming().diff(existing()).affectedKeys().hasOnly(['commentsCount', 'updatedAt'])
             && incoming().commentsCount is int
             && incoming().commentsCount >= 0
@@ -2170,33 +2321,13 @@ service cloud.firestore {
           && (
             isAdmin() ||
             (
-              isNotSuspended()
-              && exists(/databases/$(database)/documents/polls/$(pollId))
-              && pollDocData(pollId).status == 'open'
-              && (!pollDocData(pollId).hasDeadline || pollDocData(pollId).endsAt > request.time)
-              && optionId in pollDocData(pollId).optionIds
+              isSignedIn()
               && incoming().diff(existing()).affectedKeys().hasOnly(['votesCount', 'updatedAt'])
               && existsAfter(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid))
-              && (
-                (
-                  incoming().votesCount == existing().votesCount + 1
-                  && optionId in getAfter(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid)).data.selectedOptionIds
-                  && (
-                    !exists(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid)) ||
-                    (
-                      pollDocData(pollId).allowVoteChange == true
-                      && !(optionId in get(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid)).data.selectedOptionIds)
-                    )
-                  )
-                ) ||
-                (
-                  existing().votesCount >= 1
-                  && incoming().votesCount == existing().votesCount - 1
-                  && pollDocData(pollId).allowVoteChange == true
-                  && exists(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid))
-                  && optionId in get(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid)).data.selectedOptionIds
-                  && !(optionId in getAfter(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid)).data.selectedOptionIds)
-                )
+              && canVoterSyncTallyWithBatch(
+                pollId,
+                optionId,
+                getAfter(/databases/$(database)/documents/polls/$(pollId)/ballots/$(request.auth.uid)).data
               )
             )
           );
@@ -2220,14 +2351,7 @@ service cloud.firestore {
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time
           && exists(/databases/$(database)/documents/polls/$(pollId))
-          && pollDocData(pollId).status == 'open'
-          && (!pollDocData(pollId).hasDeadline || pollDocData(pollId).endsAt > request.time)
-          && incoming().selectedOptionIds.size() <= pollDocData(pollId).maxChoices
-          && pollDocData(pollId).optionIds.hasAll(incoming().selectedOptionIds)
-          && (pollDocData(pollId).questionType != 'multiple' ? incoming().selectedOptionIds.size() == 1 : true)
-          && getAfter(/databases/$(database)/documents/polls/$(pollId)).data.totalBallots == pollDocData(pollId).totalBallots + 1
-          && getAfter(/databases/$(database)/documents/polls/$(pollId)/tallies/$(incoming().selectedOptionIds[0])).data.votesCount ==
-             get(/databases/$(database)/documents/polls/$(pollId)/tallies/$(incoming().selectedOptionIds[0])).data.votesCount + 1;
+          && canCreateBallotWithPoll(incoming(), pollId, pollDocData(pollId));
 
         allow update: if isNotSuspended()
           && isValidId(pollId)
@@ -2239,12 +2363,7 @@ service cloud.firestore {
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
           && exists(/databases/$(database)/documents/polls/$(pollId))
-          && pollDocData(pollId).status == 'open'
-          && pollDocData(pollId).allowVoteChange == true
-          && (!pollDocData(pollId).hasDeadline || pollDocData(pollId).endsAt > request.time)
-          && incoming().selectedOptionIds.size() <= pollDocData(pollId).maxChoices
-          && pollDocData(pollId).optionIds.hasAll(incoming().selectedOptionIds)
-          && (pollDocData(pollId).questionType != 'multiple' ? incoming().selectedOptionIds.size() == 1 : true);
+          && canUpdateBallotWithPoll(incoming(), pollDocData(pollId));
 
         allow delete: if isAdmin() && isValidId(pollId) && isValidId(userId);
       }
@@ -2268,18 +2387,7 @@ service cloud.firestore {
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time
           && exists(/databases/$(database)/documents/polls/$(pollId))
-          && pollDocData(pollId).status == 'open'
-          && (!pollDocData(pollId).hasDeadline || pollDocData(pollId).endsAt > request.time)
-          && (
-            (
-              !('commentsCount' in pollDocData(pollId)) &&
-              getAfter(/databases/$(database)/documents/polls/$(pollId)).data.commentsCount == 1
-            ) ||
-            (
-              'commentsCount' in pollDocData(pollId) &&
-              getAfter(/databases/$(database)/documents/polls/$(pollId)).data.commentsCount == pollDocData(pollId).commentsCount + 1
-            )
-          );
+          && canCreateCommentWithPoll(pollId, pollDocData(pollId));
 
         allow update: if isNotSuspended()
           && isValidId(pollId)
@@ -2298,8 +2406,7 @@ service cloud.firestore {
             (
               existing().authorId == request.auth.uid &&
               existing().isDeleted == false &&
-              pollDocData(pollId).status == 'open' &&
-              (!pollDocData(pollId).hasDeadline || pollDocData(pollId).endsAt > request.time) &&
+              isPollOpenData(pollDocData(pollId)) &&
               incoming().updatedAt == request.time &&
               incoming().diff(existing()).affectedKeys().hasOnly(['body', 'updatedAt'])
             ) ||
@@ -2341,9 +2448,10 @@ service cloud.firestore {
             && isValidId(pollId)
             && isValidId(commentId)
             && isValidId(userId)
-            && userId == request.auth.uid;
+            && (userId == request.auth.uid || isAdmin());
 
-          allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+          allow list: if isSignedIn()
+            && (resource.data.userId == request.auth.uid || isAdmin());
 
           allow create: if isNotSuspended()
             && isValidId(pollId)
@@ -2356,13 +2464,36 @@ service cloud.firestore {
 
           allow update: if false;
 
-          allow delete: if isNotSuspended()
+          allow delete: if isSignedIn()
             && isValidId(pollId)
             && isValidId(commentId)
             && isValidId(userId)
-            && userId == request.auth.uid;
+            && (isAdmin() || (isNotSuspended() && userId == request.auth.uid));
         }
       }
+    }
+
+    // 20. Multi-Stage Deterministic Elimination Tournaments (Mchakato wa Mtoano)
+    match /poll_tournaments/{tournamentId} {
+      allow get: if isValidId(tournamentId);
+      allow list: if true;
+
+      allow create: if isAdmin()
+        && isValidId(tournamentId)
+        && isValidPollTournament(incoming(), tournamentId)
+        && incoming().createdBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidId(tournamentId)
+        && isValidPollTournament(incoming(), tournamentId)
+        && incoming().tournamentId == existing().tournamentId
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isAdmin() && isValidId(tournamentId);
     }
   }
 }
