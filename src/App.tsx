@@ -522,7 +522,7 @@ function ForumShell() {
 
   const isAdmin = useMemo(() => {
     if (!user) return false;
-    return (user.email === ADMIN_EMAIL && user.emailVerified) || isAdminDoc;
+    return ((user.email || '').toLowerCase() === ADMIN_EMAIL && user.emailVerified) || isAdminDoc;
   }, [user, isAdminDoc]);
 
   useEffect(() => {

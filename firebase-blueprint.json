@@ -798,7 +798,7 @@
         "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "voterName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "voterPhoto": { "type": "string", "maxLength": 500 },
-        "selectedOptionIds": { "type": "array", "description": "1 to 10 selected option IDs chosen by the voter." },
+        "selectedOptionIds": { "type": "array", "description": "1 to 12 selected option IDs chosen by the voter." },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },

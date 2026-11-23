@@ -23,7 +23,11 @@ service cloud.firestore {
     function isSignedIn() {
       return request.auth != null
         && request.auth.uid != null
-        && request.auth.token.firebase.sign_in_provider != 'anonymous';
+        && (
+          !('firebase' in request.auth.token) ||
+          !('sign_in_provider' in request.auth.token.firebase) ||
+          request.auth.token.firebase.sign_in_provider != 'anonymous'
+        );
     }
 
     function isOwner(userId) {
@@ -32,7 +36,13 @@ service cloud.firestore {
 
     function isAdmin() {
       return isSignedIn() && (
-        (request.auth.token.email == 'mifumomaster@gmail.com' && request.auth.token.email_verified == true) ||
+        (
+          'email' in request.auth.token &&
+          request.auth.token.email is string &&
+          request.auth.token.email.lower() == 'mifumomaster@gmail.com' &&
+          'email_verified' in request.auth.token &&
+          request.auth.token.email_verified == true
+        ) ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
     }
@@ -869,7 +879,7 @@ service cloud.firestore {
         && data.options is list
         && data.optionIds is list
         && data.optionIds.size() == data.options.size()
-        && data.optionIds.toSet().size() == data.optionIds.size()
+        && (data.optionIds.size() < 2 || data.optionIds[0] != data.optionIds[1])
         && (
           (
             data.questionType == 'open_opinion'
@@ -989,7 +999,8 @@ service cloud.firestore {
         && data.voterPhoto is string && data.voterPhoto.size() <= 500
         && data.selectedOptionIds is list
         && data.selectedOptionIds.size() >= 1 && data.selectedOptionIds.size() <= 12
-        && data.selectedOptionIds.toSet().size() == data.selectedOptionIds.size()
+        && isValidId(data.selectedOptionIds[0])
+        && (data.selectedOptionIds.size() == 1 || (isValidId(data.selectedOptionIds[1]) && data.selectedOptionIds[0] != data.selectedOptionIds[1]))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }

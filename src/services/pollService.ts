@@ -431,33 +431,71 @@ function sanitizePollOptions(
     '#DB2777',
     '#0F766E',
   ];
-  return rawOptions
-    .map((opt, idx) => {
-      const cleanId =
-        (opt.id || `opt_${idx + 1}`).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40) ||
-        `opt_${idx + 1}`;
-      const cleanLabel = opt.label.trim().slice(0, 160);
-      const cleanSubtitle = (opt.subtitle || '').trim().slice(0, 160);
-      const cleanPositionTitle = (opt.positionTitle || '').trim().slice(0, 80);
-      const cleanImageUrl = (opt.imageUrl || '').trim().slice(0, 500);
-      const cleanColor =
-        opt.color && opt.color.trim() ? opt.color.trim().slice(0, 30) : palette[idx % palette.length];
+  const seenIds = new Set<string>();
+  const cleaned: PollOption[] = [];
 
-      const obj: PollOption = {
-        id: cleanId,
-        label: cleanLabel,
-        color: cleanColor,
-      };
-      if (cleanSubtitle) obj.subtitle = cleanSubtitle;
-      if (cleanPositionTitle) obj.positionTitle = cleanPositionTitle;
-      if (opt.gender === 'male' || opt.gender === 'female' || opt.gender === 'other') {
-        obj.gender = opt.gender;
+  for (let idx = 0; idx < rawOptions.length; idx++) {
+    const opt = rawOptions[idx];
+    const cleanLabel = opt.label.trim().slice(0, 160);
+    if (cleanLabel.length < 1) continue;
+
+    let baseId =
+      (opt.id || `opt_${cleaned.length + 1}`).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40) ||
+      `opt_${cleaned.length + 1}`;
+    let cleanId = baseId;
+    let suffix = 2;
+    while (seenIds.has(cleanId)) {
+      cleanId = `${baseId.slice(0, 32)}_${suffix}`;
+      suffix++;
+    }
+    seenIds.add(cleanId);
+
+    const cleanSubtitle = (opt.subtitle || '').trim().slice(0, 160);
+    const cleanPositionTitle = (opt.positionTitle || '').trim().slice(0, 80);
+    const cleanImageUrl = (opt.imageUrl || '').trim().slice(0, 500);
+    const validOptImageUrl = cleanImageUrl.startsWith('https://') ? cleanImageUrl : '';
+    const cleanColor =
+      opt.color && opt.color.trim()
+        ? opt.color.trim().slice(0, 30)
+        : palette[cleaned.length % palette.length];
+
+    const obj: PollOption = {
+      id: cleanId,
+      label: cleanLabel,
+      color: cleanColor,
+    };
+    if (cleanSubtitle) obj.subtitle = cleanSubtitle;
+    if (cleanPositionTitle) obj.positionTitle = cleanPositionTitle;
+    if (opt.gender === 'male' || opt.gender === 'female' || opt.gender === 'other') {
+      obj.gender = opt.gender;
+    }
+    if (validOptImageUrl) obj.imageUrl = validOptImageUrl;
+    cleaned.push(obj);
+    if (cleaned.length >= (questionType === 'rating' ? 5 : 12)) break;
+  }
+
+  return cleaned;
+}
+
+async function commitBatchWithTokenRefreshRetry(
+  buildBatch: () => ReturnType<typeof writeBatch>
+): Promise<void> {
+  try {
+    await buildBatch().commit();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message.toLowerCase() : String(err || '').toLowerCase();
+    const isPerm = msg.includes('permission') || msg.includes('insufficient');
+    if (isPerm && auth.currentUser) {
+      try {
+        await auth.currentUser.getIdToken(true);
+      } catch {
+        // Ignore refresh error and fall through to retry/throw
       }
-      if (cleanImageUrl) obj.imageUrl = cleanImageUrl;
-      return obj;
-    })
-    .filter((opt) => opt.label.length >= 1)
-    .slice(0, questionType === 'rating' ? 5 : 12);
+      await buildBatch().commit();
+      return;
+    }
+    throw err;
+  }
 }
 
 export async function createPoll(
@@ -540,21 +578,30 @@ export async function createPoll(
     pollDocPayload.tournamentGroupLabel = input.tournamentGroupLabel.trim().slice(0, 80);
   }
 
-  const batch = writeBatch(db);
-  batch.set(pollRef, pollDocPayload);
-
-  for (const opt of options) {
-    const tallyRef = doc(db, 'polls', pollId, 'tallies', opt.id);
-    batch.set(tallyRef, {
-      pollId,
-      optionId: opt.id,
-      votesCount: 0,
-      updatedAt: serverTimestamp(),
-    });
+  const actingUid = auth.currentUser?.uid || user?.uid || '';
+  if (!actingUid || !/^[a-zA-Z0-9_-]{1,128}$/.test(actingUid)) {
+    throw new Error('Kitambulisho cha akaunti si sahihi. Tafadhali ingia tena.');
   }
+  pollDocPayload.createdBy = actingUid;
+
+  const buildBatch = () => {
+    const batch = writeBatch(db);
+    batch.set(pollRef, pollDocPayload);
+
+    for (const opt of options) {
+      const tallyRef = doc(db, 'polls', pollId, 'tallies', opt.id);
+      batch.set(tallyRef, {
+        pollId,
+        optionId: opt.id,
+        votesCount: 0,
+        updatedAt: serverTimestamp(),
+      });
+    }
+    return batch;
+  };
 
   try {
-    await batch.commit();
+    await commitBatchWithTokenRefreshRetry(buildBatch);
     return pollId;
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, `polls/${pollId}`);
@@ -1916,7 +1963,8 @@ function buildPollOptionFromCandidate(
         ? `Mvulana${pos ? ` · ${pos}` : ''}`
         : pos;
   if (sub) opt.subtitle = sub;
-  if (c.imageUrl && c.imageUrl.trim()) opt.imageUrl = c.imageUrl.trim().slice(0, 500);
+  const rawOptImg = (c.imageUrl || '').trim().slice(0, 500);
+  if (rawOptImg.startsWith('https://')) opt.imageUrl = rawOptImg;
   return opt;
 }
 
@@ -1933,8 +1981,9 @@ function buildCleanCandidatesForStorage(cands: TournamentCandidate[]): Record<st
     if (c.subtitle && c.subtitle.trim()) {
       clean.subtitle = c.subtitle.trim().slice(0, 160);
     }
-    if (c.imageUrl && c.imageUrl.trim()) {
-      clean.imageUrl = c.imageUrl.trim().slice(0, 500);
+    const rawCandImg = (c.imageUrl || '').trim().slice(0, 500);
+    if (rawCandImg.startsWith('https://')) {
+      clean.imageUrl = rawCandImg;
     }
     return clean;
   });
@@ -2027,18 +2076,24 @@ function buildGroupPollWritesForPlan(params: {
     const options = groupCandidates.map((c, idx) =>
       buildPollOptionFromCandidate(c, positionTitle, idx)
     );
+    if (options.length < 2) {
+      throw new Error(`Kundi "${g.label}" lina chaguo pungufu ya 2.`);
+    }
     const questionType: PollQuestionType =
       g.advanceCount > 1 && options.length > 2 ? 'multiple' : 'single';
-    const maxChoices = questionType === 'multiple' ? Math.min(options.length - 1, g.advanceCount) : 1;
+    const maxChoices = questionType === 'multiple'
+      ? Math.max(1, Math.min(12, Math.min(options.length - 1, Math.round(g.advanceCount))))
+      : 1;
 
     const cleanQuestion = `${title} — ${g.label}`.slice(0, 295);
+    const finalQuestion = cleanQuestion.length >= 4 ? cleanQuestion : `${cleanQuestion} Kura`.slice(0, 295);
     const guidanceNote = isTieBreaker
       ? `Kura ya kuamua sare (${g.label}): Chagua ${maxChoices} kupata anayefuzu.`
       : `Mchakato wa Mtoano · ${roundLabel} (${g.label}): Wagombea ${options.length} wanachuana — ${g.advanceCount} bora wanavuka.`;
 
     const pollDoc: Record<string, unknown> = {
       pollId,
-      question: cleanQuestion,
+      question: finalQuestion,
       description: [description.trim(), guidanceNote].filter(Boolean).join('\n').slice(0, 1500),
       category,
       questionType,
@@ -2047,7 +2102,7 @@ function buildGroupPollWritesForPlan(params: {
       institutionName: institutionName.trim().slice(0, 120),
       options,
       optionIds: options.map((o) => o.id),
-      maxChoices: Math.max(1, maxChoices),
+      maxChoices,
       status: 'open',
       resultsVisibility: 'always',
       allowVoteChange: true,
@@ -2064,9 +2119,9 @@ function buildGroupPollWritesForPlan(params: {
       totalBallots: 0,
       commentsCount: 0,
       tournamentId,
-      tournamentRound: round,
+      tournamentRound: Math.max(1, Math.min(20, Math.round(round))),
       tournamentGroupLabel: `${roundLabel} · ${g.label}`.slice(0, 80),
-      createdBy: user.uid,
+      createdBy: auth.currentUser?.uid || user.uid,
       createdByName: displayName.trim().slice(0, 80) || 'Mmiliki',
       createdByPhoto: (photoURL || '').slice(0, 500),
       createdAt: serverTimestamp(),
@@ -2109,15 +2164,25 @@ async function commitPendingPollWrites(writes: PendingGroupPollWrite[]): Promise
 
   for (let i = 0; i < ops.length; i += 380) {
     const chunk = ops.slice(i, i + 380);
-    const batch = writeBatch(db);
-    for (const op of chunk) {
-      if (op.type === 'poll') {
-        batch.set(doc(db, 'polls', op.pollId), op.data);
-      } else {
-        batch.set(doc(db, 'polls', op.pollId, 'tallies', op.optionId!), op.data);
+    const buildBatch = () => {
+      const batch = writeBatch(db);
+      for (const op of chunk) {
+        if (op.type === 'poll') {
+          batch.set(doc(db, 'polls', op.pollId), op.data);
+        } else {
+          batch.set(doc(db, 'polls', op.pollId, 'tallies', op.optionId!), op.data);
+        }
       }
+      return batch;
+    };
+    try {
+      await commitBatchWithTokenRefreshRetry(buildBatch);
+    } catch (error) {
+      const firstPollOp = chunk.find((o) => o.type === 'poll') || chunk[0];
+      const errPath = firstPollOp ? `polls/${firstPollOp.pollId}` : 'polls';
+      handleFirestoreError(error, OperationType.CREATE, errPath);
+      throw error;
     }
-    await batch.commit();
   }
 }
 
@@ -2132,13 +2197,46 @@ export async function createPollTournament(
     throw new Error('Andika kichwa cha mchakato (angalau herufi 4).');
   }
 
+  const safeTargetWinners = Math.max(1, Math.min(50, Math.round(Number(input.targetWinnersCount) || 1)));
+  const safeReqMale = input.useGenderQuota
+    ? Math.max(0, Math.min(50, Math.round(Number(input.requiredMaleCount) || 0)))
+    : 0;
+  const safeReqFemale = input.useGenderQuota
+    ? Math.max(0, Math.min(50, Math.round(Number(input.requiredFemaleCount) || 0)))
+    : 0;
+  const safeDurationMins = Math.max(5, Math.min(525600, Math.round(Number(input.roundDurationMinutes) || 60)));
+
+  const seenCandIds = new Set<string>();
+  const sanitizedCandidates: TournamentCandidate[] = input.candidates.slice(0, 300).map((c, idx) => {
+    const rawId = (c.id || `c_${idx + 1}`).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48) || `c_${idx + 1}`;
+    let uniqueId = rawId;
+    let dupCounter = 2;
+    while (seenCandIds.has(uniqueId)) {
+      uniqueId = `${rawId.slice(0, 36)}_${dupCounter}`;
+      dupCounter++;
+    }
+    seenCandIds.add(uniqueId);
+    const rawImg = (c.imageUrl || '').trim().slice(0, 500);
+    const safeGender: PollGender =
+      c.gender === 'female' || c.gender === 'other' ? c.gender : 'male';
+    return {
+      ...c,
+      id: uniqueId,
+      gender: safeGender,
+      name: c.name.trim().slice(0, 160) || `Mgombea ${idx + 1}`,
+      imageUrl: rawImg.startsWith('https://') ? rawImg : undefined,
+    };
+  });
+
+  const safeGroupSize = Math.max(3, Math.min(12, Math.round(Number(input.groupSize) || 8)));
+
   const roadmap = buildTournamentRoadmapPreview({
-    candidates: input.candidates,
-    targetWinnersCount: input.targetWinnersCount,
+    candidates: sanitizedCandidates,
+    targetWinnersCount: safeTargetWinners,
     useGenderQuota: input.useGenderQuota,
-    requiredMaleCount: input.requiredMaleCount,
-    requiredFemaleCount: input.requiredFemaleCount,
-    groupSize: input.groupSize,
+    requiredMaleCount: safeReqMale,
+    requiredFemaleCount: safeReqFemale,
+    groupSize: safeGroupSize,
   });
 
   if (!roadmap.valid) {
@@ -2146,8 +2244,7 @@ export async function createPollTournament(
   }
 
   const tournamentId = `trn_${generateShortPollId(8)}`;
-  const candidateMap = new Map(input.candidates.map((c) => [c.id, c]));
-  const safeGroupSize = Math.max(3, Math.min(12, input.groupSize || 8));
+  const candidateMap = new Map(sanitizedCandidates.map((c) => [c.id, c]));
 
   const roundGroups: Array<{
     label: string;
@@ -2159,15 +2256,15 @@ export async function createPollTournament(
   let stageIsFinal = false;
 
   if (input.useGenderQuota) {
-    const males = input.candidates.filter((c) => c.gender === 'male').map((c) => c.id);
-    const females = input.candidates.filter((c) => c.gender === 'female').map((c) => c.id);
+    const males = sanitizedCandidates.filter((c) => c.gender === 'male').map((c) => c.id);
+    const females = sanitizedCandidates.filter((c) => c.gender === 'female').map((c) => c.id);
     const malePlan =
-      input.requiredMaleCount > 0
-        ? buildTrackStagePlan(males, input.requiredMaleCount, safeGroupSize, 'male')
+      safeReqMale > 0
+        ? buildTrackStagePlan(males, safeReqMale, safeGroupSize, 'male')
         : { groups: [], isFinal: true };
     const femalePlan =
-      input.requiredFemaleCount > 0
-        ? buildTrackStagePlan(females, input.requiredFemaleCount, safeGroupSize, 'female')
+      safeReqFemale > 0
+        ? buildTrackStagePlan(females, safeReqFemale, safeGroupSize, 'female')
         : { groups: [], isFinal: true };
 
     malePlan.groups.forEach((g) =>
@@ -2184,8 +2281,8 @@ export async function createPollTournament(
     );
     stageIsFinal = malePlan.isFinal && femalePlan.isFinal;
   } else {
-    const allIds = input.candidates.map((c) => c.id);
-    const plan = buildTrackStagePlan(allIds, input.targetWinnersCount, safeGroupSize, 'all');
+    const allIds = sanitizedCandidates.map((c) => c.id);
+    const plan = buildTrackStagePlan(allIds, safeTargetWinners, safeGroupSize, 'all');
     plan.groups.forEach((g) =>
       roundGroups.push({
         ...g,
@@ -2199,10 +2296,10 @@ export async function createPollTournament(
   if (roundGroups.length === 0) {
     const initialWinners = input.useGenderQuota
       ? [
-          ...input.candidates.filter((c) => c.gender === 'male').slice(0, input.requiredMaleCount),
-          ...input.candidates.filter((c) => c.gender === 'female').slice(0, input.requiredFemaleCount),
+          ...sanitizedCandidates.filter((c) => c.gender === 'male').slice(0, safeReqMale),
+          ...sanitizedCandidates.filter((c) => c.gender === 'female').slice(0, safeReqFemale),
         ].map((c) => c.id)
-      : input.candidates.slice(0, input.targetWinnersCount).map((c) => c.id);
+      : sanitizedCandidates.slice(0, safeTargetWinners).map((c) => c.id);
 
     const trivialStage: TournamentStageRecord = {
       round: 1,
@@ -2216,35 +2313,44 @@ export async function createPollTournament(
       completedAtMs: Date.now(),
     };
 
-    const batch = writeBatch(db);
-    batch.set(doc(db, 'poll_tournaments', tournamentId), {
-      tournamentId,
-      title: cleanTitle,
-      description: input.description.trim().slice(0, 1500),
-      institutionName: input.institutionName.trim().slice(0, 120),
-      category: input.category,
-      positionTitle: input.positionTitle.trim().slice(0, 80),
-      targetWinnersCount: input.targetWinnersCount,
-      useGenderQuota: Boolean(input.useGenderQuota),
-      requiredMaleCount: input.useGenderQuota ? input.requiredMaleCount : 0,
-      requiredFemaleCount: input.useGenderQuota ? input.requiredFemaleCount : 0,
-      groupSize: safeGroupSize,
-      roundDurationMinutes: Math.max(5, Math.min(525600, input.roundDurationMinutes)),
-      status: 'completed',
-      currentRound: 1,
-      totalPlannedRounds: 1,
-      candidates: buildCleanCandidatesForStorage(input.candidates),
-      stages: buildCleanStagesForStorage([trivialStage]),
-      winnerIds: initialWinners,
-      winnerVotes: {},
-      createdBy: user.uid,
-      createdByName: displayName.trim().slice(0, 80) || 'Mmiliki',
-      createdByPhoto: (photoURL || '').slice(0, 500),
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-    await batch.commit();
-    return tournamentId;
+    const actingUid = auth.currentUser?.uid || user.uid;
+    const buildTrivialBatch = () => {
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'poll_tournaments', tournamentId), {
+        tournamentId,
+        title: cleanTitle,
+        description: input.description.trim().slice(0, 1500),
+        institutionName: input.institutionName.trim().slice(0, 120),
+        category: input.category,
+        positionTitle: input.positionTitle.trim().slice(0, 80),
+        targetWinnersCount: safeTargetWinners,
+        useGenderQuota: Boolean(input.useGenderQuota),
+        requiredMaleCount: safeReqMale,
+        requiredFemaleCount: safeReqFemale,
+        groupSize: safeGroupSize,
+        roundDurationMinutes: safeDurationMins,
+        status: 'completed',
+        currentRound: 1,
+        totalPlannedRounds: 1,
+        candidates: buildCleanCandidatesForStorage(sanitizedCandidates),
+        stages: buildCleanStagesForStorage([trivialStage]),
+        winnerIds: initialWinners,
+        winnerVotes: {},
+        createdBy: actingUid,
+        createdByName: displayName.trim().slice(0, 80) || 'Mmiliki',
+        createdByPhoto: (photoURL || '').slice(0, 500),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      return batch;
+    };
+    try {
+      await commitBatchWithTokenRefreshRetry(buildTrivialBatch);
+      return tournamentId;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `poll_tournaments/${tournamentId}`);
+      throw error;
+    }
   }
 
   const firstRoundTitle = roadmap.rounds[0]?.labelSw || (stageIsFinal ? 'Hatua ya 1 (Fainali)' : 'Hatua ya 1 (Mchujo wa Awali)');
@@ -2258,7 +2364,7 @@ export async function createPollTournament(
     pollStyle: input.pollStyle,
     round: 1,
     roundLabel: firstRoundTitle,
-    roundDurationMinutes: input.roundDurationMinutes,
+    roundDurationMinutes: safeDurationMins,
     groups: roundGroups,
     candidateMap,
     user,
@@ -2278,37 +2384,42 @@ export async function createPollTournament(
     startedAtMs: Date.now(),
   };
 
+  await commitPendingPollWrites(pendingWrites);
+
   try {
-    await commitPendingPollWrites(pendingWrites);
+    const actingUid = auth.currentUser?.uid || user.uid;
     const tRef = doc(db, 'poll_tournaments', tournamentId);
-    const batch = writeBatch(db);
-    batch.set(tRef, {
-      tournamentId,
-      title: cleanTitle,
-      description: input.description.trim().slice(0, 1500),
-      institutionName: input.institutionName.trim().slice(0, 120),
-      category: input.category,
-      positionTitle: input.positionTitle.trim().slice(0, 80),
-      targetWinnersCount: input.targetWinnersCount,
-      useGenderQuota: Boolean(input.useGenderQuota),
-      requiredMaleCount: input.useGenderQuota ? input.requiredMaleCount : 0,
-      requiredFemaleCount: input.useGenderQuota ? input.requiredFemaleCount : 0,
-      groupSize: safeGroupSize,
-      roundDurationMinutes: Math.max(5, Math.min(525600, input.roundDurationMinutes)),
-      status: 'active',
-      currentRound: 1,
-      totalPlannedRounds: Math.max(1, roadmap.rounds.length),
-      candidates: buildCleanCandidatesForStorage(input.candidates),
-      stages: buildCleanStagesForStorage([stage1]),
-      winnerIds: [],
-      winnerVotes: {},
-      createdBy: user.uid,
-      createdByName: displayName.trim().slice(0, 80) || 'Mmiliki',
-      createdByPhoto: (photoURL || '').slice(0, 500),
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-    await batch.commit();
+    const buildTournamentBatch = () => {
+      const batch = writeBatch(db);
+      batch.set(tRef, {
+        tournamentId,
+        title: cleanTitle,
+        description: input.description.trim().slice(0, 1500),
+        institutionName: input.institutionName.trim().slice(0, 120),
+        category: input.category,
+        positionTitle: input.positionTitle.trim().slice(0, 80),
+        targetWinnersCount: safeTargetWinners,
+        useGenderQuota: Boolean(input.useGenderQuota),
+        requiredMaleCount: safeReqMale,
+        requiredFemaleCount: safeReqFemale,
+        groupSize: safeGroupSize,
+        roundDurationMinutes: safeDurationMins,
+        status: 'active',
+        currentRound: 1,
+        totalPlannedRounds: Math.max(1, Math.min(20, Math.round(roadmap.rounds.length))),
+        candidates: buildCleanCandidatesForStorage(sanitizedCandidates),
+        stages: buildCleanStagesForStorage([stage1]),
+        winnerIds: [],
+        winnerVotes: {},
+        createdBy: actingUid,
+        createdByName: displayName.trim().slice(0, 80) || 'Mmiliki',
+        createdByPhoto: (photoURL || '').slice(0, 500),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      return batch;
+    };
+    await commitBatchWithTokenRefreshRetry(buildTournamentBatch);
     return tournamentId;
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, `poll_tournaments/${tournamentId}`);
@@ -2657,8 +2768,8 @@ export async function resolveAndAdvanceTournament(
   nextStages.push(newStage);
 
   await updateDoc(doc(db, 'poll_tournaments', tournament.id), {
-    currentRound: nextRound,
-    totalPlannedRounds: Math.max(tournament.totalPlannedRounds, nextRound),
+    currentRound: Math.min(20, Math.round(nextRound)),
+    totalPlannedRounds: Math.min(20, Math.max(Math.round(tournament.totalPlannedRounds), Math.round(nextRound))),
     stages: buildCleanStagesForStorage(nextStages),
     winnerIds: updatedWinnerIds,
     winnerVotes: votesSnapshot,

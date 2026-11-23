@@ -650,6 +650,51 @@ function isElectionStyle(style: PollStyle): boolean {
   );
 }
 
+function formatFriendlyPollError(
+  err: unknown,
+  tr: (sw: string, en: string) => string
+): string {
+  const raw = err instanceof Error ? err.message : String(err || '');
+  let parsedErrorMsg = raw;
+  let parsedEmail = '';
+  let parsedVerified: boolean | null = null;
+  let parsedPath = '';
+
+  if (raw.trim().startsWith('{')) {
+    try {
+      const parsed = JSON.parse(raw) as {
+        error?: string;
+        path?: string | null;
+        authInfo?: { email?: string | null; emailVerified?: boolean | null };
+      };
+      if (parsed?.error) parsedErrorMsg = parsed.error;
+      if (parsed?.path) parsedPath = String(parsed.path);
+      if (parsed?.authInfo?.email) parsedEmail = String(parsed.authInfo.email);
+      if (typeof parsed?.authInfo?.emailVerified === 'boolean') {
+        parsedVerified = parsed.authInfo.emailVerified;
+      }
+    } catch {
+      // Keep raw message if not JSON
+    }
+  }
+
+  const lower = parsedErrorMsg.toLowerCase();
+  if (lower.includes('permission') || lower.includes('insufficient')) {
+    if (parsedEmail && parsedVerified === false) {
+      return tr(
+        `Akaunti yako (${parsedEmail}) haijathibitisha barua pepe (Verify Email). Ingia na Google ("Continue with Google") au thibitisha email kwanza.`,
+        `Your account (${parsedEmail}) has an unverified email. Please sign in with Google or verify your email first.`
+      );
+    }
+    const pathTag = parsedPath ? ` [${parsedPath}]` : '';
+    return tr(
+      `Ruhusa ya kuchapisha imezuiwa${pathTag}. Hakikisha umeingia na akaunti ya mmiliki iliyothibitishwa na viungo vyote vya picha ni sahihi (https://).`,
+      `Publish permission denied${pathTag}. Ensure you are signed in with a verified owner account and all photo URLs use https://.`
+    );
+  }
+  return parsedErrorMsg || tr('Hitilafu imetokea. Jaribu tena.', 'An error occurred. Please try again.');
+}
+
 interface RankedOptionRow {
   rank: number;
   option: PollOption;
@@ -1341,11 +1386,7 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
         onSaved(newId, false);
       }
     } catch (err) {
-      const msg =
-        err instanceof Error
-          ? err.message
-          : tr('Imeshindwa kuhifadhi Mpoll.', 'Failed to save Mpoll.');
-      onToast(msg, 'error');
+      onToast(formatFriendlyPollError(err, tr), 'error');
     } finally {
       setSaving(false);
     }
@@ -4025,14 +4066,16 @@ const InlinePollResultsPage: React.FC<InlinePollResultsPageProps> = ({
                   key={row.option.id}
                   onMouseEnter={() => setHoveredOptId(row.option.id)}
                   onMouseLeave={() => setHoveredOptId(null)}
-                  className="flex items-center justify-between gap-2 text-xs py-1 px-2 rounded-lg hover:bg-slate-50 tabular-nums"
+                  className="flex items-start justify-between gap-2 text-xs py-1 px-2 rounded-lg hover:bg-slate-50 tabular-nums"
                 >
-                  <div className="flex items-center gap-2 min-w-0">
+                  <div className="flex items-start gap-2 min-w-0">
                     <span
-                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                      className="w-2.5 h-2.5 rounded-full shrink-0 mt-1"
                       style={{ backgroundColor: row.option.color || '#1D4E89' }}
                     />
-                    <span className="font-semibold text-slate-800 truncate">{row.option.label}</span>
+                    <span className="font-semibold text-slate-800 whitespace-normal break-words leading-snug">
+                      {row.option.label}
+                    </span>
                   </div>
                   <div className="shrink-0 font-bold text-slate-700">
                     {row.count.toLocaleString()}{' '}
@@ -4070,8 +4113,8 @@ const InlinePollResultsPage: React.FC<InlinePollResultsPageProps> = ({
               const diffFromAvg = Math.round((row.pct - indices.avgPctPerOption) * 10) / 10;
               return (
                 <div key={row.option.id} className="space-y-1">
-                  <div className="flex items-center justify-between text-xs tabular-nums">
-                    <span className="font-bold text-slate-800 truncate pr-2">
+                  <div className="flex items-start justify-between gap-2 text-xs tabular-nums">
+                    <span className="font-bold text-slate-800 whitespace-normal break-words leading-snug pr-2">
                       {row.rank}. {row.option.label}
                     </span>
                     <span className="font-semibold text-slate-600 shrink-0">
@@ -4618,7 +4661,7 @@ const InlinePollResultsPage: React.FC<InlinePollResultsPageProps> = ({
                           />
                         )}
                         <div className="min-w-0">
-                          <div className="font-bold text-[#0F172A] truncate">
+                          <div className="font-bold text-[#0F172A] whitespace-normal break-words leading-snug">
                             {row.option.label}
                             {isUserChoice && (
                               <span className="ml-1.5 text-[11px] font-bold text-emerald-700">
@@ -4627,7 +4670,9 @@ const InlinePollResultsPage: React.FC<InlinePollResultsPageProps> = ({
                             )}
                           </div>
                           {row.option.subtitle && (
-                            <div className="text-[11px] text-slate-500 truncate">{row.option.subtitle}</div>
+                            <div className="text-[11px] text-slate-500 whitespace-normal break-words leading-snug mt-0.5">
+                              {row.option.subtitle}
+                            </div>
                           )}
                         </div>
                       </div>
@@ -4831,6 +4876,7 @@ interface PollCardProps {
   onEdit: (poll: Poll) => void;
   onOpenResults: (pollId: string, tallies: Record<string, number>) => void;
   onDeleteInline: (poll: Poll) => Promise<void>;
+  onVoteSuccessNotice?: (isUpdate: boolean) => void;
   isHighlighted?: boolean;
 }
 
@@ -4849,6 +4895,7 @@ const PollCard: React.FC<PollCardProps> = ({
   onEdit,
   onOpenResults,
   onDeleteInline,
+  onVoteSuccessNotice,
   isHighlighted = false,
 }) => {
   const { tr, lang, formatTime } = useLanguage();
@@ -4979,16 +5026,9 @@ const PollCard: React.FC<PollCardProps> = ({
         userBallot || null
       );
       onBallotSaved(poll.id, savedBallot);
-      onToast(
-        hasVoted
-          ? tr('Kura yako imebadilishwa kikamilifu!', 'Your vote has been updated!')
-          : tr('Asante! Kura yako imepokelewa kwa usalama.', 'Thank you! Your vote has been recorded.'),
-        'success'
-      );
+      onVoteSuccessNotice?.(hasVoted);
     } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : tr('Imeshindwa kupiga kura.', 'Failed to vote.');
-      onToast(msg, 'error');
+      onToast(formatFriendlyPollError(err, tr), 'error');
     } finally {
       setSubmittingVote(false);
     }
@@ -5162,11 +5202,11 @@ const PollCard: React.FC<PollCardProps> = ({
                         </div>
                       )}
                       {displayOptions[0].positionTitle && (
-                        <span className="mt-2 inline-block px-2 py-0.5 rounded-md bg-[#0A2540] text-white text-[10px] font-bold tracking-wide uppercase max-w-full truncate">
+                        <span className="mt-2 inline-block px-2 py-0.5 rounded-md bg-[#0A2540] text-white text-[10px] font-bold tracking-wide uppercase max-w-full whitespace-normal break-words leading-snug">
                           {displayOptions[0].positionTitle}
                         </span>
                       )}
-                      <div className="mt-1 text-xs sm:text-sm font-extrabold text-[#0A2540] line-clamp-2 leading-tight">
+                      <div className="mt-1 text-xs sm:text-sm font-extrabold text-[#0A2540] whitespace-normal break-words leading-snug">
                         {displayOptions[0].label || tr('Mgombea 1', 'Candidate 1')}
                       </div>
                     </div>
@@ -5195,11 +5235,11 @@ const PollCard: React.FC<PollCardProps> = ({
                         </div>
                       )}
                       {displayOptions[1].positionTitle && (
-                        <span className="mt-2 inline-block px-2 py-0.5 rounded-md bg-[#0A2540] text-white text-[10px] font-bold tracking-wide uppercase max-w-full truncate">
+                        <span className="mt-2 inline-block px-2 py-0.5 rounded-md bg-[#0A2540] text-white text-[10px] font-bold tracking-wide uppercase max-w-full whitespace-normal break-words leading-snug">
                           {displayOptions[1].positionTitle}
                         </span>
                       )}
-                      <div className="mt-1 text-xs sm:text-sm font-extrabold text-[#0A2540] line-clamp-2 leading-tight">
+                      <div className="mt-1 text-xs sm:text-sm font-extrabold text-[#0A2540] whitespace-normal break-words leading-snug">
                         {displayOptions[1].label || tr('Mgombea 2', 'Candidate 2')}
                       </div>
                     </div>
@@ -5229,11 +5269,11 @@ const PollCard: React.FC<PollCardProps> = ({
                         )}
                         <div className="min-w-0 flex-1">
                           {cand.positionTitle && (
-                            <div className="text-[10px] font-extrabold uppercase tracking-wide text-[#1D4E89] truncate">
+                            <div className="text-[10px] font-extrabold uppercase tracking-wide text-[#1D4E89] whitespace-normal break-words leading-snug">
                               {cand.positionTitle}
                             </div>
                           )}
-                          <div className="text-xs font-extrabold text-[#0A2540] truncate">
+                          <div className="text-xs font-extrabold text-[#0A2540] whitespace-normal break-words leading-snug">
                             {cand.label}
                           </div>
                         </div>
@@ -5407,14 +5447,37 @@ const PollCard: React.FC<PollCardProps> = ({
                         type="button"
                         onClick={() => handleToggleOption(opt.id)}
                         disabled={user ? !canCastOrUpdate : false}
-                        className={`w-full rounded-full border px-4 py-2.5 text-center text-sm font-bold transition-all flex items-center justify-center gap-2 ${
+                        className={`w-full rounded-2xl border px-3.5 py-2.5 text-left text-sm font-bold transition-all flex items-start gap-3 ${
                           isSelected
                             ? 'bg-[#1D9BF0] border-[#1D9BF0] text-white shadow-xs'
-                            : 'bg-white border-[#1D9BF0]/60 text-[#1D9BF0] hover:bg-[#1D9BF0]/8'
+                            : 'bg-white border-[#1D9BF0]/60 text-[#0F172A] hover:bg-[#1D9BF0]/8'
                         } ${user && !canCastOrUpdate ? 'cursor-default' : 'cursor-pointer'}`}
                       >
-                        {isSelected && <Check size={14} />}
-                        <span className="truncate">{opt.label}</span>
+                        <span
+                          className={`w-6 h-6 mt-0.5 ${
+                            poll.questionType === 'multiple' ? 'rounded-md' : 'rounded-full'
+                          } border-2 flex items-center justify-center shrink-0 transition-all ${
+                            isSelected
+                              ? 'bg-white border-white text-[#1D9BF0] shadow-2xs'
+                              : 'bg-[#1D9BF0]/5 border-[#1D9BF0]/70 text-[#1D9BF0]/45'
+                          }`}
+                        >
+                          <Check size={14} strokeWidth={isSelected ? 3 : 2.25} />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <span className="whitespace-normal break-words text-left leading-snug block">
+                            {opt.label}
+                          </span>
+                          {opt.subtitle && (
+                            <span
+                              className={`text-[11px] font-normal whitespace-normal break-words leading-snug block mt-0.5 ${
+                                isSelected ? 'text-white/90' : 'text-slate-500'
+                              }`}
+                            >
+                              {opt.subtitle}
+                            </span>
+                          )}
+                        </div>
                       </button>
                     );
                   }
@@ -5425,10 +5488,10 @@ const PollCard: React.FC<PollCardProps> = ({
                       type="button"
                       onClick={() => handleToggleOption(opt.id)}
                       disabled={user ? !canCastOrUpdate : false}
-                      className={`w-full text-left rounded-lg border transition-all relative overflow-hidden min-h-[42px] ${
+                      className={`w-full text-left rounded-xl border transition-all relative overflow-hidden min-h-[46px] ${
                         isSelected
-                          ? 'border-[#1D9BF0] bg-white'
-                          : 'border-slate-200/80 bg-slate-50/50 hover:border-slate-300'
+                          ? 'border-[#1D9BF0] bg-white ring-2 ring-[#1D9BF0]/25'
+                          : 'border-slate-200/90 bg-slate-50/50 hover:border-[#1D9BF0]/50'
                       } ${user && !canCastOrUpdate ? 'cursor-default' : 'cursor-pointer'}`}
                     >
                       <div
@@ -5440,16 +5503,35 @@ const PollCard: React.FC<PollCardProps> = ({
                             : 'rgba(148, 163, 184, 0.22)',
                         }}
                       />
-                      <div className="relative z-10 px-3.5 py-2.5 flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className={`text-sm truncate ${isLeader ? 'font-extrabold text-[#0F172A]' : 'font-semibold text-[#0F172A]'}`}>
-                            {opt.label}
+                      <div className="relative z-10 px-3.5 py-2.5 flex items-start justify-between gap-3">
+                        <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                          <span
+                            className={`w-6 h-6 mt-0.5 ${
+                              poll.questionType === 'multiple' ? 'rounded-md' : 'rounded-full'
+                            } border-2 flex items-center justify-center shrink-0 transition-all ${
+                              isSelected || isSavedChoice
+                                ? 'bg-[#1D9BF0] border-[#1D9BF0] text-white shadow-2xs'
+                                : 'bg-white border-[#1D9BF0]/60 text-[#1D9BF0]/40'
+                            }`}
+                          >
+                            <Check size={14} strokeWidth={isSelected || isSavedChoice ? 3 : 2.25} />
                           </span>
-                          {(isSavedChoice || isSelected) && (
-                            <CheckCircle2 size={15} className="text-[#1D9BF0] shrink-0" />
-                          )}
+                          <div className="min-w-0 flex-1">
+                            <span
+                              className={`text-sm whitespace-normal break-words text-left leading-snug block ${
+                                isLeader ? 'font-extrabold text-[#0F172A]' : 'font-semibold text-[#0F172A]'
+                              }`}
+                            >
+                              {opt.label}
+                            </span>
+                            {opt.subtitle && (
+                              <span className="text-[11px] text-slate-600 whitespace-normal break-words text-left leading-snug block mt-0.5">
+                                {opt.subtitle}
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <div className="shrink-0 flex items-center gap-1.5 tabular-nums">
+                        <div className="shrink-0 flex items-center gap-1.5 tabular-nums pt-0.5">
                           {showPercentages && (
                             <span className={`text-sm ${isLeader ? 'font-extrabold text-[#0F172A]' : 'font-bold text-slate-700'}`}>
                               {pct}%
@@ -5515,29 +5597,29 @@ const PollCard: React.FC<PollCardProps> = ({
                         disabled={user ? !canCastOrUpdate : false}
                         className={`w-full text-left rounded-xl p-2.5 transition-all ${
                           isSelected
-                            ? 'bg-white shadow-2xs ring-1 ring-[#00A884]/40'
-                            : 'bg-white/75 hover:bg-white'
+                            ? 'bg-white shadow-2xs ring-2 ring-[#00A884]/60'
+                            : 'bg-white/80 hover:bg-white'
                         } ${user && !canCastOrUpdate ? 'cursor-default' : 'cursor-pointer'}`}
                       >
-                        <div className="flex items-center justify-between gap-2.5">
-                          <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="flex items-start justify-between gap-2.5">
+                          <div className="flex items-start gap-2.5 min-w-0 flex-1">
                             <span
-                              className={`w-5 h-5 ${
+                              className={`w-6 h-6 mt-0.5 ${
                                 poll.questionType === 'multiple' ? 'rounded-md' : 'rounded-full'
                               } border-2 flex items-center justify-center shrink-0 transition-colors ${
                                 isSelected
-                                  ? 'bg-[#00A884] border-[#00A884] text-white'
-                                  : 'border-[#00A884]/50 bg-white'
+                                  ? 'bg-[#00A884] border-[#00A884] text-white shadow-2xs'
+                                  : 'border-[#00A884]/65 bg-white text-[#00A884]/40'
                               }`}
                             >
-                              {isSelected && <Check size={12} />}
+                              <Check size={14} strokeWidth={isSelected ? 3 : 2.25} />
                             </span>
-                            <div className="min-w-0">
-                              <span className="text-sm font-semibold text-[#0F172A] truncate block">
+                            <div className="min-w-0 flex-1">
+                              <span className="text-sm font-semibold text-[#0F172A] whitespace-normal break-words text-left leading-snug block">
                                 {opt.label}
                               </span>
                               {opt.subtitle && (
-                                <span className="text-[11px] text-slate-500 truncate block">
+                                <span className="text-[11px] text-slate-600 whitespace-normal break-words text-left leading-snug block mt-0.5">
                                   {opt.subtitle}
                                 </span>
                               )}
@@ -5545,7 +5627,7 @@ const PollCard: React.FC<PollCardProps> = ({
                           </div>
 
                           {canSeeResults && (
-                            <div className="shrink-0 flex items-center gap-1.5 tabular-nums text-xs">
+                            <div className="shrink-0 flex items-center gap-1.5 tabular-nums text-xs pt-0.5">
                               {isSavedChoice && (
                                 <span className="text-[10px] font-bold text-[#008069] bg-[#E7FCEB] px-1.5 py-0.5 rounded">
                                   {tr('Yako', 'You')}
@@ -5561,7 +5643,7 @@ const PollCard: React.FC<PollCardProps> = ({
 
                         {/* Horizontal WhatsApp Progress Track Directly Under Option Label */}
                         {canSeeResults && (
-                          <div className="mt-2 pl-7">
+                          <div className="mt-2 pl-8">
                             <div className="h-2 w-full rounded-full bg-[#D1E7DD] overflow-hidden">
                               <div
                                 className="h-full rounded-full bg-[#00A884] transition-all duration-500"
@@ -5610,8 +5692,8 @@ const PollCard: React.FC<PollCardProps> = ({
                         disabled={user ? !canCastOrUpdate : false}
                         className={`w-full text-left p-3 rounded-xl border transition-all relative overflow-hidden ${
                           isSelected
-                            ? `${themePalette.borderClass} bg-white ring-2 ring-offset-0`
-                            : 'border-slate-200/90 bg-white/95 hover:border-slate-300 hover:bg-white'
+                            ? `${themePalette.borderClass} bg-white ring-2 ring-offset-0 shadow-xs`
+                            : 'border-slate-200/90 bg-white/95 hover:border-[#1D4E89]/45 hover:bg-white'
                         } ${user && !canCastOrUpdate ? 'cursor-default' : 'cursor-pointer'}`}
                         style={
                           isSelected
@@ -5629,7 +5711,7 @@ const PollCard: React.FC<PollCardProps> = ({
                           />
                         )}
 
-                        <div className="relative z-10 flex items-center gap-3">
+                        <div className="relative z-10 flex items-start gap-3">
                           {opt.imageUrl ? (
                             <img
                               src={optimizeCloudinaryUrl(opt.imageUrl, 200)}
@@ -5650,12 +5732,12 @@ const PollCard: React.FC<PollCardProps> = ({
                           )}
 
                           <div className="min-w-0 flex-1">
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="min-w-0">
+                            <div className="flex items-start justify-between gap-2.5">
+                              <div className="min-w-0 flex-1">
                                 {(opt.positionTitle || opt.gender === 'male' || opt.gender === 'female') && (
                                   <div className="flex flex-wrap items-center gap-1 mb-0.5">
                                     {opt.positionTitle && (
-                                      <span className="px-1.5 py-0.2 rounded bg-slate-100 text-[#0A2540] text-[10px] font-extrabold uppercase tracking-wide">
+                                      <span className="px-1.5 py-0.2 rounded bg-slate-100 text-[#0A2540] text-[10px] font-extrabold uppercase tracking-wide whitespace-normal break-words">
                                         {opt.positionTitle}
                                       </span>
                                     )}
@@ -5671,14 +5753,19 @@ const PollCard: React.FC<PollCardProps> = ({
                                     )}
                                   </div>
                                 )}
-                                <span className="text-sm font-bold text-[#0F172A] truncate block">
+                                <span className="text-sm font-bold text-[#0F172A] whitespace-normal break-words leading-snug block">
                                   {opt.label}
                                 </span>
                               </div>
 
                               <span
-                                className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 ${
-                                  isSelected ? 'text-white' : 'border-slate-300 bg-white'
+                                title={tr('Bofya kuweka tiki hapa', 'Tap to tick here')}
+                                className={`w-7 h-7 ${
+                                  poll.questionType === 'multiple' ? 'rounded-lg' : 'rounded-full'
+                                } border-2 flex items-center justify-center shrink-0 transition-all shadow-2xs ${
+                                  isSelected
+                                    ? 'text-white'
+                                    : 'border-[#1D4E89]/50 bg-slate-50 text-[#1D4E89]/45'
                                 }`}
                                 style={
                                   isSelected
@@ -5686,12 +5773,12 @@ const PollCard: React.FC<PollCardProps> = ({
                                     : undefined
                                 }
                               >
-                                {isSelected && <Check size={12} />}
+                                <Check size={15} strokeWidth={isSelected ? 3 : 2.25} />
                               </span>
                             </div>
 
                             {opt.subtitle && (
-                              <p className="text-[11px] text-slate-600 line-clamp-1 mt-0.5">
+                              <p className="text-[11px] text-slate-600 whitespace-normal break-words leading-snug mt-1">
                                 {opt.subtitle}
                               </p>
                             )}
@@ -5734,8 +5821,8 @@ const PollCard: React.FC<PollCardProps> = ({
                       disabled={user ? !canCastOrUpdate : false}
                       className={`w-full text-left rounded-xl border transition-all relative overflow-hidden ${
                         isSelected
-                          ? 'bg-white shadow-2xs'
-                          : 'border-slate-200/90 bg-white/95 hover:bg-slate-50/90'
+                          ? 'bg-white shadow-2xs ring-1'
+                          : 'border-slate-200/90 bg-white/95 hover:bg-slate-50/90 hover:border-[#1D4E89]/45'
                       } ${user && !canCastOrUpdate ? 'cursor-default' : 'cursor-pointer'}`}
                       style={
                         isSelected
@@ -5750,13 +5837,15 @@ const PollCard: React.FC<PollCardProps> = ({
                         />
                       )}
 
-                      <div className="relative z-10 px-3.5 py-2.5 flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="relative z-10 px-3.5 py-2.5 flex items-start justify-between gap-3">
+                        <div className="flex items-start gap-2.5 min-w-0 flex-1">
                           <span
-                            className={`w-5 h-5 ${
+                            className={`w-6 h-6 mt-0.5 ${
                               poll.questionType === 'multiple' ? 'rounded-md' : 'rounded-full'
-                            } border flex items-center justify-center shrink-0 ${
-                              isSelected ? 'text-white' : 'border-slate-300 bg-white'
+                            } border-2 flex items-center justify-center shrink-0 transition-all ${
+                              isSelected
+                                ? 'text-white'
+                                : 'border-slate-400/75 bg-slate-50 text-slate-400/75'
                             }`}
                             style={
                               isSelected
@@ -5764,29 +5853,31 @@ const PollCard: React.FC<PollCardProps> = ({
                                 : undefined
                             }
                           >
-                            {isSelected && <Check size={12} />}
+                            <Check size={14} strokeWidth={isSelected ? 3 : 2.25} />
                           </span>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1.5 flex-wrap">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-start gap-1.5 flex-wrap">
                               {starCount > 0 && (
-                                <span className="inline-flex items-center gap-0.5 text-amber-500 shrink-0">
+                                <span className="inline-flex items-center gap-0.5 text-amber-500 shrink-0 mt-1">
                                   {Array.from({ length: starCount }).map((_, si) => (
                                     <Star key={si} size={11} className="fill-amber-400 text-amber-500" />
                                   ))}
                                 </span>
                               )}
-                              <span className="text-sm font-semibold text-[#0F172A] truncate">
+                              <span className="text-sm font-semibold text-[#0F172A] whitespace-normal break-words text-left leading-snug block">
                                 {opt.label}
                               </span>
                             </div>
                             {opt.subtitle && (
-                              <div className="text-[11px] text-slate-500 truncate">{opt.subtitle}</div>
+                              <div className="text-[11px] text-slate-600 whitespace-normal break-words text-left leading-snug block mt-0.5">
+                                {opt.subtitle}
+                              </div>
                             )}
                           </div>
                         </div>
 
                         {canSeeResults && (
-                          <div className="shrink-0 text-right tabular-nums">
+                          <div className="shrink-0 text-right tabular-nums pt-0.5">
                             {showPercentages && (
                               <span className="text-sm font-extrabold text-[#0F172A]">{pct}%</span>
                             )}
@@ -6267,7 +6358,7 @@ const InlineTournamentBuilder: React.FC<InlineTournamentBuilderProps> = ({
   };
 
   const handleTargetWinnersChange = (nextVal: number) => {
-    const safe = Math.max(1, Math.min(50, nextVal || 1));
+    const safe = Math.max(1, Math.min(50, Math.round(nextVal || 1)));
     setTargetWinnersCount(safe);
     if (useGenderQuota) {
       const halfMale = Math.ceil(safe / 2);
@@ -6321,10 +6412,7 @@ const InlineTournamentBuilder: React.FC<InlineTournamentBuilderProps> = ({
       );
       onCreated(id);
     } catch (err) {
-      onToast(
-        err instanceof Error ? err.message : tr('Imeshindwa kuanzisha mchakato.', 'Failed to launch process.'),
-        'error'
-      );
+      onToast(formatFriendlyPollError(err, tr), 'error');
     } finally {
       setSubmitting(false);
     }
@@ -6509,7 +6597,7 @@ const InlineTournamentBuilder: React.FC<InlineTournamentBuilderProps> = ({
                 min={3}
                 max={12}
                 value={groupSize}
-                onChange={(e) => setGroupSize(Math.max(3, Math.min(12, Number(e.target.value) || 8)))}
+                onChange={(e) => setGroupSize(Math.max(3, Math.min(12, Math.round(Number(e.target.value) || 8))))}
                 className="w-full px-3 py-2 text-sm font-extrabold border border-slate-300 rounded-xl bg-white text-[#0F172A]"
               />
             </div>
@@ -6579,7 +6667,7 @@ const InlineTournamentBuilder: React.FC<InlineTournamentBuilderProps> = ({
                     max={targetWinnersCount}
                     value={requiredMaleCount}
                     onChange={(e) => {
-                      const val = Math.max(0, Math.min(targetWinnersCount, Number(e.target.value) || 0));
+                      const val = Math.max(0, Math.min(targetWinnersCount, Math.round(Number(e.target.value) || 0)));
                       setRequiredMaleCount(val);
                       setRequiredFemaleCount(Math.max(0, targetWinnersCount - val));
                     }}
@@ -6596,7 +6684,7 @@ const InlineTournamentBuilder: React.FC<InlineTournamentBuilderProps> = ({
                     max={targetWinnersCount}
                     value={requiredFemaleCount}
                     onChange={(e) => {
-                      const val = Math.max(0, Math.min(targetWinnersCount, Number(e.target.value) || 0));
+                      const val = Math.max(0, Math.min(targetWinnersCount, Math.round(Number(e.target.value) || 0)));
                       setRequiredFemaleCount(val);
                       setRequiredMaleCount(Math.max(0, targetWinnersCount - val));
                     }}
@@ -7286,6 +7374,18 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
   const [loadingDeepLink, setLoadingDeepLink] = useState(false);
   const [tournaments, setTournaments] = useState<PollTournament[]>([]);
   const [selectedTournamentIdFilter, setSelectedTournamentIdFilter] = useState<string | null>(null);
+  const [voteThankYouNotice, setVoteThankYouNotice] = useState<{
+    id: number;
+    isUpdate: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!voteThankYouNotice) return;
+    const timer = window.setTimeout(() => {
+      setVoteThankYouNotice(null);
+    }, 4500);
+    return () => window.clearTimeout(timer);
+  }, [voteThankYouNotice]);
 
   useEffect(() => {
     const unsub = subscribePollTournaments(setTournaments);
@@ -7948,12 +8048,51 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
                 onEdit={openBuilderForEdit}
                 onOpenResults={openResultsView}
                 onDeleteInline={handleDeletePollInline}
+                onVoteSuccessNotice={(isUpdate) =>
+                  setVoteThankYouNotice({ id: Date.now(), isUpdate })
+                }
                 isHighlighted={selectedPollId === poll.id}
               />
             </div>
           ))}
         </div>
       )}
+
+      {/* Top-Right Auto-Dismissing Post-Vote Confirmation Notification */}
+      {voteThankYouNotice &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            key={voteThankYouNotice.id}
+            role="status"
+            aria-live="polite"
+            className="fixed top-3 right-3 sm:top-5 sm:right-5 z-[140] max-w-[min(92vw,375px)] rounded-2xl border border-emerald-200 bg-white/95 backdrop-blur-md shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200"
+          >
+            <div className="h-1 bg-gradient-to-r from-[#0A2540] via-[#1D4E89] to-emerald-500" />
+            <div className="p-3.5 sm:p-4 flex items-start gap-3">
+              <div className="w-9 h-9 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0">
+                <CheckCircle2 size={20} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-xs sm:text-sm font-extrabold text-[#0A2540] leading-snug">
+                  Asante kwa kupiga kura!
+                </div>
+                <p className="text-xs text-slate-700 font-semibold leading-snug mt-0.5">
+                  David Malosha amepokea maoni yako.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setVoteThankYouNotice(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 shrink-0 transition-colors"
+                aria-label={tr('Funga taarifa', 'Dismiss notification')}
+              >
+                <X size={15} />
+              </button>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

@@ -251,6 +251,32 @@
   animation: malosha-drift-beam 9s linear infinite;
 }
 
+@keyframes malosha-globe-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes malosha-globe-orbit {
+  from {
+    transform: rotate(360deg);
+  }
+  to {
+    transform: rotate(0deg);
+  }
+}
+
+.animate-malosha-globe-spin {
+  animation: malosha-globe-spin 38s linear infinite;
+}
+
+.animate-malosha-globe-orbit {
+  animation: malosha-globe-orbit 56s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-malosha-spin,
   .animate-malosha-spin-rev,
@@ -268,7 +294,9 @@
   .animate-malosha-fade,
   .animate-malosha-float-a,
   .animate-malosha-float-b,
-  .animate-malosha-beam {
+  .animate-malosha-beam,
+  .animate-malosha-globe-spin,
+  .animate-malosha-globe-orbit {
     animation: none;
   }
 }
