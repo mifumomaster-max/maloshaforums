@@ -221,7 +221,7 @@ export function mapPollDoc(id: string, data: Record<string, unknown>): Poll {
         ? data.tournamentGroupLabel
         : undefined,
     createdBy: String(data.createdBy || ''),
-    createdByName: String(data.createdByName || 'Mmiliki'),
+    createdByName: String(data.createdByName || 'Mwanachama'),
     createdByPhoto: String(data.createdByPhoto || ''),
     createdAt: (data.createdAt as Timestamp) || null,
     updatedAt: (data.updatedAt as Timestamp) || null,
@@ -242,12 +242,15 @@ export function canViewPollResults(
   hasVoted: boolean,
   isAdmin: boolean,
   nowMs = Date.now(),
-  isAuthenticated?: boolean
+  isAuthenticated?: boolean,
+  currentUserUid?: string | null
 ): boolean {
   const signedIn =
     isAuthenticated !== undefined ? isAuthenticated : Boolean(auth.currentUser);
   if (isAdmin) return true;
   if (!signedIn) return false;
+  const uid = currentUserUid !== undefined ? currentUserUid : auth.currentUser?.uid;
+  if (uid && poll.createdBy === uid) return true;
   if (poll.status === 'draft') return false;
   if (poll.resultsVisibility === 'owner_only') return false;
   if (poll.resultsVisibility === 'always') return true;
@@ -261,36 +264,90 @@ export function canViewPollResults(
   return false;
 }
 
+function sortPollsList(list: Poll[]): Poll[] {
+  return list.sort((a, b) => {
+    if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+    const aOpen = isPollEffectivelyOpen(a) ? 1 : 0;
+    const bOpen = isPollEffectivelyOpen(b) ? 1 : 0;
+    if (aOpen !== bOpen) return bOpen - aOpen;
+    const am = a.createdAt ? a.createdAt.toMillis() : 0;
+    const bm = b.createdAt ? b.createdAt.toMillis() : 0;
+    return bm - am;
+  });
+}
+
 export function subscribePolls(
   isAdmin: boolean,
+  currentUserUid: string | null,
   onUpdate: (polls: Poll[]) => void,
   onError?: (err: unknown) => void
 ): () => void {
   const path = 'polls';
-  const q = isAdmin
-    ? query(collection(db, path), limit(100))
-    : query(collection(db, path), where('status', 'in', ['open', 'closed']), limit(100));
+  if (isAdmin) {
+    const q = query(collection(db, path), limit(100));
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const list = sortPollsList(snapshot.docs.map((d) => mapPollDoc(d.id, d.data())));
+        onUpdate(list);
+      },
+      (error) => {
+        if (onError) onError(error);
+        handleFirestoreError(error, OperationType.LIST, path);
+      }
+    );
+  }
 
-  return onSnapshot(
-    q,
+  let publicPolls: Poll[] = [];
+  let ownPolls: Poll[] = [];
+
+  const emitMerged = () => {
+    const merged = new Map<string, Poll>();
+    for (const p of publicPolls) merged.set(p.id, p);
+    for (const p of ownPolls) merged.set(p.id, p);
+    onUpdate(sortPollsList(Array.from(merged.values())));
+  };
+
+  const publicQuery = query(
+    collection(db, path),
+    where('status', 'in', ['open', 'closed']),
+    limit(100)
+  );
+  const unsubPublic = onSnapshot(
+    publicQuery,
     (snapshot) => {
-      const list = snapshot.docs.map((d) => mapPollDoc(d.id, d.data()));
-      list.sort((a, b) => {
-        if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
-        const aOpen = isPollEffectivelyOpen(a) ? 1 : 0;
-        const bOpen = isPollEffectivelyOpen(b) ? 1 : 0;
-        if (aOpen !== bOpen) return bOpen - aOpen;
-        const am = a.createdAt ? a.createdAt.toMillis() : 0;
-        const bm = b.createdAt ? b.createdAt.toMillis() : 0;
-        return bm - am;
-      });
-      onUpdate(list);
+      publicPolls = snapshot.docs.map((d) => mapPollDoc(d.id, d.data()));
+      emitMerged();
     },
     (error) => {
       if (onError) onError(error);
       handleFirestoreError(error, OperationType.LIST, path);
     }
   );
+
+  let unsubOwn: (() => void) | null = null;
+  if (currentUserUid) {
+    const ownQuery = query(
+      collection(db, path),
+      where('createdBy', '==', currentUserUid),
+      limit(50)
+    );
+    unsubOwn = onSnapshot(
+      ownQuery,
+      (snapshot) => {
+        ownPolls = snapshot.docs.map((d) => mapPollDoc(d.id, d.data()));
+        emitMerged();
+      },
+      () => {
+        // Non-fatal fallback for own drafts listener
+      }
+    );
+  }
+
+  return () => {
+    unsubPublic();
+    if (unsubOwn) unsubOwn();
+  };
 }
 
 export async function fetchPollById(pollId: string): Promise<Poll | null> {
@@ -450,10 +507,15 @@ function sanitizePollOptions(
     }
     seenIds.add(cleanId);
 
-    const cleanSubtitle = (opt.subtitle || '').trim().slice(0, 160);
-    const cleanPositionTitle = (opt.positionTitle || '').trim().slice(0, 80);
-    const cleanImageUrl = (opt.imageUrl || '').trim().slice(0, 500);
-    const validOptImageUrl = cleanImageUrl.startsWith('https://') ? cleanImageUrl : '';
+    const cleanSubtitle = (opt.subtitle || '').trim().slice(0, 240);
+    const cleanPositionTitle = (opt.positionTitle || '').trim().slice(0, 120);
+    const cleanImageUrl = (opt.imageUrl || '').trim().slice(0, 2000);
+    const validOptImageUrl =
+      cleanImageUrl.startsWith('https://') ||
+      cleanImageUrl.startsWith('http://') ||
+      cleanImageUrl.startsWith('/')
+        ? cleanImageUrl
+        : '';
     const cleanColor =
       opt.color && opt.color.trim()
         ? opt.color.trim().slice(0, 30)
@@ -471,7 +533,7 @@ function sanitizePollOptions(
     }
     if (validOptImageUrl) obj.imageUrl = validOptImageUrl;
     cleaned.push(obj);
-    if (cleaned.length >= (questionType === 'rating' ? 5 : 12)) break;
+    if (cleaned.length >= (questionType === 'rating' ? 5 : 50)) break;
   }
 
   return cleaned;
@@ -504,9 +566,9 @@ export async function createPoll(
   photoURL: string,
   input: CreateOrUpdatePollInput
 ): Promise<string> {
-  const cleanQuestion = input.question.trim().slice(0, 300);
-  if (cleanQuestion.length < 4) {
-    throw new Error('Swali la kura lazima liwe na angalau herufi 4.');
+  const cleanQuestion = input.question.trim().slice(0, 1000);
+  if (cleanQuestion.length < 1) {
+    throw new Error('Andika swali la kura.');
   }
 
   const isOpenOpinion = input.questionType === 'open_opinion';
@@ -520,8 +582,13 @@ export async function createPoll(
       ? Math.max(1, Math.min(options.length, input.maxChoices || 2))
       : 1;
 
-  const cleanImageUrl = (input.imageUrl || '').trim().slice(0, 500);
-  const validImageUrl = cleanImageUrl.startsWith('https://') ? cleanImageUrl : '';
+  const cleanImageUrl = (input.imageUrl || '').trim().slice(0, 2000);
+  const validImageUrl =
+    cleanImageUrl.startsWith('https://') ||
+    cleanImageUrl.startsWith('http://') ||
+    cleanImageUrl.startsWith('/')
+      ? cleanImageUrl
+      : '';
 
   const pollId = generateShortPollId(8);
   const pollRef = doc(db, 'polls', pollId);
@@ -529,17 +596,17 @@ export async function createPoll(
     input.hasDeadline && input.endsAtDate ? input.endsAtDate : POLL_NO_DEADLINE_SENTINEL
   );
 
-  const safeQuorum = Math.max(0, Math.min(1000000, Math.round(Number(input.quorumTarget || 0))));
+  const safeQuorum = Math.max(0, Math.min(10000000, Math.round(Number(input.quorumTarget || 0))));
 
   const pollDocPayload: Record<string, unknown> = {
     pollId,
     question: cleanQuestion,
-    description: input.description.trim().slice(0, 1500),
+    description: input.description.trim().slice(0, 5000),
     category: input.category,
     questionType: input.questionType,
     pollStyle: input.pollStyle,
     themeColor: normalizeThemeColor(input.themeColor, pollId, input.pollStyle),
-    institutionName: input.institutionName.trim().slice(0, 120),
+    institutionName: input.institutionName.trim().slice(0, 200),
     options,
     optionIds: options.map((o) => o.id),
     maxChoices,
@@ -559,8 +626,8 @@ export async function createPoll(
     totalBallots: 0,
     commentsCount: 0,
     createdBy: user.uid,
-    createdByName: displayName.trim().slice(0, 80) || 'Mmiliki',
-    createdByPhoto: (photoURL || '').slice(0, 500),
+    createdByName: displayName.trim().slice(0, 120) || 'Mwanachama',
+    createdByPhoto: (photoURL || '').slice(0, 2000),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
@@ -614,9 +681,9 @@ export async function updatePoll(
   existingPoll: Poll,
   input: CreateOrUpdatePollInput
 ): Promise<void> {
-  const cleanQuestion = input.question.trim().slice(0, 300);
-  if (cleanQuestion.length < 4) {
-    throw new Error('Swali la kura lazima liwe na angalau herufi 4.');
+  const cleanQuestion = input.question.trim().slice(0, 1000);
+  if (cleanQuestion.length < 1) {
+    throw new Error('Andika swali la kura.');
   }
 
   const isOpenOpinion = input.questionType === 'open_opinion';
@@ -630,81 +697,113 @@ export async function updatePoll(
       ? Math.max(1, Math.min(options.length, input.maxChoices || 2))
       : 1;
 
-  const cleanImageUrl = (input.imageUrl || '').trim().slice(0, 500);
-  const validImageUrl = cleanImageUrl.startsWith('https://') ? cleanImageUrl : '';
+  const cleanImageUrl = (input.imageUrl || '').trim().slice(0, 2000);
+  const validImageUrl =
+    cleanImageUrl.startsWith('https://') ||
+    cleanImageUrl.startsWith('http://') ||
+    cleanImageUrl.startsWith('/')
+      ? cleanImageUrl
+      : '';
 
   const endsAtTs = Timestamp.fromDate(
     input.hasDeadline && input.endsAtDate ? input.endsAtDate : POLL_NO_DEADLINE_SENTINEL
   );
 
   const pollRef = doc(db, 'polls', pollId);
-  const batch = writeBatch(db);
-
-  const safeQuorum = Math.max(0, Math.min(1000000, Math.round(Number(input.quorumTarget || 0))));
-
-  batch.update(pollRef, {
-    question: cleanQuestion,
-    description: input.description.trim().slice(0, 1500),
-    imageUrl: validImageUrl,
-    category: input.category,
-    questionType: input.questionType,
-    pollStyle: input.pollStyle,
-    themeColor: normalizeThemeColor(input.themeColor, pollId, input.pollStyle),
-    institutionName: input.institutionName.trim().slice(0, 120),
-    options,
-    optionIds: options.map((o) => o.id),
-    maxChoices,
-    status: input.status,
-    resultsVisibility: input.resultsVisibility,
-    allowVoteChange: Boolean(input.allowVoteChange),
-    anonymousMode: Boolean(input.anonymousMode),
-    showVoterCount: Boolean(input.showVoterCount),
-    showLivePercentages: Boolean(input.showLivePercentages),
-    shuffleOptions: Boolean(input.shuffleOptions),
-    allowComments: Boolean(input.allowComments),
-    quorumTarget: safeQuorum,
-    allowShare: Boolean(input.allowShare),
-    isPinned: Boolean(input.isPinned),
-    hasDeadline: Boolean(input.hasDeadline),
-    endsAt: endsAtTs,
-    updatedAt: serverTimestamp(),
-  });
+  const safeQuorum = Math.max(0, Math.min(10000000, Math.round(Number(input.quorumTarget || 0))));
 
   const existingIds = new Set(existingPoll.optionIds);
   const nextIds = new Set(options.map((o) => o.id));
 
-  for (const opt of options) {
-    if (!existingIds.has(opt.id)) {
-      batch.set(doc(db, 'polls', pollId, 'tallies', opt.id), {
-        pollId,
-        optionId: opt.id,
-        votesCount: 0,
-        updatedAt: serverTimestamp(),
-      });
-    }
-  }
+  const buildUpdateBatch = () => {
+    const batch = writeBatch(db);
+    batch.update(pollRef, {
+      pollId,
+      question: cleanQuestion,
+      description: input.description.trim().slice(0, 5000),
+      imageUrl: validImageUrl,
+      category: input.category,
+      questionType: input.questionType,
+      pollStyle: input.pollStyle,
+      themeColor: normalizeThemeColor(input.themeColor, pollId, input.pollStyle),
+      institutionName: input.institutionName.trim().slice(0, 200),
+      options,
+      optionIds: options.map((o) => o.id),
+      maxChoices,
+      status: input.status,
+      resultsVisibility: input.resultsVisibility,
+      allowVoteChange: Boolean(input.allowVoteChange),
+      anonymousMode: Boolean(input.anonymousMode),
+      showVoterCount: Boolean(input.showVoterCount),
+      showLivePercentages: Boolean(input.showLivePercentages),
+      shuffleOptions: Boolean(input.shuffleOptions),
+      allowComments: Boolean(input.allowComments),
+      quorumTarget: safeQuorum,
+      allowShare: Boolean(input.allowShare),
+      isPinned: Boolean(input.isPinned),
+      hasDeadline: Boolean(input.hasDeadline),
+      endsAt: endsAtTs,
+      updatedAt: serverTimestamp(),
+    });
 
-  for (const oldId of existingPoll.optionIds) {
-    if (!nextIds.has(oldId)) {
-      batch.delete(doc(db, 'polls', pollId, 'tallies', oldId));
+    for (const opt of options) {
+      if (!existingIds.has(opt.id)) {
+        batch.set(doc(db, 'polls', pollId, 'tallies', opt.id), {
+          pollId,
+          optionId: opt.id,
+          votesCount: 0,
+          updatedAt: serverTimestamp(),
+        });
+      }
     }
-  }
+
+    for (const oldId of existingPoll.optionIds) {
+      if (!nextIds.has(oldId)) {
+        batch.delete(doc(db, 'polls', pollId, 'tallies', oldId));
+      }
+    }
+
+    return batch;
+  };
 
   try {
-    await batch.commit();
+    await commitBatchWithTokenRefreshRetry(buildUpdateBatch);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `polls/${pollId}`);
     throw error;
   }
 }
 
+async function updateDocWithTokenRefreshRetry(
+  runUpdate: () => Promise<void>
+): Promise<void> {
+  try {
+    await runUpdate();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message.toLowerCase() : String(err || '').toLowerCase();
+    const isPerm = msg.includes('permission') || msg.includes('insufficient');
+    if (isPerm && auth.currentUser) {
+      try {
+        await auth.currentUser.getIdToken(true);
+      } catch {
+        // Ignore refresh error and fall through
+      }
+      await runUpdate();
+      return;
+    }
+    throw err;
+  }
+}
+
 export async function updatePollStatus(pollId: string, status: PollStatus): Promise<void> {
   const path = `polls/${pollId}`;
   try {
-    await updateDoc(doc(db, 'polls', pollId), {
-      status,
-      updatedAt: serverTimestamp(),
-    });
+    await updateDocWithTokenRefreshRetry(() =>
+      updateDoc(doc(db, 'polls', pollId), {
+        status,
+        updatedAt: serverTimestamp(),
+      })
+    );
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
     throw error;
@@ -714,35 +813,65 @@ export async function updatePollStatus(pollId: string, status: PollStatus): Prom
 export async function togglePollPin(pollId: string, isPinned: boolean): Promise<void> {
   const path = `polls/${pollId}`;
   try {
-    await updateDoc(doc(db, 'polls', pollId), {
-      isPinned,
-      updatedAt: serverTimestamp(),
-    });
+    await updateDocWithTokenRefreshRetry(() =>
+      updateDoc(doc(db, 'polls', pollId), {
+        isPinned,
+        updatedAt: serverTimestamp(),
+      })
+    );
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
     throw error;
   }
 }
 
-export async function deletePoll(poll: Poll): Promise<void> {
+export async function deletePoll(poll: Poll, isAdmin = false): Promise<void> {
   const path = `polls/${poll.id}`;
   try {
-    const ballotsSnap = await getDocs(collection(db, 'polls', poll.id, 'ballots'));
-    const talliesSnap = await getDocs(collection(db, 'polls', poll.id, 'tallies'));
-    const commentsSnap = await getDocs(collection(db, 'polls', poll.id, 'comments'));
+    const allRefs: ReturnType<typeof doc>[] = [];
+    const seenPaths = new Set<string>();
+    const addRef = (ref: ReturnType<typeof doc>) => {
+      if (!seenPaths.has(ref.path)) {
+        seenPaths.add(ref.path);
+        allRefs.push(ref);
+      }
+    };
 
-    const commentLikesSnaps = await Promise.all(
-      commentsSnap.docs.map((cDoc) =>
-        getDocs(collection(db, 'polls', poll.id, 'comments', cDoc.id, 'likes'))
-      )
-    );
+    // Delete known tallies directly without requiring blanket list access on tallies
+    for (const optId of poll.optionIds) {
+      if (optId) {
+        addRef(doc(db, 'polls', poll.id, 'tallies', optId));
+      }
+    }
 
-    const allRefs = [
-      ...ballotsSnap.docs.map((d) => d.ref),
-      ...talliesSnap.docs.map((d) => d.ref),
-      ...commentLikesSnaps.flatMap((snap) => snap.docs.map((d) => d.ref)),
-      ...commentsSnap.docs.map((d) => d.ref),
-    ];
+    if (isAdmin) {
+      const [ballotsSnap, talliesSnap, commentsSnap] = await Promise.all([
+        getDocs(collection(db, 'polls', poll.id, 'ballots')),
+        getDocs(collection(db, 'polls', poll.id, 'tallies')),
+        getDocs(collection(db, 'polls', poll.id, 'comments')),
+      ]);
+
+      const commentLikesSnaps = await Promise.all(
+        commentsSnap.docs.map((cDoc) =>
+          getDocs(collection(db, 'polls', poll.id, 'comments', cDoc.id, 'likes'))
+        )
+      );
+
+      ballotsSnap.docs.forEach((d) => addRef(d.ref));
+      talliesSnap.docs.forEach((d) => addRef(d.ref));
+      commentLikesSnaps.forEach((snap) => snap.docs.forEach((d) => addRef(d.ref)));
+      commentsSnap.docs.forEach((d) => addRef(d.ref));
+    } else {
+      try {
+        const visibleCommentsSnap = await getDocs(
+          query(collection(db, 'polls', poll.id, 'comments'), where('isDeleted', '==', false))
+        );
+        visibleCommentsSnap.docs.forEach((d) => addRef(d.ref));
+      } catch {
+        // Non-fatal fallback when creator deletes poll
+      }
+    }
+
     for (let i = 0; i < allRefs.length; i += 400) {
       const chunk = allRefs.slice(i, i + 400);
       const batch = writeBatch(db);
@@ -765,7 +894,9 @@ export async function castOrUpdatePollVote(
   rawSelectedIds: string[],
   existingBallot: PollBallot | null
 ): Promise<PollBallot> {
-  const validOptionSet = new Set(poll.optionIds);
+  const validOptionSet = new Set(
+    poll.optionIds?.length ? poll.optionIds : poll.options.map((o) => o.id)
+  );
   const selectedOptionIds = Array.from(
     new Set(rawSelectedIds.filter((id) => validOptionSet.has(id)))
   );
@@ -786,82 +917,127 @@ export async function castOrUpdatePollVote(
     throw new Error('Kura hii hairuhusu kubadilisha jibu baada ya kupiga kura.');
   }
 
-  const cleanVoterName = voterName.trim().slice(0, 80) || 'Mwanachama';
-  const cleanVoterPhoto = (voterPhoto || '').slice(0, 500);
-  const ballotRef = doc(db, 'polls', poll.id, 'ballots', user.uid);
+  const actingUid = auth.currentUser?.uid || user.uid;
+  const cleanVoterName = voterName.trim().slice(0, 120) || 'Mwanachama';
+  const cleanVoterPhoto = (voterPhoto || '').slice(0, 2000);
+  const ballotRef = doc(db, 'polls', poll.id, 'ballots', actingUid);
   const pollRef = doc(db, 'polls', poll.id);
-  const batch = writeBatch(db);
 
-  if (!existingBallot) {
-    batch.set(ballotRef, {
-      pollId: poll.id,
-      userId: user.uid,
-      voterName: cleanVoterName,
-      voterPhoto: cleanVoterPhoto,
-      selectedOptionIds,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-
-    batch.update(pollRef, {
-      totalBallots: increment(1),
-      updatedAt: serverTimestamp(),
-    });
-
-    for (const optionId of selectedOptionIds) {
-      batch.update(doc(db, 'polls', poll.id, 'tallies', optionId), {
-        votesCount: increment(1),
-        updatedAt: serverTimestamp(),
-      });
-    }
-  } else {
-    const prevSet = new Set(existingBallot.selectedOptionIds);
-    const nextSet = new Set(selectedOptionIds);
-
-    const added = selectedOptionIds.filter((id) => !prevSet.has(id));
-    const removed = existingBallot.selectedOptionIds.filter((id) => !nextSet.has(id));
-
-    if (added.length === 0 && removed.length === 0) {
-      return existingBallot;
-    }
-
-    batch.update(ballotRef, {
-      voterName: cleanVoterName,
-      voterPhoto: cleanVoterPhoto,
-      selectedOptionIds,
-      updatedAt: serverTimestamp(),
-    });
-
-    for (const optionId of added) {
-      batch.update(doc(db, 'polls', poll.id, 'tallies', optionId), {
-        votesCount: increment(1),
-        updatedAt: serverTimestamp(),
-      });
-    }
-    for (const optionId of removed) {
-      batch.update(doc(db, 'polls', poll.id, 'tallies', optionId), {
-        votesCount: increment(-1),
-        updatedAt: serverTimestamp(),
-      });
+  let effectiveExistingBallot = existingBallot;
+  if (!effectiveExistingBallot) {
+    try {
+      const serverBallotSnap = await getDoc(ballotRef);
+      if (serverBallotSnap.exists()) {
+        const d = serverBallotSnap.data();
+        effectiveExistingBallot = {
+          pollId: String(d.pollId || poll.id),
+          userId: String(d.userId || actingUid),
+          voterName: String(d.voterName || cleanVoterName),
+          voterPhoto: String(d.voterPhoto || ''),
+          selectedOptionIds: Array.isArray(d.selectedOptionIds)
+            ? d.selectedOptionIds.map((x) => String(x))
+            : [],
+          createdAt: d.createdAt,
+          updatedAt: d.updatedAt,
+        };
+      }
+    } catch {
+      // Proceed with client state if ballot pre-check cannot read
     }
   }
 
+  if (effectiveExistingBallot && !poll.allowVoteChange) {
+    throw new Error('Kura hii hairuhusu kubadilisha jibu baada ya kupiga kura.');
+  }
+
+  let addedOptions: string[] = [];
+  let removedOptions: string[] = [];
+  if (effectiveExistingBallot) {
+    const prevSet = new Set(effectiveExistingBallot.selectedOptionIds);
+    const nextSet = new Set(selectedOptionIds);
+    addedOptions = selectedOptionIds.filter((id) => !prevSet.has(id));
+    removedOptions = effectiveExistingBallot.selectedOptionIds.filter((id) => !nextSet.has(id));
+    if (addedOptions.length === 0 && removedOptions.length === 0) {
+      return effectiveExistingBallot;
+    }
+  }
+
+  const buildVoteBatch = () => {
+    const batch = writeBatch(db);
+    if (!effectiveExistingBallot) {
+      batch.set(ballotRef, {
+        pollId: poll.id,
+        userId: actingUid,
+        voterName: cleanVoterName,
+        voterPhoto: cleanVoterPhoto,
+        selectedOptionIds,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      batch.update(pollRef, {
+        totalBallots: increment(1),
+        updatedAt: serverTimestamp(),
+      });
+
+      for (const optionId of selectedOptionIds) {
+        batch.set(
+          doc(db, 'polls', poll.id, 'tallies', optionId),
+          {
+            pollId: poll.id,
+            optionId,
+            votesCount: increment(1),
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+    } else {
+      batch.update(ballotRef, {
+        voterName: cleanVoterName,
+        voterPhoto: cleanVoterPhoto,
+        selectedOptionIds,
+        updatedAt: serverTimestamp(),
+      });
+
+      for (const optionId of addedOptions) {
+        batch.set(
+          doc(db, 'polls', poll.id, 'tallies', optionId),
+          {
+            pollId: poll.id,
+            optionId,
+            votesCount: increment(1),
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+      for (const optionId of removedOptions) {
+        batch.update(doc(db, 'polls', poll.id, 'tallies', optionId), {
+          votesCount: increment(-1),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+    return batch;
+  };
+
   try {
-    await batch.commit();
+    await commitBatchWithTokenRefreshRetry(buildVoteBatch);
     return {
       pollId: poll.id,
-      userId: user.uid,
+      userId: actingUid,
       voterName: cleanVoterName,
       voterPhoto: cleanVoterPhoto,
       selectedOptionIds,
-      createdAt: existingBallot?.createdAt || Timestamp.now(),
+      createdAt: effectiveExistingBallot?.createdAt || Timestamp.now(),
       updatedAt: Timestamp.now(),
     };
   } catch (error) {
     const rawMsg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
     if (rawMsg.includes('permission') || rawMsg.includes('insufficient')) {
       throw new Error(
-        'Imeshindwa kukamilisha kura: hakikisha umejaza jina la akaunti yako, kura bado ipo wazi, na muda haujaisha.'
+        'Imeshindwa kukamilisha kura: hakikisha umeingia na akaunti yako hai na kura bado ipo wazi.'
       );
     }
     if (rawMsg.includes('not-found') || rawMsg.includes('no document to update')) {
@@ -869,8 +1045,8 @@ export async function castOrUpdatePollVote(
     }
     handleFirestoreError(
       error,
-      existingBallot ? OperationType.UPDATE : OperationType.CREATE,
-      `polls/${poll.id}/ballots/${user.uid}`
+      effectiveExistingBallot ? OperationType.UPDATE : OperationType.CREATE,
+      `polls/${poll.id}/ballots/${actingUid}`
     );
     throw error;
   }
@@ -1893,7 +2069,7 @@ function mapTournamentDoc(id: string, data: Record<string, unknown>): PollTourna
       : [],
     winnerVotes,
     createdBy: String(data.createdBy || ''),
-    createdByName: String(data.createdByName || 'Mmiliki'),
+    createdByName: String(data.createdByName || 'Mwanachama'),
     createdByPhoto: String(data.createdByPhoto || ''),
     createdAt: (data.createdAt as Timestamp) || null,
     updatedAt: (data.updatedAt as Timestamp) || null,
@@ -1963,8 +2139,10 @@ function buildPollOptionFromCandidate(
         ? `Mvulana${pos ? ` · ${pos}` : ''}`
         : pos;
   if (sub) opt.subtitle = sub;
-  const rawOptImg = (c.imageUrl || '').trim().slice(0, 500);
-  if (rawOptImg.startsWith('https://')) opt.imageUrl = rawOptImg;
+  const rawOptImg = (c.imageUrl || '').trim().slice(0, 2000);
+  if (rawOptImg.startsWith('https://') || rawOptImg.startsWith('http://') || rawOptImg.startsWith('/')) {
+    opt.imageUrl = rawOptImg;
+  }
   return opt;
 }
 
@@ -1976,13 +2154,13 @@ function buildCleanCandidatesForStorage(cands: TournamentCandidate[]): Record<st
       gender: c.gender,
     };
     if (c.positionTitle && c.positionTitle.trim()) {
-      clean.positionTitle = c.positionTitle.trim().slice(0, 80);
+      clean.positionTitle = c.positionTitle.trim().slice(0, 120);
     }
     if (c.subtitle && c.subtitle.trim()) {
-      clean.subtitle = c.subtitle.trim().slice(0, 160);
+      clean.subtitle = c.subtitle.trim().slice(0, 240);
     }
-    const rawCandImg = (c.imageUrl || '').trim().slice(0, 500);
-    if (rawCandImg.startsWith('https://')) {
+    const rawCandImg = (c.imageUrl || '').trim().slice(0, 2000);
+    if (rawCandImg.startsWith('https://') || rawCandImg.startsWith('http://') || rawCandImg.startsWith('/')) {
       clean.imageUrl = rawCandImg;
     }
     return clean;
@@ -2044,6 +2222,7 @@ function buildGroupPollWritesForPlan(params: {
   displayName: string;
   photoURL: string;
   isTieBreaker?: boolean;
+  isAdmin?: boolean;
 }): PendingGroupPollWrite[] {
   const {
     tournamentId,
@@ -2062,6 +2241,7 @@ function buildGroupPollWritesForPlan(params: {
     displayName,
     photoURL,
     isTieBreaker = false,
+    isAdmin = false,
   } = params;
 
   const endsAtTs = Timestamp.fromDate(new Date(Date.now() + Math.max(5, roundDurationMinutes) * 60000));
@@ -2085,8 +2265,8 @@ function buildGroupPollWritesForPlan(params: {
       ? Math.max(1, Math.min(12, Math.min(options.length - 1, Math.round(g.advanceCount))))
       : 1;
 
-    const cleanQuestion = `${title} — ${g.label}`.slice(0, 295);
-    const finalQuestion = cleanQuestion.length >= 4 ? cleanQuestion : `${cleanQuestion} Kura`.slice(0, 295);
+    const cleanQuestion = `${title} — ${g.label}`.slice(0, 995);
+    const finalQuestion = cleanQuestion.length >= 1 ? cleanQuestion : `${cleanQuestion} Kura`.slice(0, 995);
     const guidanceNote = isTieBreaker
       ? `Kura ya kuamua sare (${g.label}): Chagua ${maxChoices} kupata anayefuzu.`
       : `Mchakato wa Mtoano · ${roundLabel} (${g.label}): Wagombea ${options.length} wanachuana — ${g.advanceCount} bora wanavuka.`;
@@ -2094,12 +2274,12 @@ function buildGroupPollWritesForPlan(params: {
     const pollDoc: Record<string, unknown> = {
       pollId,
       question: finalQuestion,
-      description: [description.trim(), guidanceNote].filter(Boolean).join('\n').slice(0, 1500),
+      description: [description.trim(), guidanceNote].filter(Boolean).join('\n').slice(0, 5000),
       category,
       questionType,
       pollStyle,
       themeColor: themeCycle[gIdx % themeCycle.length],
-      institutionName: institutionName.trim().slice(0, 120),
+      institutionName: institutionName.trim().slice(0, 200),
       options,
       optionIds: options.map((o) => o.id),
       maxChoices,
@@ -2113,17 +2293,17 @@ function buildGroupPollWritesForPlan(params: {
       allowComments: true,
       quorumTarget: 0,
       allowShare: true,
-      isPinned: gIdx === 0 && round === 1,
+      isPinned: Boolean(isAdmin && gIdx === 0 && round === 1),
       hasDeadline: true,
       endsAt: endsAtTs,
       totalBallots: 0,
       commentsCount: 0,
       tournamentId,
-      tournamentRound: Math.max(1, Math.min(20, Math.round(round))),
-      tournamentGroupLabel: `${roundLabel} · ${g.label}`.slice(0, 80),
+      tournamentRound: Math.max(1, Math.min(50, Math.round(round))),
+      tournamentGroupLabel: `${roundLabel} · ${g.label}`.slice(0, 120),
       createdBy: auth.currentUser?.uid || user.uid,
-      createdByName: displayName.trim().slice(0, 80) || 'Mmiliki',
-      createdByPhoto: (photoURL || '').slice(0, 500),
+      createdByName: displayName.trim().slice(0, 120) || 'Mwanachama',
+      createdByPhoto: (photoURL || '').slice(0, 2000),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
@@ -2190,24 +2370,25 @@ export async function createPollTournament(
   user: User,
   displayName: string,
   photoURL: string,
-  input: CreatePollTournamentInput
+  input: CreatePollTournamentInput,
+  isAdmin = false
 ): Promise<string> {
-  const cleanTitle = input.title.trim().slice(0, 200);
-  if (cleanTitle.length < 4) {
-    throw new Error('Andika kichwa cha mchakato (angalau herufi 4).');
+  const cleanTitle = input.title.trim().slice(0, 400);
+  if (cleanTitle.length < 1) {
+    throw new Error('Andika kichwa cha mchakato.');
   }
 
-  const safeTargetWinners = Math.max(1, Math.min(50, Math.round(Number(input.targetWinnersCount) || 1)));
+  const safeTargetWinners = Math.max(1, Math.min(100, Math.round(Number(input.targetWinnersCount) || 1)));
   const safeReqMale = input.useGenderQuota
-    ? Math.max(0, Math.min(50, Math.round(Number(input.requiredMaleCount) || 0)))
+    ? Math.max(0, Math.min(100, Math.round(Number(input.requiredMaleCount) || 0)))
     : 0;
   const safeReqFemale = input.useGenderQuota
-    ? Math.max(0, Math.min(50, Math.round(Number(input.requiredFemaleCount) || 0)))
+    ? Math.max(0, Math.min(100, Math.round(Number(input.requiredFemaleCount) || 0)))
     : 0;
-  const safeDurationMins = Math.max(5, Math.min(525600, Math.round(Number(input.roundDurationMinutes) || 60)));
+  const safeDurationMins = Math.max(1, Math.min(5256000, Math.round(Number(input.roundDurationMinutes) || 60)));
 
   const seenCandIds = new Set<string>();
-  const sanitizedCandidates: TournamentCandidate[] = input.candidates.slice(0, 300).map((c, idx) => {
+  const sanitizedCandidates: TournamentCandidate[] = input.candidates.slice(0, 500).map((c, idx) => {
     const rawId = (c.id || `c_${idx + 1}`).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48) || `c_${idx + 1}`;
     let uniqueId = rawId;
     let dupCounter = 2;
@@ -2216,7 +2397,7 @@ export async function createPollTournament(
       dupCounter++;
     }
     seenCandIds.add(uniqueId);
-    const rawImg = (c.imageUrl || '').trim().slice(0, 500);
+    const rawImg = (c.imageUrl || '').trim().slice(0, 2000);
     const safeGender: PollGender =
       c.gender === 'female' || c.gender === 'other' ? c.gender : 'male';
     return {
@@ -2224,7 +2405,10 @@ export async function createPollTournament(
       id: uniqueId,
       gender: safeGender,
       name: c.name.trim().slice(0, 160) || `Mgombea ${idx + 1}`,
-      imageUrl: rawImg.startsWith('https://') ? rawImg : undefined,
+      imageUrl:
+        rawImg.startsWith('https://') || rawImg.startsWith('http://') || rawImg.startsWith('/')
+          ? rawImg
+          : undefined,
     };
   });
 
@@ -2319,10 +2503,10 @@ export async function createPollTournament(
       batch.set(doc(db, 'poll_tournaments', tournamentId), {
         tournamentId,
         title: cleanTitle,
-        description: input.description.trim().slice(0, 1500),
-        institutionName: input.institutionName.trim().slice(0, 120),
+        description: input.description.trim().slice(0, 5000),
+        institutionName: input.institutionName.trim().slice(0, 200),
         category: input.category,
-        positionTitle: input.positionTitle.trim().slice(0, 80),
+        positionTitle: input.positionTitle.trim().slice(0, 120),
         targetWinnersCount: safeTargetWinners,
         useGenderQuota: Boolean(input.useGenderQuota),
         requiredMaleCount: safeReqMale,
@@ -2337,8 +2521,8 @@ export async function createPollTournament(
         winnerIds: initialWinners,
         winnerVotes: {},
         createdBy: actingUid,
-        createdByName: displayName.trim().slice(0, 80) || 'Mmiliki',
-        createdByPhoto: (photoURL || '').slice(0, 500),
+        createdByName: displayName.trim().slice(0, 120) || 'Mwanachama',
+        createdByPhoto: (photoURL || '').slice(0, 2000),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -2370,6 +2554,7 @@ export async function createPollTournament(
     user,
     displayName,
     photoURL,
+    isAdmin,
   });
 
   const stage1: TournamentStageRecord = {
@@ -2394,10 +2579,10 @@ export async function createPollTournament(
       batch.set(tRef, {
         tournamentId,
         title: cleanTitle,
-        description: input.description.trim().slice(0, 1500),
-        institutionName: input.institutionName.trim().slice(0, 120),
+        description: input.description.trim().slice(0, 5000),
+        institutionName: input.institutionName.trim().slice(0, 200),
         category: input.category,
-        positionTitle: input.positionTitle.trim().slice(0, 80),
+        positionTitle: input.positionTitle.trim().slice(0, 120),
         targetWinnersCount: safeTargetWinners,
         useGenderQuota: Boolean(input.useGenderQuota),
         requiredMaleCount: safeReqMale,
@@ -2406,14 +2591,14 @@ export async function createPollTournament(
         roundDurationMinutes: safeDurationMins,
         status: 'active',
         currentRound: 1,
-        totalPlannedRounds: Math.max(1, Math.min(20, Math.round(roadmap.rounds.length))),
+        totalPlannedRounds: Math.max(1, Math.min(50, Math.round(roadmap.rounds.length))),
         candidates: buildCleanCandidatesForStorage(sanitizedCandidates),
         stages: buildCleanStagesForStorage([stage1]),
         winnerIds: [],
         winnerVotes: {},
         createdBy: actingUid,
-        createdByName: displayName.trim().slice(0, 80) || 'Mmiliki',
-        createdByPhoto: (photoURL || '').slice(0, 500),
+        createdByName: displayName.trim().slice(0, 120) || 'Mwanachama',
+        createdByPhoto: (photoURL || '').slice(0, 2000),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -2432,7 +2617,8 @@ export async function resolveAndAdvanceTournament(
   allPolls: Poll[],
   user: User,
   displayName: string,
-  photoURL: string
+  photoURL: string,
+  isAdmin = false
 ): Promise<{
   outcome: 'advanced' | 'tiebreaker_created' | 'completed';
   messageSw: string;
@@ -2574,6 +2760,7 @@ export async function resolveAndAdvanceTournament(
       displayName,
       photoURL,
       isTieBreaker: true,
+      isAdmin,
     });
 
     await commitPendingPollWrites(pendingTieWrites);
@@ -2750,6 +2937,7 @@ export async function resolveAndAdvanceTournament(
     user,
     displayName,
     photoURL,
+    isAdmin,
   });
 
   await commitPendingPollWrites(pendingNextWrites);
@@ -2785,13 +2973,14 @@ export async function resolveAndAdvanceTournament(
 
 export async function deletePollTournament(
   tournament: PollTournament,
-  linkedPolls: Poll[]
+  linkedPolls: Poll[],
+  isAdmin = false
 ): Promise<void> {
   const path = `poll_tournaments/${tournament.id}`;
   try {
     for (const p of linkedPolls) {
       if (p.tournamentId === tournament.id) {
-        await deletePoll(p);
+        await deletePoll(p, isAdmin);
       }
     }
     await deleteDoc(doc(db, 'poll_tournaments', tournament.id));

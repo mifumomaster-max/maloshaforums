@@ -209,7 +209,7 @@ export function normalizeBoardCategory(cat: string): PrimaryBoard {
   return 'Kijiweni';
 }
 
-export type TopicStatus = 'open' | 'locked' | 'archived';
+export type TopicStatus = 'open' | 'locked' | 'archived' | 'private';
 
 export type VerificationBadgeType =
   | 'none'
@@ -534,7 +534,7 @@ export function computeAuthorMetrics(
   let totalCommentsReceived = 0;
 
   for (const t of topics) {
-    if (t.authorId === authorUid && t.status !== 'archived') {
+    if (t.authorId === authorUid && t.status !== 'archived' && t.status !== 'private') {
       postsCount += 1;
       totalLikesReceived += Math.max(0, Number(t.upvotesCount || 0));
       totalCommentsReceived += Math.max(0, Number(t.repliesCount || 0));
@@ -661,6 +661,7 @@ export interface Topic {
   deadline?: string;
   applyInfo?: string;
   coverImage?: string;
+  images?: string[];
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
   lastActivityAt: Timestamp | null;
@@ -965,6 +966,7 @@ export interface VideoComment {
 
 export interface SiteNavSettings {
   hideVideoTabForUsers: boolean;
+  hideMpollTabForUsers?: boolean;
   updatedBy: string;
   updatedAt: Timestamp | null;
 }

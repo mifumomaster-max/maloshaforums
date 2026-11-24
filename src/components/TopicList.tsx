@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckCircle2,
   ChevronRight,
+  EyeOff,
   Heart,
   Lock,
   MessageCircle,
@@ -63,6 +64,8 @@ interface TopicListProps {
       body: string;
       tags: string[];
       coverImage?: string;
+      images?: string[];
+      status?: 'open' | 'private';
     },
     options?: { silent?: boolean }
   ) => Promise<void>;
@@ -87,6 +90,7 @@ interface TopicListProps {
   sharedKijiweniPayload?: SharedMediaPayload | null;
   onClearSharedKijiweniPayload?: (id: number) => void;
   onEditTopic: (topic: Topic) => void;
+  onTogglePrivate?: (topic: Topic) => void;
   onDeleteTopic: (topic: Topic) => void;
   onOpenReport: (targetType: 'topic' | 'reply', targetId: string, topicId: string) => void;
   onAuthorClick?: (author: { uid: string; displayName: string; photoURL?: string }) => void;
@@ -103,6 +107,7 @@ interface TopicListProps {
   seeding: boolean;
   onVisibleTopicIdsChange?: (ids: string[]) => void;
   unreadCounts?: NavUnreadCounts;
+  hideMpollTab?: boolean;
 }
 
 function getBoardIconSection(board: PrimaryBoard): NavIconSection {
@@ -145,6 +150,7 @@ export const TopicList: React.FC<TopicListProps> = ({
   sharedKijiweniPayload = null,
   onClearSharedKijiweniPayload,
   onEditTopic,
+  onTogglePrivate,
   onDeleteTopic,
   onOpenReport,
   onAuthorClick,
@@ -155,6 +161,7 @@ export const TopicList: React.FC<TopicListProps> = ({
   seeding,
   onVisibleTopicIdsChange,
   unreadCounts,
+  hideMpollTab = false,
 }) => {
   const getBoardUnread = (board: PrimaryBoard): number => {
     if (!unreadCounts) return 0;
@@ -167,6 +174,7 @@ export const TopicList: React.FC<TopicListProps> = ({
   const inlineComposerAnchorRef = useRef<HTMLDivElement>(null);
   const fursaComposerAnchorRef = useRef<HTMLDivElement>(null);
   const [selectedJobType, setSelectedJobType] = useState<string>('all');
+  const [onlyPrivate, setOnlyPrivate] = useState(false);
   const [inlineComposerOpen, setInlineComposerOpen] = useState(false);
   const [fursaInlineOpen, setFursaInlineOpen] = useState(false);
   const [makalaInlineOpen, setMakalaInlineOpen] = useState(false);
@@ -269,12 +277,26 @@ export const TopicList: React.FC<TopicListProps> = ({
     [topics]
   );
 
+  const myPrivatePostsCount = useMemo(() => {
+    if (!userUid) return 0;
+    return topics.filter((t) => t.authorId === userUid && t.status === 'private').length;
+  }, [topics, userUid]);
+
+  useEffect(() => {
+    if (myPrivatePostsCount === 0 && onlyPrivate) {
+      setOnlyPrivate(false);
+    }
+  }, [myPrivatePostsCount, onlyPrivate]);
+
   const filteredTopics = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
 
     const list = topics.filter((topic) => {
       const normalizedCat = normalizeBoardCategory(topic.category);
       if (onlyMine && userUid && topic.authorId !== userUid) {
+        return false;
+      }
+      if (onlyPrivate && (topic.status !== 'private' || !userUid || topic.authorId !== userUid)) {
         return false;
       }
       if (effectiveCategory !== 'all' && normalizedCat !== effectiveCategory) {
@@ -336,12 +358,13 @@ export const TopicList: React.FC<TopicListProps> = ({
     sortMode,
     searchQuery,
     onlyMine,
+    onlyPrivate,
     userUid,
   ]);
 
   useEffect(() => {
     setVisibleCount(8);
-  }, [activeTab, effectiveCategory, selectedJobType, sortMode, searchQuery, onlyMine]);
+  }, [activeTab, effectiveCategory, selectedJobType, sortMode, searchQuery, onlyMine, onlyPrivate]);
 
   const paginatedTopics = useMemo(
     () => filteredTopics.slice(0, visibleCount),
@@ -366,10 +389,15 @@ export const TopicList: React.FC<TopicListProps> = ({
 
   const pageSubheading = activeBoardMeta
     ? getBoardDescription(activeBoardMeta.id)
-    : tr(
-        'Karibu Malosha Forums — Kijiweni, Fursa za Vijana, Makala za Uchambuzi, na Mpoll.',
-        'Welcome to Malosha Forums — Kijiweni, Youth Opportunities, Articles & Analysis, and Mpoll.'
-      );
+    : hideMpollTab
+      ? tr(
+          'Karibu Malosha Forums — Kijiweni, Fursa za Vijana, na Makala za Uchambuzi.',
+          'Welcome to Malosha Forums — Kijiweni, Youth Opportunities, and Articles & Analysis.'
+        )
+      : tr(
+          'Karibu Malosha Forums — Kijiweni, Fursa za Vijana, Makala za Uchambuzi, na Mpoll.',
+          'Welcome to Malosha Forums — Kijiweni, Youth Opportunities, Articles & Analysis, and Mpoll.'
+        );
 
   const handleBoardSelect = (board: PrimaryBoard | 'all') => {
     if (board === 'all') {
@@ -662,27 +690,59 @@ export const TopicList: React.FC<TopicListProps> = ({
                 </button>
               );
             })}
-            <button
-              type="button"
-              onClick={() => {
-                onSelectCategory('all');
-                onSelectTab('votes');
-              }}
-              className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium whitespace-nowrap shrink-0 ${
-                activeTab === 'votes'
-                  ? 'border-[#163A5F] bg-[#163A5F] text-white'
-                  : 'border-slate-300 bg-white text-slate-700'
-              }`}
-            >
-              <NavSectionIcon section="votes" className="h-4 w-4 shrink-0" />
-              <span>Mpoll</span>
-              {(unreadCounts?.votes || 0) > 0 && activeTab !== 'votes' && (
-                <span className="flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-[#E11D48] px-1 text-[10px] font-bold leading-none text-white tabular-nums">
-                  {(unreadCounts?.votes || 0) > 99 ? '99+' : unreadCounts?.votes}
-                </span>
-              )}
-            </button>
+            {!hideMpollTab && (
+              <button
+                type="button"
+                onClick={() => {
+                  onSelectCategory('all');
+                  onSelectTab('votes');
+                }}
+                className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium whitespace-nowrap shrink-0 ${
+                  activeTab === 'votes'
+                    ? 'border-[#163A5F] bg-[#163A5F] text-white'
+                    : 'border-slate-300 bg-white text-slate-700'
+                }`}
+              >
+                <NavSectionIcon section="votes" className="h-4 w-4 shrink-0" />
+                <span>Mpoll</span>
+                {(unreadCounts?.votes || 0) > 0 && activeTab !== 'votes' && (
+                  <span className="flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-[#E11D48] px-1 text-[10px] font-bold leading-none text-white tabular-nums">
+                    {(unreadCounts?.votes || 0) > 99 ? '99+' : unreadCounts?.votes}
+                  </span>
+                )}
+              </button>
+            )}
           </div>
+
+          {userUid && myPrivatePostsCount > 0 && (
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs">
+              <div className="flex items-center gap-2 text-slate-700">
+                <EyeOff className="h-3.5 w-3.5 text-slate-600" aria-hidden="true" />
+                <span>
+                  {tr(
+                    `Una machapisho ${myPrivatePostsCount} yaliyofungwa kwa akaunti yako pekee.`,
+                    `You have ${myPrivatePostsCount} private post${myPrivatePostsCount === 1 ? '' : 's'} visible only in your account.`
+                  )}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOnlyPrivate((prev) => !prev)}
+                className={`inline-flex min-h-[32px] items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors ${
+                  onlyPrivate
+                    ? 'border-[#0E2640] bg-[#0E2640] text-white'
+                    : 'border-slate-300 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <EyeOff className="h-3 w-3" aria-hidden="true" />
+                <span>
+                  {onlyPrivate
+                    ? tr('Onyesha Zote', 'Show All')
+                    : tr(`Zangu za Faragha (${myPrivatePostsCount})`, `Private (${myPrivatePostsCount})`)}
+                </span>
+              </button>
+            </div>
+          )}
 
           {/* Fursa Job Type Filter Bar */}
           {effectiveCategory === 'Fursa' && (
@@ -895,6 +955,7 @@ export const TopicList: React.FC<TopicListProps> = ({
                   onShareTopic={onShareTopic}
                   onOpenFullTopic={onOpenTopic}
                   onEditTopic={onEditTopic}
+                  onTogglePrivate={onTogglePrivate}
                   onDeleteTopic={onDeleteTopic}
                   onOpenReport={onOpenReport}
                   onAuthorClick={onAuthorClick}
@@ -1001,7 +1062,10 @@ export const TopicList: React.FC<TopicListProps> = ({
                         </button>
 
                         <div className="min-w-0 flex-1">
-                          {(topic.isPinned || topic.status === 'locked' || topic.acceptedReplyId) && (
+                          {(topic.isPinned ||
+                            topic.status === 'locked' ||
+                            topic.status === 'private' ||
+                            topic.acceptedReplyId) && (
                             <div className="mb-1 flex flex-wrap items-center gap-3 text-[11px] font-semibold">
                               {topic.isPinned && (
                                 <span className="inline-flex items-center gap-1 text-[#B45309]">
@@ -1019,6 +1083,12 @@ export const TopicList: React.FC<TopicListProps> = ({
                                 <span className="inline-flex items-center gap-1 text-slate-600">
                                   <Lock className="h-3 w-3" aria-hidden="true" />
                                   <span>{tr('Imefungwa', 'Locked')}</span>
+                                </span>
+                              )}
+                              {topic.status === 'private' && (
+                                <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-slate-700">
+                                  <EyeOff className="h-3 w-3" aria-hidden="true" />
+                                  <span>{tr('Akaunti Yako Tu', 'Only Me')}</span>
                                 </span>
                               )}
                             </div>
@@ -1232,28 +1302,30 @@ export const TopicList: React.FC<TopicListProps> = ({
                   </button>
                 );
               })}
-              <button
-                type="button"
-                onClick={() => {
-                  onSelectCategory('all');
-                  onSelectTab('votes');
-                }}
-                className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-xs transition-colors ${
-                  activeTab === 'votes'
-                    ? 'bg-sky-50 font-semibold text-[#163A5F]'
-                    : 'text-slate-700 hover:bg-slate-50'
-                }`}
-              >
-                <span className="flex items-center gap-2">
-                  <NavSectionIcon section="votes" className="h-4 w-4 shrink-0" />
-                  <span>Mpoll</span>
-                </span>
-                {(unreadCounts?.votes || 0) > 0 && (
-                  <span className="flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-[#E11D48] px-1 text-[10px] font-bold leading-none text-white tabular-nums">
-                    {(unreadCounts?.votes || 0) > 99 ? '99+' : unreadCounts?.votes}
+              {!hideMpollTab && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSelectCategory('all');
+                    onSelectTab('votes');
+                  }}
+                  className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-xs transition-colors ${
+                    activeTab === 'votes'
+                      ? 'bg-sky-50 font-semibold text-[#163A5F]'
+                      : 'text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    <NavSectionIcon section="votes" className="h-4 w-4 shrink-0" />
+                    <span>Mpoll</span>
                   </span>
-                )}
-              </button>
+                  {(unreadCounts?.votes || 0) > 0 && (
+                    <span className="flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-[#E11D48] px-1 text-[10px] font-bold leading-none text-white tabular-nums">
+                      {(unreadCounts?.votes || 0) > 99 ? '99+' : unreadCounts?.votes}
+                    </span>
+                  )}
+                </button>
+              )}
             </div>
 
             {userUid && (

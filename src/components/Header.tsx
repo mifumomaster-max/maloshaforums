@@ -3,9 +3,12 @@ import {
   Bell,
   BellOff,
   BellRing,
+  Calendar,
   CheckCheck,
   ChevronRight,
   CornerDownRight,
+  Eye,
+  EyeOff,
   Globe,
   Lock,
   LogOut,
@@ -63,11 +66,15 @@ interface HeaderProps {
   onMarkNotificationRead?: (notificationId: string) => void | Promise<void>;
   onMarkAllNotificationsRead?: (notificationIds: string[]) => void | Promise<void>;
   hideVideoTab?: boolean;
+  hideMpollTab?: boolean;
   recentSignups?: UserProfile[];
   unreadSignupCount?: number;
   signupLastSeenMs?: number;
   onMarkSignupsSeen?: () => void;
   onOpenAdminMembers?: () => void;
+  totalUsersCount?: number | null;
+  loadingUsersCount?: boolean;
+  onRefreshTotalUsersCount?: () => void;
 }
 
 const NOTIF_READ_IDS_KEY = 'malosha_notif_read_ids_v1';
@@ -118,15 +125,20 @@ export const Header: React.FC<HeaderProps> = ({
   onMarkNotificationRead,
   onMarkAllNotificationsRead,
   hideVideoTab = false,
+  hideMpollTab = false,
   recentSignups = [],
   unreadSignupCount = 0,
   signupLastSeenMs = 0,
   onMarkSignupsSeen,
   onOpenAdminMembers,
+  totalUsersCount = null,
+  loadingUsersCount = false,
+  onRefreshTotalUsersCount,
 }) => {
   const { lang, setLang, tr, formatTime, getMakalaSectionLabel, getBoardLabel } = useLanguage();
   const [menuOpen, setMenuOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [showUsersCount, setShowUsersCount] = useState(false);
   const [notifFilter, setNotifFilter] = useState<'replies' | 'news' | 'signups' | 'all'>('replies');
   const [notifPermission, setNotifPermission] = useState<PhoneNotificationPermission>(() =>
     getNotificationPermission()
@@ -177,6 +189,21 @@ export const Header: React.FC<HeaderProps> = ({
     const timer = window.setInterval(() => setNowMs(Date.now()), 60_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  const todayDateLabel = useMemo(() => {
+    const d = new Date(nowMs);
+    if (lang === 'sw') {
+      const daysSw = ['Jumapili', 'Jumatatu', 'Jumanne', 'Jumatano', 'Alhamisi', 'Ijumaa', 'Jumamosi'];
+      const monthsSw = ['Jan', 'Feb', 'Mac', 'Apr', 'Mei', 'Jun', 'Jul', 'Ago', 'Sep', 'Okt', 'Nov', 'Des'];
+      return `${daysSw[d.getDay()]}, ${d.getDate()} ${monthsSw[d.getMonth()]} ${d.getFullYear()}`;
+    }
+    return new Intl.DateTimeFormat('en-US', {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    }).format(d);
+  }, [nowMs, lang]);
 
   const [readTimestamps, setReadTimestamps] = useState<Record<string, number>>(() => {
     if (typeof window === 'undefined') return {};
@@ -276,7 +303,12 @@ export const Header: React.FC<HeaderProps> = ({
 
   const newsNotifications = useMemo(() => {
     return topics
-      .filter((t) => normalizeBoardCategory(t.category) === 'Makala' && !isExpiredReadTopic(t))
+      .filter(
+        (t) =>
+          t.status !== 'private' &&
+          normalizeBoardCategory(t.category) === 'Makala' &&
+          !isExpiredReadTopic(t)
+      )
       .sort((a, b) => {
         const am = a.createdAt ? a.createdAt.toMillis() : Date.now();
         const bm = b.createdAt ? b.createdAt.toMillis() : Date.now();
@@ -288,7 +320,7 @@ export const Header: React.FC<HeaderProps> = ({
 
   const allNotifications = useMemo(() => {
     return topics
-      .filter((t) => !isExpiredReadTopic(t))
+      .filter((t) => t.status !== 'private' && !isExpiredReadTopic(t))
       .sort((a, b) => {
         const am = a.createdAt ? a.createdAt.toMillis() : Date.now();
         const bm = b.createdAt ? b.createdAt.toMillis() : Date.now();
@@ -478,9 +510,11 @@ export const Header: React.FC<HeaderProps> = ({
     },
   ];
 
-  const navItems = hideVideoTab
-    ? allNavItems.filter((item) => item.id !== 'video')
-    : allNavItems;
+  const navItems = allNavItems.filter((item) => {
+    if (hideVideoTab && item.id === 'video') return false;
+    if (hideMpollTab && item.id === 'votes') return false;
+    return true;
+  });
 
   return (
     <header
@@ -1355,6 +1389,58 @@ export const Header: React.FC<HeaderProps> = ({
               </span>
             </button>
           )}
+        </div>
+      </div>
+
+      {/* Bottom-Right Header Strip: Today's Date + Small Eye Icon to Reveal Total Users Count Only */}
+      <div className="border-t border-white/10 bg-[#081A2E]/90 px-3 py-1 sm:px-6">
+        <div className="mx-auto flex max-w-6xl items-center justify-end gap-2 text-[11px] font-medium text-slate-300">
+          <span className="inline-flex items-center gap-1.5 tracking-tight text-slate-200">
+            <Calendar className="h-3 w-3 shrink-0 text-amber-300" aria-hidden="true" />
+            <span>{todayDateLabel}</span>
+          </span>
+
+          <span className="text-white/25" aria-hidden="true">|</span>
+
+          <button
+            type="button"
+            onClick={() => {
+              const next = !showUsersCount;
+              setShowUsersCount(next);
+              if (next) {
+                onRefreshTotalUsersCount?.();
+              }
+            }}
+            aria-expanded={showUsersCount}
+            aria-label={
+              showUsersCount
+                ? tr('Ficha idadi ya watumiaji', 'Hide total users count')
+                : tr('Onyesha idadi ya watumiaji wa jukwaa', 'Show total platform users count')
+            }
+            title={
+              showUsersCount
+                ? tr('Gusa kuficha idadi', 'Tap to hide count')
+                : tr('Gusa kuona jumla ya watumiaji', 'Tap to view total users count')
+            }
+            className={`inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300 ${
+              showUsersCount
+                ? 'bg-white/12 text-amber-300 font-bold'
+                : 'text-slate-300 hover:bg-white/10 hover:text-white'
+            }`}
+          >
+            {showUsersCount ? (
+              <EyeOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            ) : (
+              <Eye className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            )}
+            {showUsersCount && (
+              <span className="tabular-nums text-[11px] font-bold text-white">
+                {loadingUsersCount && totalUsersCount === null
+                  ? '...'
+                  : `${tr('Watumiaji', 'Users')}: ${(totalUsersCount ?? 0).toLocaleString()}`}
+              </span>
+            )}
+          </button>
         </div>
       </div>
 

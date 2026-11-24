@@ -51,6 +51,7 @@ interface TopicComposerModalProps {
     deadline?: string;
     applyInfo?: string;
     coverImage?: string;
+    images?: string[];
   }) => Promise<void>;
 }
 
@@ -264,7 +265,11 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
 
     const cleanTitle = title.trim();
     const cleanBody = body.trim();
-    const isImageOnlyKijiweni = isKijiweni && kijiweniImage.trim().length >= 10;
+    const hasExistingAlbum =
+      Boolean(editingTopic?.images && editingTopic.images.length > 0) &&
+      kijiweniImage.trim().length >= 10;
+    const isImageOnlyKijiweni =
+      isKijiweni && (kijiweniImage.trim().length >= 10 || hasExistingAlbum);
 
     if (!isImageOnlyKijiweni) {
       if (cleanTitle.length < 5 || cleanTitle.length > 140) {
@@ -323,6 +328,14 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
           : {}),
         ...(isMakala ? { coverImage } : {}),
         ...(isKijiweni || isFursa ? { coverImage: kijiweniImage } : {}),
+        ...(isKijiweni && hasExistingAlbum && editingTopic?.images
+          ? {
+              images:
+                kijiweniImage && editingTopic.images[0] !== kijiweniImage
+                  ? [kijiweniImage, ...editingTopic.images.slice(1)]
+                  : editingTopic.images,
+            }
+          : {}),
       });
       onClose();
     } catch (err) {

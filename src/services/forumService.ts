@@ -4,6 +4,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getCountFromServer,
   getDoc,
   getDocs,
   increment,
@@ -149,6 +150,16 @@ async function runSyncUserProfile(
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       }).catch((error) => handleFirestoreError(error, OperationType.WRITE, userPath))
+    );
+    writeTasks.push(
+      setDoc(
+        doc(db, 'site_settings', 'community_stats'),
+        {
+          totalUsersCount: increment(1),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      ).catch(() => {})
     );
   } else {
     const existingData = snap.data();
@@ -518,6 +529,8 @@ export interface CreateTopicInput {
   deadline?: string;
   applyInfo?: string;
   coverImage?: string;
+  images?: string[];
+  status?: 'open' | 'private';
 }
 
 export async function createTopic(
@@ -527,8 +540,16 @@ export async function createTopic(
 ): Promise<string> {
   const title = sanitizeTextInput(input.title, 140);
   const body = sanitizeTextInput(input.body, 8000);
-  const coverImage = input.coverImage ? sanitizeTextInput(input.coverImage, 500) : '';
-  const isImageOnlyKijiweni = input.category === 'Kijiweni' && coverImage.length >= 10;
+  const cleanImages = Array.isArray(input.images)
+    ? input.images
+        .map((url) => sanitizeTextInput(url, 500))
+        .filter((url) => url.length >= 10 && url.startsWith('https://'))
+        .slice(0, 300)
+    : [];
+  const rawCover = input.coverImage ? sanitizeTextInput(input.coverImage, 500) : '';
+  const coverImage = rawCover || cleanImages[0] || '';
+  const isImageOnlyKijiweni =
+    input.category === 'Kijiweni' && (coverImage.length >= 10 || cleanImages.length > 0);
   const tags = input.tags.map((t) => sanitizeTextInput(t, 30)).filter(Boolean).slice(0, 5);
 
   if (!isImageOnlyKijiweni && title.length < 5) {
@@ -550,7 +571,7 @@ export async function createTopic(
     authorId: user.uid,
     authorName: sanitizeTextInput(displayName || user.displayName || 'Mwanachama', 80),
     authorPhoto: sanitizeTextInput(user.photoURL || '', 500),
-    status: 'open',
+    status: input.status === 'private' ? 'private' : 'open',
     isPinned: false,
     repliesCount: 0,
     upvotesCount: 0,
@@ -565,7 +586,8 @@ export async function createTopic(
   if (input.jobType) payload.jobType = sanitizeTextInput(input.jobType, 40);
   if (input.deadline) payload.deadline = sanitizeTextInput(input.deadline, 60);
   if (input.applyInfo) payload.applyInfo = sanitizeTextInput(input.applyInfo, 300);
-  if (input.coverImage) payload.coverImage = sanitizeTextInput(input.coverImage, 500);
+  if (coverImage) payload.coverImage = coverImage;
+  if (cleanImages.length > 0) payload.images = cleanImages;
 
   try {
     const batch = writeBatch(db);
@@ -589,8 +611,17 @@ export async function editTopic(
 ): Promise<void> {
   const title = sanitizeTextInput(input.title, 140);
   const body = sanitizeTextInput(input.body, 8000);
-  const coverImage = input.coverImage ? sanitizeTextInput(input.coverImage, 500) : '';
-  const isImageOnlyKijiweni = input.category === 'Kijiweni' && coverImage.length >= 10;
+  const cleanImages = Array.isArray(input.images)
+    ? input.images
+        .map((url) => sanitizeTextInput(url, 500))
+        .filter((url) => url.length >= 10 && url.startsWith('https://'))
+        .slice(0, 300)
+    : undefined;
+  const rawCover = input.coverImage !== undefined ? sanitizeTextInput(input.coverImage, 500) : undefined;
+  const coverImage = rawCover ?? (cleanImages && cleanImages.length > 0 ? cleanImages[0] : '');
+  const isImageOnlyKijiweni =
+    input.category === 'Kijiweni' &&
+    (coverImage.length >= 10 || (Array.isArray(cleanImages) && cleanImages.length > 0));
   const tags = input.tags.map((t) => sanitizeTextInput(t, 30)).filter(Boolean).slice(0, 5);
 
   if (!isImageOnlyKijiweni && title.length < 5) {
@@ -613,7 +644,8 @@ export async function editTopic(
   if (input.jobType !== undefined) updatePayload.jobType = sanitizeTextInput(input.jobType, 40);
   if (input.deadline !== undefined) updatePayload.deadline = sanitizeTextInput(input.deadline, 60);
   if (input.applyInfo !== undefined) updatePayload.applyInfo = sanitizeTextInput(input.applyInfo, 300);
-  if (input.coverImage !== undefined) updatePayload.coverImage = sanitizeTextInput(input.coverImage, 500);
+  if (rawCover !== undefined) updatePayload.coverImage = rawCover;
+  if (cleanImages !== undefined) updatePayload.images = cleanImages;
 
   const path = `topics/${topicId}`;
   try {
@@ -2445,9 +2477,12 @@ export async function writeUserPresence(
   }
 ): Promise<void> {
   if (!uid || !/^[a-zA-Z0-9_-]{1,128}$/.test(uid)) return;
+  const activeUser = auth.currentUser;
+  if (!activeUser || activeUser.uid !== uid || activeUser.isAnonymous) return;
+
   const path = `user_presence/${uid}`;
   const cleanName = sanitizeTextInput(input.displayName || 'Mwanachama', 80) || 'Mwanachama';
-  const rawPhoto = input.photoURL ?? auth.currentUser?.photoURL ?? '';
+  const rawPhoto = input.photoURL ?? activeUser.photoURL ?? '';
   const cleanPhoto = sanitizeTextInput(rawPhoto, 500);
   const cleanReply = input.isTypingInMchart
     ? sanitizeTextInput(input.replyingToName || '', 80)
@@ -2461,6 +2496,7 @@ export async function writeUserPresence(
     input.activeArea === 'fursa' ||
     input.activeArea === 'makala' ||
     input.activeArea === 'mchart' ||
+    input.activeArea === 'votes' ||
     input.activeArea === 'profile'
       ? input.activeArea
       : 'forum';
@@ -2480,9 +2516,13 @@ export async function writeUserPresence(
       updatedAt: serverTimestamp(),
     });
   } catch (error) {
-    // Non-fatal during offline/tab-unload transitions unless permission denied while active
+    // Non-fatal during sign-out, offline, or tab-unload transitions
+    const current = auth.currentUser;
+    if (!current || current.uid !== uid || current.isAnonymous || !input.isOnline) {
+      return;
+    }
     if (error instanceof Error && error.message.toLowerCase().includes('permission')) {
-      handleFirestoreError(error, OperationType.WRITE, path);
+      console.warn(`Presence update skipped for ${path}:`, error.message);
     }
   }
 }
@@ -3459,41 +3499,102 @@ export async function deleteVideoComment(videoId: string, commentId: string): Pr
 }
 
 export function subscribeSiteNavSettings(
-  onUpdate: (settings: { hideVideoTabForUsers: boolean }) => void
+  onUpdate: (settings: { hideVideoTabForUsers: boolean; hideMpollTabForUsers: boolean }) => void
 ): () => void {
   const settingsRef = doc(db, 'site_settings', 'navigation');
   return onSnapshot(
     settingsRef,
     (snap) => {
       if (!snap.exists()) {
-        onUpdate({ hideVideoTabForUsers: false });
+        onUpdate({ hideVideoTabForUsers: false, hideMpollTabForUsers: false });
         return;
       }
       const data = snap.data();
       onUpdate({
         hideVideoTabForUsers: Boolean(data?.hideVideoTabForUsers),
+        hideMpollTabForUsers: Boolean(data?.hideMpollTabForUsers),
       });
     },
     () => {
-      onUpdate({ hideVideoTabForUsers: false });
+      onUpdate({ hideVideoTabForUsers: false, hideMpollTabForUsers: false });
     }
   );
 }
 
-export async function updateHideVideoTabForUsers(
+export async function updateSiteNavSettings(
   ownerUid: string,
-  hideVideoTabForUsers: boolean
+  settings: { hideVideoTabForUsers: boolean; hideMpollTabForUsers: boolean }
 ): Promise<void> {
   const path = 'site_settings/navigation';
   try {
     await setDoc(doc(db, 'site_settings', 'navigation'), {
-      hideVideoTabForUsers: Boolean(hideVideoTabForUsers),
+      hideVideoTabForUsers: Boolean(settings.hideVideoTabForUsers),
+      hideMpollTabForUsers: Boolean(settings.hideMpollTabForUsers),
       updatedBy: ownerUid,
       updatedAt: serverTimestamp(),
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
+}
+
+export async function updateHideVideoTabForUsers(
+  ownerUid: string,
+  hideVideoTabForUsers: boolean,
+  hideMpollTabForUsers = false
+): Promise<void> {
+  await updateSiteNavSettings(ownerUid, {
+    hideVideoTabForUsers,
+    hideMpollTabForUsers,
+  });
+}
+
+export async function fetchPlatformUsersCount(isAdmin: boolean): Promise<number> {
+  if (isAdmin && auth.currentUser) {
+    try {
+      const agg = await getCountFromServer(collection(db, 'users'));
+      const total = Math.max(0, Number(agg.data().count || 0));
+      setDoc(doc(db, 'site_settings', 'community_stats'), {
+        totalUsersCount: total,
+        updatedBy: auth.currentUser.uid,
+        updatedAt: serverTimestamp(),
+      }).catch(() => {});
+      return total;
+    } catch {
+      // Fall through to aggregate/stats fallback
+    }
+  }
+
+  let statsCount = 0;
+  let dirCount = 0;
+
+  try {
+    const statsSnap = await getDoc(doc(db, 'site_settings', 'community_stats'));
+    if (statsSnap.exists()) {
+      const raw = Number(statsSnap.data()?.totalUsersCount || 0);
+      if (Number.isFinite(raw) && raw > 0) {
+        statsCount = Math.round(raw);
+      }
+    }
+  } catch {
+    // Non-fatal stats read fallback
+  }
+
+  if (auth.currentUser) {
+    try {
+      const dirAgg = await getCountFromServer(
+        query(collection(db, 'member_directory'), where('isActive', '==', true))
+      );
+      const rawDir = Number(dirAgg.data().count || 0);
+      if (Number.isFinite(rawDir) && rawDir > 0) {
+        dirCount = Math.round(rawDir);
+      }
+    } catch {
+      // Non-fatal directory count fallback
+    }
+  }
+
+  return Math.max(statsCount, dirCount);
 }
 
 export async function fetchOwnerCustomIdCard(
@@ -4229,17 +4330,26 @@ export async function runKijiweniRetentionCleanup(
     shouldContinue?: () => boolean;
   }
 ): Promise<{ deletedCount: number; totalMatched: number }> {
-  const cutoffTs = Timestamp.fromMillis(Date.now() - CONTENT_RETENTION_PERIOD_MS[period]);
+  const cutoffMs = Date.now() - CONTENT_RETENTION_PERIOD_MS[period];
   const q = query(
     collection(db, 'topics'),
-    where('createdAt', '<=', cutoffTs),
-    orderBy('createdAt', 'asc'),
-    limit(500)
+    where('status', 'in', ['open', 'locked', 'archived']),
+    limit(1000)
   );
   const snap = await getDocs(q);
-  const matched = snap.docs.filter(
-    (d) => normalizeBoardCategory(String(d.data().category || '')) === 'Kijiweni'
-  );
+  const matched = snap.docs
+    .filter((d) => {
+      const data = d.data();
+      if (normalizeBoardCategory(String(data.category || '')) !== 'Kijiweni') return false;
+      const createdTs = data.createdAt as Timestamp | null | undefined;
+      const ms = createdTs ? createdTs.toMillis() : Date.now();
+      return ms <= cutoffMs;
+    })
+    .sort((a, b) => {
+      const am = (a.data().createdAt as Timestamp | null | undefined)?.toMillis() ?? 0;
+      const bm = (b.data().createdAt as Timestamp | null | undefined)?.toMillis() ?? 0;
+      return am - bm;
+    });
 
   let deletedCount = 0;
   const totalMatched = matched.length;

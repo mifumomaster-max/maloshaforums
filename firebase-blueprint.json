@@ -83,7 +83,7 @@
         "authorId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "authorName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "authorPhoto": { "type": "string", "maxLength": 500 },
-        "status": { "type": "string", "enum": ["open", "locked", "archived"] },
+        "status": { "type": "string", "enum": ["open", "locked", "archived", "private"] },
         "isPinned": { "type": "boolean" },
         "repliesCount": { "type": "integer" },
         "upvotesCount": { "type": "integer" },
@@ -94,6 +94,7 @@
         "deadline": { "type": "string", "maxLength": 60 },
         "applyInfo": { "type": "string", "maxLength": 300 },
         "coverImage": { "type": "string", "maxLength": 500 },
+        "images": { "type": "array", "description": "Up to 300 ordered Cloudinary HTTPS image URLs for multi-photo Kijiweni posts." },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" },
         "lastActivityAt": { "type": "string", "format": "date-time" }
@@ -497,10 +498,11 @@
     },
     "SiteNavSettings": {
       "title": "SiteNavSettings",
-      "description": "Owner-controlled navigation visibility settings (e.g. hiding Video tab for non-admin users).",
+      "description": "Owner-controlled navigation visibility settings (e.g. hiding Video or Mpoll tab for non-admin users).",
       "type": "object",
       "properties": {
         "hideVideoTabForUsers": { "type": "boolean" },
+        "hideMpollTabForUsers": { "type": "boolean" },
         "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -658,34 +660,25 @@
     },
     "Poll": {
       "title": "Poll",
-      "description": "Owner-managed community poll, social vote, or candidate election with configurable styles, security settings, and visibility.",
+      "description": "Community poll, social vote, or candidate election with configurable styles, security settings, and visibility.",
       "type": "object",
       "properties": {
         "pollId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "createdBy": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "createdByName": { "type": "string", "minLength": 1, "maxLength": 80 },
-        "createdByPhoto": { "type": "string", "maxLength": 500 },
-        "question": { "type": "string", "minLength": 4, "maxLength": 300 },
-        "description": { "type": "string", "maxLength": 1500 },
-        "imageUrl": { "type": "string", "maxLength": 500 },
-        "category": {
-          "type": "string",
-          "enum": ["Siasa", "Jamii", "Biashara", "Teknolojia", "Elimu", "Michezo", "Uongozi", "Mengineyo"]
-        },
-        "pollStyle": {
-          "type": "string",
-          "enum": ["standard", "social_x", "whatsapp", "candidate_election", "school_election", "local_govt", "open_opinion"]
-        },
-        "themeColor": {
-          "type": "string",
-          "enum": ["cobalt", "emerald", "violet", "amber", "crimson", "teal", "indigo", "rose", "cyan", "slate"]
-        },
-        "institutionName": { "type": "string", "maxLength": 120 },
+        "createdByName": { "type": "string", "maxLength": 120 },
+        "createdByPhoto": { "type": "string", "maxLength": 2000 },
+        "question": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "description": { "type": "string", "maxLength": 5000 },
+        "imageUrl": { "type": "string", "maxLength": 2000 },
+        "category": { "type": "string", "maxLength": 60 },
+        "pollStyle": { "type": "string", "maxLength": 60 },
+        "themeColor": { "type": "string", "maxLength": 40 },
+        "institutionName": { "type": "string", "maxLength": 200 },
         "questionType": {
           "type": "string",
           "enum": ["single", "multiple", "yes_no", "rating", "open_opinion"]
         },
-        "options": { "type": "array", "description": "0 options for open_opinion discussion questions, or 2 to 12 poll option/candidate objects ({ id, label, color, imageUrl, subtitle, positionTitle, gender })." },
+        "options": { "type": "array", "description": "0 options for open_opinion discussion questions, or up to 50 poll option/candidate objects." },
         "optionIds": { "type": "array", "description": "Matching option ID strings for rule validation (empty for open_opinion)." },
         "maxChoices": { "type": "integer" },
         "status": { "type": "string", "enum": ["open", "closed", "draft"] },
@@ -705,30 +698,23 @@
         "commentsCount": { "type": "integer" },
         "tournamentId": { "type": "string", "maxLength": 128 },
         "tournamentRound": { "type": "integer" },
-        "tournamentGroupLabel": { "type": "string", "maxLength": 80 },
+        "tournamentGroupLabel": { "type": "string", "maxLength": 120 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": [
-        "pollId", "createdBy", "createdByName", "createdByPhoto",
-        "question", "description", "category", "questionType",
-        "options", "optionIds", "maxChoices", "status", "resultsVisibility",
-        "allowVoteChange", "anonymousMode", "showVoterCount", "allowShare",
-        "isPinned", "hasDeadline", "endsAt", "totalBallots",
-        "createdAt", "updatedAt"
-      ]
+      "required": ["question", "options", "createdBy"]
     },
     "PollTournament": {
       "title": "PollTournament",
-      "description": "Multi-stage deterministic knockout leader elimination process (e.g., 30-300 candidates narrowed step-by-step via votes with optional gender quotas).",
+      "description": "Multi-stage deterministic knockout leader elimination process (e.g., 2-500 candidates narrowed step-by-step via votes with optional gender quotas).",
       "type": "object",
       "properties": {
         "tournamentId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "title": { "type": "string", "minLength": 4, "maxLength": 200 },
-        "description": { "type": "string", "maxLength": 1500 },
-        "institutionName": { "type": "string", "maxLength": 120 },
-        "category": { "type": "string", "enum": ["Siasa", "Jamii", "Biashara", "Teknolojia", "Elimu", "Michezo", "Uongozi", "Mengineyo"] },
-        "positionTitle": { "type": "string", "maxLength": 80 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 400 },
+        "description": { "type": "string", "maxLength": 5000 },
+        "institutionName": { "type": "string", "maxLength": 200 },
+        "category": { "type": "string", "maxLength": 60 },
+        "positionTitle": { "type": "string", "maxLength": 120 },
         "targetWinnersCount": { "type": "integer" },
         "useGenderQuota": { "type": "boolean" },
         "requiredMaleCount": { "type": "integer" },
@@ -743,18 +729,12 @@
         "winnerIds": { "type": "array" },
         "winnerVotes": { "type": "object" },
         "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "createdByName": { "type": "string", "minLength": 1, "maxLength": 80 },
-        "createdByPhoto": { "type": "string", "maxLength": 500 },
+        "createdByName": { "type": "string", "maxLength": 120 },
+        "createdByPhoto": { "type": "string", "maxLength": 2000 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": [
-        "tournamentId", "title", "description", "institutionName", "category", "positionTitle",
-        "targetWinnersCount", "useGenderQuota", "requiredMaleCount", "requiredFemaleCount",
-        "groupSize", "roundDurationMinutes", "status", "currentRound", "totalPlannedRounds",
-        "candidates", "stages", "winnerIds", "createdBy", "createdByName", "createdByPhoto",
-        "createdAt", "updatedAt"
-      ]
+      "required": ["title", "candidates", "createdBy"]
     },
     "PollComment": {
       "title": "PollComment",
@@ -763,9 +743,9 @@
       "properties": {
         "pollId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "authorId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "authorName": { "type": "string", "minLength": 1, "maxLength": 80 },
-        "authorPhoto": { "type": "string", "maxLength": 500 },
-        "body": { "type": "string", "minLength": 2, "maxLength": 4000 },
+        "authorName": { "type": "string", "maxLength": 120 },
+        "authorPhoto": { "type": "string", "maxLength": 2000 },
+        "body": { "type": "string", "minLength": 1, "maxLength": 5000 },
         "parentCommentId": { "type": "string", "maxLength": 128 },
         "likesCount": { "type": "integer" },
         "isDeleted": { "type": "boolean" },
@@ -773,13 +753,12 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
-        "pollId", "authorId", "authorName", "authorPhoto", "body",
-        "parentCommentId", "likesCount", "isDeleted", "createdAt", "updatedAt"
+        "pollId", "authorId", "body"
       ]
     },
     "PollTally": {
       "title": "PollTally",
-      "description": "Per-option atomic vote tally counter guarded by ballot-diff verification.",
+      "description": "Per-option atomic vote tally counter.",
       "type": "object",
       "properties": {
         "pollId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -787,7 +766,7 @@
         "votesCount": { "type": "integer" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["pollId", "optionId", "votesCount", "updatedAt"]
+      "required": ["votesCount"]
     },
     "PollBallot": {
       "title": "PollBallot",
@@ -796,15 +775,14 @@
       "properties": {
         "pollId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "voterName": { "type": "string", "minLength": 1, "maxLength": 80 },
-        "voterPhoto": { "type": "string", "maxLength": 500 },
-        "selectedOptionIds": { "type": "array", "description": "1 to 12 selected option IDs chosen by the voter." },
+        "voterName": { "type": "string", "maxLength": 120 },
+        "voterPhoto": { "type": "string", "maxLength": 2000 },
+        "selectedOptionIds": { "type": "array", "description": "1 to 50 selected option IDs chosen by the voter." },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
-        "pollId", "userId", "voterName", "voterPhoto",
-        "selectedOptionIds", "createdAt", "updatedAt"
+        "pollId", "userId", "selectedOptionIds"
       ]
     }
   },
@@ -923,7 +901,7 @@
     },
     "/polls/{pollId}": {
       "schema": { "$ref": "#/entities/Poll" },
-      "description": "Owner-created community polls & voting cards readable publicly (open/closed) and writable only by owner (with atomic ballot count increment)."
+      "description": "Community polls & voting cards creatable by signed-in non-suspended members, readable publicly (open/closed), manageable by creator or admin (with atomic ballot count increment)."
     },
     "/polls/{pollId}/tallies/{optionId}": {
       "schema": { "$ref": "#/entities/PollTally" },

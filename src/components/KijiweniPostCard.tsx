@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Edit3,
   ExternalLink,
+  Eye,
+  EyeOff,
   Flag,
   Heart,
   Lock,
@@ -11,12 +13,12 @@ import {
   Trash2,
 } from 'lucide-react';
 import { AuthPromptReason, Topic } from '../types';
-import { optimizeCloudinaryUrl } from '../services/cloudinaryService';
 import { useLanguage } from '../context/LanguageContext';
 import { Avatar, OnlineStatusPill } from './Avatar';
 import { RichText } from './RichText';
 import { FacebookCommentsThread } from './FacebookCommentsThread';
 import { AuthorVerificationBadge } from './VerificationBadge';
+import { OrderedPhotoAlbum } from './OrderedPhotoAlbum';
 
 interface KijiweniPostCardProps {
   post: Topic;
@@ -30,6 +32,7 @@ interface KijiweniPostCardProps {
   onShareTopic: (topic: Topic) => void;
   onOpenFullTopic: (topicId: string) => void;
   onEditTopic: (topic: Topic) => void;
+  onTogglePrivate?: (topic: Topic) => void;
   onDeleteTopic: (topic: Topic) => void;
   onOpenReport: (targetType: 'topic' | 'reply', targetId: string, topicId: string) => void;
   onAuthorClick?: (author: { uid: string; displayName: string; photoURL?: string }) => void;
@@ -56,6 +59,7 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
   onShareTopic,
   onOpenFullTopic,
   onEditTopic,
+  onTogglePrivate,
   onDeleteTopic,
   onOpenReport,
   onAuthorClick,
@@ -67,7 +71,6 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [autoFocusComment, setAutoFocusComment] = useState(false);
   const [expandedText, setExpandedText] = useState(false);
-  const [imageFailed, setImageFailed] = useState(false);
 
   const isLongPost = post.body.length > 420;
   const displayedBody =
@@ -75,6 +78,14 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
 
   const isAuthor = userUid !== null && post.authorId === userUid;
   const canManage = isAuthor || isAdmin;
+  const isPrivate = post.status === 'private';
+
+  const albumImages = useMemo(() => {
+    if (Array.isArray(post.images) && post.images.length > 0) {
+      return post.images;
+    }
+    return post.coverImage ? [post.coverImage] : [];
+  }, [post.images, post.coverImage]);
 
   const handleToggleComments = (focusInput: boolean) => {
     if (commentsOpen && focusInput) {
@@ -88,8 +99,12 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
 
   return (
     <article
-      className={`overflow-hidden rounded-xl border border-slate-200 bg-white sm:rounded-lg ${
-        post.isPinned ? 'bg-amber-50/25' : ''
+      className={`overflow-hidden rounded-xl border bg-white sm:rounded-lg ${
+        isPrivate
+          ? 'border-amber-300 bg-amber-50/15'
+          : post.isPinned
+            ? 'border-slate-200 bg-amber-50/25'
+            : 'border-slate-200'
       }`}
     >
       {/* Post Header */}
@@ -133,6 +148,12 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
                 </button>
                 <AuthorVerificationBadge uid={post.authorId} size="sm" />
                 <OnlineStatusPill uid={post.authorId} />
+                {isPrivate && (
+                  <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10.5px] font-bold text-amber-900">
+                    <EyeOff className="h-3 w-3" aria-hidden="true" />
+                    <span>{tr('Akaunti Yako Tu', 'Private (Only You)')}</span>
+                  </span>
+                )}
                 {post.isPinned && (
                   <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#B45309]">
                     · <Pin className="h-3 w-3" aria-hidden="true" /> {tr('Maalum', 'Pinned')}
@@ -151,7 +172,40 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
           </div>
 
           <div className="flex items-center gap-1 shrink-0">
-            {canManage && post.status === 'open' && (!isSuspended || isAdmin) && (
+            {isAuthor && onTogglePrivate && post.status !== 'archived' && (!isSuspended || isAdmin) && (
+              <button
+                type="button"
+                onClick={() => onTogglePrivate(post)}
+                aria-label={
+                  isPrivate
+                    ? tr('Fungua chapisho kwa wote', 'Make post public')
+                    : tr('Funga chapisho (lionekane kwenye akaunti yako tu)', 'Lock post private (only me)')
+                }
+                title={
+                  isPrivate
+                    ? tr('Fungua kwa Wote', 'Make Public')
+                    : tr('Funga (Yangu Tu)', 'Lock Private')
+                }
+                className={`inline-flex h-8 items-center gap-1 rounded-full px-2.5 text-[11px] font-bold transition-colors ${
+                  isPrivate
+                    ? 'bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200 hover:bg-emerald-100'
+                    : 'text-slate-600 hover:bg-amber-50 hover:text-amber-900'
+                }`}
+              >
+                {isPrivate ? (
+                  <>
+                    <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span className="hidden sm:inline">{tr('Fungua', 'Unhide')}</span>
+                  </>
+                ) : (
+                  <>
+                    <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span className="hidden sm:inline">{tr('Funga', 'Private')}</span>
+                  </>
+                )}
+              </button>
+            )}
+            {canManage && (post.status === 'open' || post.status === 'private') && (!isSuspended || isAdmin) && (
               <button
                 type="button"
                 onClick={() => onEditTopic(post)}
@@ -225,22 +279,13 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
             </div>
           )}
 
-          {post.coverImage && !imageFailed && (
-            <div
-              className={`${
-                post.title.trim() || post.body.trim() ? 'mt-3' : ''
-              } -mx-4 overflow-hidden border-y border-slate-200 bg-slate-100 sm:mx-0 sm:rounded-lg sm:border`}
-            >
-              <img
-                src={optimizeCloudinaryUrl(post.coverImage, 1080)}
-                alt={post.title.trim() || tr('Picha iliyochapishwa Kijiweni', 'Kijiweni photo post')}
-                loading="lazy"
-                decoding="async"
-                referrerPolicy="no-referrer"
-                onError={() => setImageFailed(true)}
-                className="block h-auto w-full"
-              />
-            </div>
+          {albumImages.length > 0 && (
+            <OrderedPhotoAlbum
+              images={albumImages}
+              altBase={post.title.trim() || tr('Picha iliyochapishwa Kijiweni', 'Kijiweni photo post')}
+              initialPreviewLimit={6}
+              className={post.title.trim() || post.body.trim() ? 'mt-3' : ''}
+            />
           )}
 
           {post.tags.length > 0 && (

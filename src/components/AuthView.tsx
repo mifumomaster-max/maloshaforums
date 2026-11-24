@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import {
+  browserLocalPersistence,
   createUserWithEmailAndPassword,
   sendEmailVerification,
   sendPasswordResetEmail,
+  setPersistence,
   signInWithEmailAndPassword,
   signInWithPopup,
   updateProfile,
@@ -35,8 +37,6 @@ interface AuthViewProps {
   onSuccess: (user: User, isNewUser: boolean, phoneNumber?: string) => void | Promise<void>;
 }
 
-const LAST_EMAIL_KEY = 'malosha_last_auth_email_v1';
-
 const GoogleGIcon: React.FC = () => (
   <svg className="h-[18px] w-[18px] shrink-0" viewBox="0 0 24 24" aria-hidden="true">
     <path
@@ -68,23 +68,45 @@ function extractErrorDetails(err: unknown): { code: string; message: string } {
   return { code: '', message: String(err || '') };
 }
 
+async function storeBrowserPasswordCredential(
+  email: string,
+  password: string,
+  displayName?: string | null
+): Promise<void> {
+  if (typeof window === 'undefined' || !('PasswordCredential' in window)) return;
+  try {
+    const PasswordCredentialCtor = (
+      window as unknown as {
+        PasswordCredential?: new (data: {
+          id: string;
+          password: string;
+          name?: string;
+        }) => Credential;
+      }
+    ).PasswordCredential;
+    if (PasswordCredentialCtor && navigator.credentials?.store) {
+      const cred = new PasswordCredentialCtor({
+        id: email,
+        password,
+        name: displayName || email,
+      });
+      await navigator.credentials.store(cred);
+    }
+  } catch {
+    // Browser credential storage optional / not supported in some webviews
+  }
+}
+
 export const AuthView: React.FC<AuthViewProps> = ({
   promptReason = null,
   onBack,
   onSuccess,
 }) => {
   const { tr } = useLanguage();
-  const [mode, setMode] = useState<'register' | 'login' | 'forgot'>('register');
+  const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [fullName, setFullName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
-  const [email, setEmail] = useState(() => {
-    if (typeof window === 'undefined') return '';
-    try {
-      return window.localStorage.getItem(LAST_EMAIL_KEY) || '';
-    } catch {
-      return '';
-    }
-  });
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
@@ -95,14 +117,6 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
   const currentHost = typeof window !== 'undefined' ? window.location.hostname : '';
 
-  const saveLastEmail = (val: string) => {
-    try {
-      window.localStorage.setItem(LAST_EMAIL_KEY, val.trim());
-    } catch {
-      // Ignore storage failure
-    }
-  };
-
   // Fast, in-place Google popup sign-in (zero redirect bounce, background profile sync)
   const handleGoogleSignIn = async () => {
     if (googleBusy) return;
@@ -111,8 +125,8 @@ export const AuthView: React.FC<AuthViewProps> = ({
     setGoogleBusy(true);
 
     try {
+      await setPersistence(auth, browserLocalPersistence).catch(() => {});
       const cred = await signInWithPopup(auth, googleProvider);
-      if (cred.user.email) saveLastEmail(cred.user.email);
       void syncUserProfile(cred.user).catch((syncErr) => {
         console.warn('Background Google profile sync:', syncErr);
       });
@@ -216,8 +230,9 @@ export const AuthView: React.FC<AuthViewProps> = ({
       });
 
       try {
+        await setPersistence(auth, browserLocalPersistence).catch(() => {});
         const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
-        saveLastEmail(cleanEmail);
+        void storeBrowserPasswordCredential(cleanEmail, password, cleanName);
         void updateProfile(cred.user, { displayName: cleanName }).catch(() => {});
         void syncUserProfile(cred.user, {
           displayName: cleanName,
@@ -267,11 +282,16 @@ export const AuthView: React.FC<AuthViewProps> = ({
       return;
     }
 
-    // Login mode (Fast sign-in)
+    // Login mode (Persistent auto-login until explicit sign out)
     setFormBusy(true);
     try {
+      await setPersistence(auth, browserLocalPersistence).catch(() => {});
       const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
-      saveLastEmail(cleanEmail);
+      void storeBrowserPasswordCredential(
+        cleanEmail,
+        password,
+        cred.user.displayName || cleanEmail
+      );
       void syncUserProfile(cred.user).catch((syncErr) => {
         console.warn('Background login profile sync:', syncErr);
       });
@@ -333,7 +353,6 @@ export const AuthView: React.FC<AuthViewProps> = ({
     setFormBusy(true);
     try {
       await sendPasswordResetEmail(auth, cleanEmail);
-      saveLastEmail(cleanEmail);
       setInfoMsg(
         tr(
           `Ujumbe wa kubadilisha nenosiri umetumwa kwenda ${cleanEmail}. Fungua email yako (angalia Inbox au Spam) kubadilisha nenosiri lako.`,
@@ -367,92 +386,129 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
   const promptHintText =
     promptReason === 'vote'
-      ? tr('Jisajili au ingia kupiga kura yako kwenye Mpoll.', 'Sign up or sign in to cast your Mpoll vote.')
+      ? tr('Ingia au jisajili kupiga kura yako kwenye Mpoll.', 'Sign in or sign up to cast your Mpoll vote.')
       : promptReason === 'comment'
-        ? tr('Jisajili au ingia kutoa maoni yako.', 'Sign up or sign in to comment.')
+        ? tr('Ingia au jisajili kutoa maoni yako.', 'Sign in or sign up to comment.')
         : promptReason === 'chat'
-          ? tr('Jisajili au ingia kushiriki Mchart.', 'Sign up or sign in to join Mchart.')
+          ? tr('Ingia au jisajili kushiriki Mchart.', 'Sign in or sign up to join Mchart.')
           : promptReason === 'post'
-            ? tr('Jisajili au ingia kuchapisha mada mpya.', 'Sign up or sign in to create a post.')
+            ? tr('Ingia au jisajili kuchapisha mada mpya.', 'Sign in or sign up to create a post.')
             : null;
 
   return (
-    <div className="fixed inset-0 sm:static h-[100dvh] w-full overflow-hidden overscroll-none bg-white sm:bg-gradient-to-b sm:from-[#EDF3FA] sm:via-[#F1F4F8] sm:to-[#E2EAF4] p-0 sm:px-5 sm:py-5 flex items-stretch sm:items-center justify-center">
-      <section className="relative w-full h-[100dvh] sm:h-auto sm:max-w-[440px] sm:max-h-[calc(100dvh-28px)] overflow-hidden overscroll-none rounded-none sm:rounded-3xl border-0 sm:border sm:border-slate-200/90 bg-white sm:shadow-xl flex flex-col justify-between">
-        {/* Rotating World Globe Watermark Layer Behind Registration Card Content */}
+    <div className="fixed inset-0 sm:static h-[100dvh] w-full overflow-hidden overscroll-none bg-gradient-to-br from-[#EAF3FF] via-[#F4F8FF] to-[#E6F7F1] p-0 sm:px-5 sm:py-5 flex items-stretch sm:items-center justify-center">
+      <section className="relative w-full h-[100dvh] sm:h-auto sm:max-w-[440px] sm:max-h-[calc(100dvh-28px)] overflow-hidden overscroll-none rounded-none sm:rounded-3xl border-0 sm:border sm:border-sky-200/90 bg-white sm:shadow-[0_20px_50px_rgba(14,38,64,0.14)] flex flex-col justify-between">
+        {/* Multi-Colored Rotating World Globe Watermark Layer Behind Card Content */}
         <div
           aria-hidden="true"
-          className="pointer-events-none select-none absolute inset-0 z-0 flex items-center justify-center overflow-hidden pt-16 sm:pt-20"
+          className="pointer-events-none select-none absolute inset-0 z-0 flex items-center justify-center overflow-hidden pt-14 sm:pt-18"
         >
-          <div className="relative w-[330px] h-[330px] sm:w-[370px] sm:h-[370px] opacity-[0.075] sm:opacity-[0.085]">
+          <div className="relative w-[340px] h-[340px] sm:w-[380px] sm:h-[380px] opacity-[0.22] sm:opacity-[0.25]">
             <svg
               viewBox="0 0 240 240"
               fill="none"
-              className="w-full h-full text-[#1D4E89] animate-malosha-globe-spin"
+              className="w-full h-full animate-malosha-globe-spin"
             >
-              {/* Outer globe sphere */}
-              <circle cx="120" cy="120" r="88" stroke="currentColor" strokeWidth="2.2" />
-              {/* Latitude lines */}
-              <ellipse cx="120" cy="120" rx="88" ry="26" stroke="currentColor" strokeWidth="1.5" />
-              <ellipse cx="120" cy="120" rx="80" ry="56" stroke="currentColor" strokeWidth="1.35" strokeDasharray="4 4" />
-              <line x1="34" y1="86" x2="206" y2="86" stroke="currentColor" strokeWidth="1.2" />
-              <line x1="34" y1="154" x2="206" y2="154" stroke="currentColor" strokeWidth="1.2" />
-              <line x1="32" y1="120" x2="208" y2="120" stroke="currentColor" strokeWidth="1.7" />
-              {/* Longitude meridians */}
-              <ellipse cx="120" cy="120" rx="28" ry="88" stroke="currentColor" strokeWidth="1.5" />
-              <ellipse cx="120" cy="120" rx="58" ry="88" stroke="currentColor" strokeWidth="1.4" />
-              <line x1="120" y1="32" x2="120" y2="208" stroke="currentColor" strokeWidth="1.7" />
-              {/* Tilted orbital ring & cardinal nodes */}
+              <defs>
+                <radialGradient id="maloshaOceanGrad" cx="38%" cy="34%" r="68%">
+                  <stop offset="0%" stopColor="#38BDF8" stopOpacity="0.48" />
+                  <stop offset="55%" stopColor="#0284C7" stopOpacity="0.28" />
+                  <stop offset="100%" stopColor="#1D4E89" stopOpacity="0.34" />
+                </radialGradient>
+              </defs>
+
+              {/* Earth Ocean Sphere */}
+              <circle
+                cx="120"
+                cy="120"
+                r="88"
+                fill="url(#maloshaOceanGrad)"
+                stroke="#0284C7"
+                strokeWidth="2.4"
+              />
+
+              {/* Stylized Earth Continents (Vibrant Emerald & Teal) */}
+              <path
+                d="M72 62C84 55 98 61 103 73C107 82 95 92 98 102C101 112 114 114 112 126C110 138 97 148 92 162C88 172 78 168 74 156C69 142 62 132 66 118C70 105 56 96 58 82C60 72 64 67 72 62Z"
+                fill="#10B981"
+                fillOpacity="0.58"
+                stroke="#059669"
+                strokeWidth="1.2"
+              />
+              <path
+                d="M126 56C145 52 167 64 176 80C184 95 174 114 164 122C156 128 159 144 151 156C142 168 128 162 126 146C124 132 132 122 126 112C118 98 115 80 120 66C122 61 124 58 126 56Z"
+                fill="#10B981"
+                fillOpacity="0.56"
+                stroke="#059669"
+                strokeWidth="1.2"
+              />
+              <path
+                d="M158 148C168 144 182 152 183 163C184 172 173 182 162 178C152 174 150 153 158 148Z"
+                fill="#34D399"
+                fillOpacity="0.62"
+                stroke="#059669"
+                strokeWidth="1.1"
+              />
+
+              {/* Latitude & Longitude Gridlines */}
+              <ellipse cx="120" cy="120" rx="88" ry="26" stroke="#0284C7" strokeWidth="1.5" />
+              <ellipse
+                cx="120"
+                cy="120"
+                rx="80"
+                ry="56"
+                stroke="#0EA5E9"
+                strokeWidth="1.35"
+                strokeDasharray="4 4"
+              />
+              <line x1="34" y1="86" x2="206" y2="86" stroke="#0284C7" strokeWidth="1.2" />
+              <line x1="34" y1="154" x2="206" y2="154" stroke="#0284C7" strokeWidth="1.2" />
+              <line x1="32" y1="120" x2="208" y2="120" stroke="#F59E0B" strokeWidth="1.9" />
+              <ellipse cx="120" cy="120" rx="28" ry="88" stroke="#0284C7" strokeWidth="1.5" />
+              <ellipse cx="120" cy="120" rx="58" ry="88" stroke="#0EA5E9" strokeWidth="1.4" />
+              <line x1="120" y1="32" x2="120" y2="208" stroke="#0284C7" strokeWidth="1.7" />
+
+              {/* Golden Orbital Ring & Multi-Color Cardinal Nodes */}
               <ellipse
                 cx="120"
                 cy="120"
                 rx="106"
                 ry="34"
                 transform="rotate(-24 120 120)"
-                stroke="#0E2640"
-                strokeWidth="1.4"
+                stroke="#F59E0B"
+                strokeWidth="1.8"
                 strokeDasharray="6 5"
               />
-              <circle cx="120" cy="32" r="3.5" fill="currentColor" />
-              <circle cx="208" cy="120" r="3.5" fill="currentColor" />
-              <circle cx="120" cy="208" r="3.5" fill="currentColor" />
-              <circle cx="32" cy="120" r="3.5" fill="currentColor" />
+              <circle cx="120" cy="32" r="4" fill="#F59E0B" />
+              <circle cx="208" cy="120" r="4" fill="#10B981" />
+              <circle cx="120" cy="208" r="4" fill="#0EA5E9" />
+              <circle cx="32" cy="120" r="4" fill="#F43F5E" />
             </svg>
             <svg
               viewBox="0 0 240 240"
               fill="none"
-              className="absolute inset-0 w-full h-full text-[#0E2640] animate-malosha-globe-orbit"
+              className="absolute inset-0 w-full h-full animate-malosha-globe-orbit"
             >
               <circle
                 cx="120"
                 cy="120"
                 r="112"
-                stroke="currentColor"
-                strokeWidth="1.2"
-                strokeDasharray="3 9"
+                stroke="#6366F1"
+                strokeWidth="1.4"
+                strokeDasharray="4 8"
               />
-              <circle cx="120" cy="8" r="3.5" fill="currentColor" />
-              <circle cx="120" cy="232" r="3" fill="currentColor" />
+              <circle cx="120" cy="8" r="4.2" fill="#F59E0B" />
+              <circle cx="120" cy="232" r="3.8" fill="#10B981" />
             </svg>
           </div>
         </div>
 
-        {/* Compact Brand Header: Inline Back Pill + Circular Logo on Top + Malosha Forums Below */}
-        <div className="relative z-10 shrink-0 overflow-hidden bg-gradient-to-br from-[#0A1F36] via-[#0E2640] to-[#1A4373] px-4 pt-2.5 pb-2 sm:px-5 sm:pt-4 sm:pb-3.5 text-center text-white">
+        {/* Clean Centered Brand Header (Top Back Button Removed as Requested) */}
+        <div className="relative z-10 shrink-0 overflow-hidden bg-gradient-to-br from-[#0A1F36] via-[#0E2640] to-[#1A4373] px-4 pt-3 pb-2.5 sm:px-5 sm:pt-4 sm:pb-3.5 text-center text-white">
           <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#D97706] via-[#F59E0B] to-[#38BDF8]" />
 
-          <button
-            type="button"
-            onClick={onBack}
-            className="absolute top-2.5 left-2.5 sm:top-3.5 sm:left-3.5 inline-flex items-center gap-1 rounded-lg border border-white/20 bg-white/10 px-2.5 py-1 text-[11px] font-bold text-white/95 backdrop-blur-xs transition-colors hover:bg-white/20"
-            aria-label={tr('Rudi Kwenye Jukwaa', 'Back to Forum')}
-          >
-            <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
-            <span>{tr('Rudi', 'Back')}</span>
-          </button>
-
           <div className="mx-auto flex flex-col items-center">
-            <div className="h-11 w-11 sm:h-14 sm:w-14 rounded-full p-0.5 sm:p-1 bg-gradient-to-br from-amber-300/70 via-white/30 to-sky-400/60 shadow-md">
+            <div className="h-11 w-11 sm:h-14 sm:w-14 rounded-full p-0.5 sm:p-1 bg-gradient-to-br from-amber-300/80 via-white/35 to-sky-400/70 shadow-md">
               <img
                 src="/icon.svg"
                 alt="Malosha Forums"
@@ -460,10 +516,10 @@ export const AuthView: React.FC<AuthViewProps> = ({
               />
             </div>
 
-            <h1 className="mt-1 sm:mt-2 font-display text-base sm:text-xl font-extrabold tracking-tight text-white leading-tight">
+            <h1 className="mt-1.5 sm:mt-2 font-display text-base sm:text-xl font-extrabold tracking-tight text-white leading-tight">
               Malosha Forums
             </h1>
-            <p className="mt-0.5 text-[10.5px] sm:text-xs text-sky-100/85 max-w-[290px] sm:max-w-xs mx-auto leading-tight line-clamp-1">
+            <p className="mt-0.5 text-[10.5px] sm:text-xs text-sky-100/90 max-w-[300px] sm:max-w-xs mx-auto leading-tight line-clamp-1">
               {promptHintText ||
                 tr(
                   'Mijadala, Habari, Fursa, Video, Mchart & Mpoll.',
@@ -473,14 +529,14 @@ export const AuthView: React.FC<AuthViewProps> = ({
           </div>
         </div>
 
-        {/* Card Body: Fits cleanly on one mobile screen with zero bounce */}
-        <div className="relative z-10 flex-1 flex flex-col justify-center overflow-y-auto overscroll-none px-4 py-2 sm:p-5">
-          <div className="w-full space-y-2 sm:space-y-3">
-            {/* Tabs: Register / Sign In (or Back when inside Forgot Password view) */}
+        {/* Card Body: Sign In Tab First, Register Tab Second, Colorful Inputs, Compact Buttons */}
+        <div className="relative z-10 flex-1 flex flex-col justify-center overflow-y-auto overscroll-none px-4 py-2.5 sm:p-5">
+          <div className="w-full space-y-2.5 sm:space-y-3">
+            {/* Tabs: Sign In FIRST (default), Register SECOND */}
             {mode === 'forgot' ? (
-              <div className="flex items-center justify-between gap-2 rounded-xl bg-sky-50/95 border border-sky-200/80 px-3 py-2">
+              <div className="flex items-center justify-between gap-2 rounded-xl bg-sky-50/95 border border-sky-200/90 px-3 py-2">
                 <div className="flex items-center gap-2 min-w-0">
-                  <KeyRound className="h-4 w-4 shrink-0 text-[#1D4E89]" />
+                  <KeyRound className="h-4 w-4 shrink-0 text-[#0284C7]" />
                   <span className="text-xs font-extrabold text-[#0E2640] truncate">
                     {tr('Badilisha Nenosiri Kupitia Email', 'Reset Password via Email')}
                   </span>
@@ -492,7 +548,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                     setErrorMsg('');
                     setInfoMsg('');
                   }}
-                  className="text-xs font-bold text-[#1D4E89] hover:underline shrink-0"
+                  className="text-xs font-bold text-[#0284C7] hover:underline shrink-0"
                 >
                   {tr('Rudi Kuingia', 'Back to Sign In')}
                 </button>
@@ -501,25 +557,8 @@ export const AuthView: React.FC<AuthViewProps> = ({
               <div
                 role="tablist"
                 aria-label={tr('Chagua njia ya akaunti', 'Choose account mode')}
-                className="grid grid-cols-2 gap-1 rounded-xl bg-slate-100/95 p-1"
+                className="grid grid-cols-2 gap-1 rounded-xl border border-sky-200/80 bg-sky-100/65 p-1"
               >
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={mode === 'register'}
-                  onClick={() => {
-                    setMode('register');
-                    setErrorMsg('');
-                    setInfoMsg('');
-                  }}
-                  className={`min-h-[34px] sm:min-h-[38px] rounded-lg px-2.5 py-1.5 text-xs font-extrabold transition-all sm:text-sm ${
-                    mode === 'register'
-                      ? 'bg-white text-[#0E2640] shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  {tr('Jisajili (Mpya)', 'Register (New)')}
-                </button>
                 <button
                   type="button"
                   role="tab"
@@ -529,13 +568,30 @@ export const AuthView: React.FC<AuthViewProps> = ({
                     setErrorMsg('');
                     setInfoMsg('');
                   }}
-                  className={`min-h-[34px] sm:min-h-[38px] rounded-lg px-2.5 py-1.5 text-xs font-extrabold transition-all sm:text-sm ${
+                  className={`min-h-[36px] sm:min-h-[40px] rounded-lg px-2.5 py-1.5 text-xs font-extrabold transition-all sm:text-sm whitespace-nowrap ${
                     mode === 'login'
-                      ? 'bg-white text-[#0E2640] shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
+                      ? 'bg-gradient-to-r from-[#0E2640] to-[#1D4E89] text-white shadow-sm'
+                      : 'text-slate-700 hover:text-[#0E2640]'
                   }`}
                 >
                   {tr('Ingia (Nina Akaunti)', 'Sign In')}
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === 'register'}
+                  onClick={() => {
+                    setMode('register');
+                    setErrorMsg('');
+                    setInfoMsg('');
+                  }}
+                  className={`min-h-[36px] sm:min-h-[40px] rounded-lg px-2.5 py-1.5 text-xs font-extrabold transition-all sm:text-sm whitespace-nowrap ${
+                    mode === 'register'
+                      ? 'bg-gradient-to-r from-[#0284C7] to-[#0E7490] text-white shadow-sm'
+                      : 'text-slate-700 hover:text-[#0E2640]'
+                  }`}
+                >
+                  {tr('Jisajili (Mpya)', 'Register (New)')}
                 </button>
               </div>
             )}
@@ -561,24 +617,31 @@ export const AuthView: React.FC<AuthViewProps> = ({
               </div>
             )}
 
-            {/* Primary Email Form (ON TOP) */}
-            <form onSubmit={handleSubmitForm} className="space-y-2 sm:space-y-2.5">
+            {/* Primary Email & Password Form (Browser Autofill Enabled, Never Pre-Filled) */}
+            <form
+              onSubmit={handleSubmitForm}
+              autoComplete="on"
+              method="post"
+              action="#"
+              className="space-y-2.5"
+            >
               {mode === 'register' && (
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label
                       htmlFor="auth-page-fullname"
-                      className="block text-[11px] font-bold text-slate-700"
+                      className="block text-[11px] font-bold text-indigo-900"
                     >
                       {tr('Jina Kamili', 'Full Name')}
                     </label>
                     <div className="relative mt-0.5">
                       <UserIcon
-                        className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-slate-400"
+                        className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-indigo-600"
                         aria-hidden="true"
                       />
                       <input
                         id="auth-page-fullname"
+                        name="name"
                         type="text"
                         required
                         minLength={2}
@@ -587,7 +650,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                         value={fullName}
                         onChange={(e) => setFullName(e.target.value)}
                         placeholder={tr('Asha Juma', 'Full name')}
-                        className="h-[38px] sm:h-[42px] w-full rounded-xl border border-slate-300 bg-white/92 backdrop-blur-[1px] pr-2 pl-8 text-[16px] sm:text-sm text-slate-900 placeholder:text-[12px] placeholder:text-slate-400 focus:border-[#1D4E89] focus:ring-2 focus:ring-[#1D4E89]/15 focus:outline-none"
+                        className="h-[40px] sm:h-[42px] w-full rounded-xl border border-indigo-300/90 bg-indigo-50/80 backdrop-blur-[1px] pr-2 pl-8 text-[16px] sm:text-sm font-medium text-[#0A1F36] placeholder:text-[12px] placeholder:text-indigo-400/90 focus:border-indigo-600 focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors"
                       />
                     </div>
                   </div>
@@ -595,24 +658,25 @@ export const AuthView: React.FC<AuthViewProps> = ({
                   <div>
                     <label
                       htmlFor="auth-page-phone"
-                      className="block text-[11px] font-bold text-slate-700"
+                      className="block text-[11px] font-bold text-emerald-900"
                     >
                       {tr('Simu (Hiari)', 'Phone (Optional)')}
                     </label>
                     <div className="relative mt-0.5">
                       <Phone
-                        className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-slate-400"
+                        className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-emerald-600"
                         aria-hidden="true"
                       />
                       <input
                         id="auth-page-phone"
+                        name="tel"
                         type="tel"
                         maxLength={30}
                         autoComplete="tel"
                         value={phoneNumber}
                         onChange={(e) => setPhoneNumber(e.target.value)}
                         placeholder={tr('0712...', '+255...')}
-                        className="h-[38px] sm:h-[42px] w-full rounded-xl border border-slate-300 bg-white/92 backdrop-blur-[1px] pr-2 pl-8 text-[16px] sm:text-sm text-slate-900 placeholder:text-[12px] placeholder:text-slate-400 focus:border-[#1D4E89] focus:ring-2 focus:ring-[#1D4E89]/15 focus:outline-none"
+                        className="h-[40px] sm:h-[42px] w-full rounded-xl border border-emerald-300/90 bg-emerald-50/75 backdrop-blur-[1px] pr-2 pl-8 text-[16px] sm:text-sm font-medium text-[#0A1F36] placeholder:text-[12px] placeholder:text-emerald-600/65 focus:border-emerald-600 focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:outline-none transition-colors"
                       />
                     </div>
                   </div>
@@ -622,24 +686,29 @@ export const AuthView: React.FC<AuthViewProps> = ({
               <div>
                 <label
                   htmlFor="auth-page-email"
-                  className="block text-[11px] font-bold text-slate-700"
+                  className="block text-[11px] font-bold text-[#0E2640]"
                 >
                   {tr('Barua Pepe (Email)', 'Email Address')}
                 </label>
                 <div className="relative mt-0.5">
                   <Mail
-                    className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-slate-400"
+                    className="pointer-events-none absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2 text-[#0284C7]"
                     aria-hidden="true"
                   />
                   <input
                     id="auth-page-email"
+                    name="email"
                     type="email"
+                    inputMode="email"
                     required
-                    autoComplete="email"
+                    autoComplete={mode === 'register' ? 'email' : 'username'}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="jina@mfano.com"
-                    className="h-[38px] sm:h-[42px] w-full rounded-xl border border-slate-300 bg-white/92 backdrop-blur-[1px] pr-3 pl-8 text-[16px] sm:text-sm text-slate-900 placeholder:text-[12px] placeholder:text-slate-400 focus:border-[#1D4E89] focus:ring-2 focus:ring-[#1D4E89]/15 focus:outline-none"
+                    className="h-[40px] sm:h-[44px] w-full rounded-xl border border-sky-300 bg-sky-50/85 backdrop-blur-[1px] pr-3 pl-9 text-[16px] sm:text-sm font-medium text-[#0A1F36] placeholder:text-[12px] placeholder:text-sky-600/65 focus:border-[#0284C7] focus:bg-white focus:ring-2 focus:ring-sky-500/25 focus:outline-none transition-colors"
                   />
                 </div>
               </div>
@@ -649,7 +718,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                   <div className="flex items-center justify-between gap-2">
                     <label
                       htmlFor="auth-page-password"
-                      className="block text-[11px] font-bold text-slate-700"
+                      className="block text-[11px] font-bold text-[#0E2640]"
                     >
                       {tr('Nenosiri (Password)', 'Password')}
                     </label>
@@ -661,18 +730,19 @@ export const AuthView: React.FC<AuthViewProps> = ({
                         setErrorMsg('');
                         setInfoMsg('');
                       }}
-                      className="text-[11px] font-bold text-[#1D4E89] hover:underline"
+                      className="text-[11px] font-bold text-[#0284C7] hover:underline"
                     >
                       {tr('Umesahau nenosiri?', 'Forgot password?')}
                     </button>
                   </div>
                   <div className="relative mt-0.5">
                     <Lock
-                      className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-slate-400"
+                      className="pointer-events-none absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2 text-[#1D4E89]"
                       aria-hidden="true"
                     />
                     <input
                       id="auth-page-password"
+                      name="password"
                       type={showPassword ? 'text' : 'password'}
                       required
                       minLength={6}
@@ -680,7 +750,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder={tr('Angalau herufi 6', 'At least 6 characters')}
-                      className="h-[38px] sm:h-[42px] w-full rounded-xl border border-slate-300 bg-white/92 backdrop-blur-[1px] pr-10 pl-8 text-[16px] sm:text-sm text-slate-900 placeholder:text-[12px] placeholder:text-slate-400 focus:border-[#1D4E89] focus:ring-2 focus:ring-[#1D4E89]/15 focus:outline-none"
+                      className="h-[40px] sm:h-[44px] w-full rounded-xl border border-blue-300/90 bg-blue-50/80 backdrop-blur-[1px] pr-10 pl-9 text-[16px] sm:text-sm font-medium text-[#0A1F36] placeholder:text-[12px] placeholder:text-blue-600/60 focus:border-[#1D4E89] focus:bg-white focus:ring-2 focus:ring-blue-500/25 focus:outline-none transition-colors"
                     />
                     <button
                       type="button"
@@ -690,7 +760,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                           ? tr('Ficha nenosiri', 'Hide password')
                           : tr('Onyesha nenosiri', 'Show password')
                       }
-                      className="absolute top-1/2 right-1 flex h-[34px] w-[34px] -translate-y-1/2 items-center justify-center rounded-lg text-slate-500 hover:text-slate-800"
+                      className="absolute top-1/2 right-1.5 flex h-[32px] w-[32px] -translate-y-1/2 items-center justify-center rounded-lg text-[#1D4E89] hover:bg-blue-100/80 transition-colors"
                     >
                       {showPassword ? (
                         <EyeOff className="h-4 w-4" aria-hidden="true" />
@@ -702,46 +772,65 @@ export const AuthView: React.FC<AuthViewProps> = ({
                 </div>
               )}
 
-              <button
-                type="submit"
-                disabled={formBusy || googleBusy}
-                className="flex h-[40px] sm:h-[44px] w-full items-center justify-center rounded-xl bg-gradient-to-r from-[#0E2640] to-[#1D4E89] px-4 text-xs sm:text-sm font-extrabold text-white shadow-sm transition-all hover:brightness-110 disabled:opacity-60"
-              >
-                {formBusy
-                  ? mode === 'forgot'
-                    ? tr('Inatuma ujumbe...', 'Sending reset email...')
-                    : mode === 'register'
-                      ? tr('Inasajili...', 'Creating account...')
-                      : tr('Inaingia...', 'Signing in...')
-                  : mode === 'forgot'
-                    ? tr('Tuma Ujumbe Kwenye Email', 'Send Reset Link to Email')
-                    : mode === 'register'
-                      ? tr('Jisajili Sasa', 'Create Account')
-                      : tr('Ingia Kwenye Akaunti', 'Sign In')}
-              </button>
+              {/* Compact, Proportional Primary Action Button */}
+              <div className="pt-0.5 flex justify-center">
+                <button
+                  type="submit"
+                  disabled={formBusy || googleBusy}
+                  className={`flex h-[42px] sm:h-[44px] w-[235px] sm:w-[258px] items-center justify-center rounded-xl px-5 text-xs sm:text-sm font-extrabold text-white shadow-sm transition-all hover:brightness-110 active:scale-[0.99] disabled:opacity-60 ${
+                    mode === 'register'
+                      ? 'bg-gradient-to-r from-[#0284C7] to-[#0E7490]'
+                      : 'bg-gradient-to-r from-[#0E2640] to-[#1D4E89]'
+                  }`}
+                >
+                  {formBusy
+                    ? mode === 'forgot'
+                      ? tr('Inatuma ujumbe...', 'Sending reset email...')
+                      : mode === 'register'
+                        ? tr('Inasajili...', 'Creating account...')
+                        : tr('Inaingia...', 'Signing in...')
+                    : mode === 'forgot'
+                      ? tr('Tuma Ujumbe Kwenye Email', 'Send Reset Link')
+                      : mode === 'register'
+                        ? tr('Jisajili Sasa', 'Create Account')
+                        : tr('Ingia Kwenye Akaunti', 'Sign In')}
+                </button>
+              </div>
             </form>
 
             {/* Divider */}
             <div className="relative flex items-center">
-              <div className="flex-1 border-t border-slate-200" />
+              <div className="flex-1 border-t border-slate-200/90" />
               <span className="px-2.5 text-[10.5px] font-bold uppercase tracking-wider text-slate-400">
                 {tr('au', 'or')}
               </span>
-              <div className="flex-1 border-t border-slate-200" />
+              <div className="flex-1 border-t border-slate-200/90" />
             </div>
 
-            {/* Google Sign-In BELOW Email Form — Strictly English "Continue with Google" */}
-            <button
-              type="button"
-              disabled={formBusy || googleBusy}
-              onClick={() => {
-                void handleGoogleSignIn();
-              }}
-              className="flex h-[40px] sm:h-[44px] w-full items-center justify-center gap-2.5 rounded-xl border border-slate-300 bg-white/95 px-4 text-xs sm:text-sm font-bold text-slate-900 shadow-2xs transition-colors hover:bg-slate-50 active:scale-[0.99] disabled:opacity-60"
-            >
-              <GoogleGIcon />
-              <span>{googleBusy ? 'Connecting to Google...' : 'Continue with Google'}</span>
-            </button>
+            {/* Compact, Proportional Google Sign-In & Bottom Go Back Button */}
+            <div className="flex flex-col items-center gap-2">
+              <button
+                type="button"
+                disabled={formBusy || googleBusy}
+                onClick={() => {
+                  void handleGoogleSignIn();
+                }}
+                className="flex h-[42px] sm:h-[44px] w-[235px] sm:w-[258px] items-center justify-center gap-2.5 rounded-xl border border-sky-200 bg-white/95 px-4 text-xs sm:text-sm font-bold text-slate-900 shadow-2xs transition-colors hover:bg-sky-50/70 active:scale-[0.99] disabled:opacity-60"
+              >
+                <GoogleGIcon />
+                <span>{googleBusy ? 'Connecting to Google...' : 'Continue with Google'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onBack}
+                aria-label={tr('Rudi Nyuma Kwenye Jukwaa', 'Go Back to Forum')}
+                className="flex h-[40px] sm:h-[42px] w-[235px] sm:w-[258px] items-center justify-center gap-2 rounded-xl border border-slate-300/90 bg-slate-100/85 px-4 text-xs sm:text-sm font-bold text-[#0E2640] transition-colors hover:bg-slate-200/80 active:scale-[0.99]"
+              >
+                <ArrowLeft className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span>{tr('Rudi Nyuma', 'Go Back')}</span>
+              </button>
+            </div>
           </div>
         </div>
 

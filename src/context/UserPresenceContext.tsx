@@ -8,7 +8,7 @@ import React, {
   useState,
 } from 'react';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import { writeUserPresence } from '../services/forumService';
 import { PresenceArea, UserPresence } from '../types';
 
@@ -105,6 +105,7 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
               data.activeArea === 'fursa' ||
               data.activeArea === 'makala' ||
               data.activeArea === 'mchart' ||
+              data.activeArea === 'votes' ||
               data.activeArea === 'profile'
                 ? data.activeArea
                 : 'forum',
@@ -128,7 +129,11 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
   useEffect(() => {
     if (!authReady || !userUid) return;
 
+    const canWriteAsUser = () =>
+      Boolean(auth.currentUser && auth.currentUser.uid === userUid && !auth.currentUser.isAnonymous);
+
     const syncOnline = () => {
+      if (!canWriteAsUser()) return;
       const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
       const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
       const shouldBeOnline = !isSuspended && !hidden && !offline;
@@ -146,7 +151,7 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
         typingChatId: shouldBeOnline ? typingStateRef.current.typingChatId : '',
         replyingToName: shouldBeOnline ? typingStateRef.current.replyingToName : '',
         activeArea,
-      });
+      }).catch(() => {});
     };
 
     syncOnline();
@@ -162,6 +167,7 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
     const handleOffline = () => {
       typingStateRef.current.active = false;
       typingStateRef.current.typingChatId = '';
+      if (!canWriteAsUser()) return;
       void writeUserPresence(userUid, {
         displayName,
         isOnline: false,
@@ -169,11 +175,12 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
         typingChatId: '',
         replyingToName: '',
         activeArea,
-      });
+      }).catch(() => {});
     };
     const handlePageHide = () => {
       typingStateRef.current.active = false;
       typingStateRef.current.typingChatId = '';
+      if (!canWriteAsUser()) return;
       void writeUserPresence(userUid, {
         displayName,
         isOnline: false,
@@ -181,7 +188,7 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
         typingChatId: '',
         replyingToName: '',
         activeArea,
-      });
+      }).catch(() => {});
     };
 
     document.addEventListener('visibilitychange', handleVisibility);
@@ -206,6 +213,7 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
       const { userUid: uid, displayName: name, activeArea: area, isSuspended: susp } =
         lastParamsRef.current;
       if (!uid || susp) return;
+      if (!auth.currentUser || auth.currentUser.uid !== uid || auth.currentUser.isAnonymous) return;
 
       const now = Date.now();
       const cleanReply = isTyping ? replyingToName.trim() : '';
@@ -234,7 +242,7 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
         typingChatId: cleanChatId,
         replyingToName: cleanReply,
         activeArea: area,
-      });
+      }).catch(() => {});
     },
     []
   );
@@ -242,7 +250,9 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
   const markOfflineNow = useCallback(async () => {
     const { userUid: uid, displayName: name, activeArea: area } = lastParamsRef.current;
     typingStateRef.current = { active: false, replyingToName: '', typingChatId: '', lastSentAt: 0 };
-    if (!uid) return;
+    if (!uid || !auth.currentUser || auth.currentUser.uid !== uid || auth.currentUser.isAnonymous) {
+      return;
+    }
     await writeUserPresence(uid, {
       displayName: name,
       isOnline: false,
@@ -250,7 +260,7 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
       typingChatId: '',
       replyingToName: '',
       activeArea: area,
-    });
+    }).catch(() => {});
   }, []);
 
   const onlineUsers = useMemo(() => {

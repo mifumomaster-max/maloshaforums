@@ -16,6 +16,7 @@ import {
   ChevronUp,
   Clock,
   Copy,
+  Crop,
   Crown,
   Download,
   Edit3,
@@ -28,9 +29,11 @@ import {
   GitBranch,
   Globe,
   Image as ImageIcon,
+  ImagePlus,
   Landmark,
   Link2,
   ListChecks,
+  Loader2,
   Lock,
   MessageCircle,
   MessageSquare,
@@ -127,6 +130,7 @@ interface VotingPollsViewProps {
   userPhoto: string;
   isAdmin: boolean;
   isSuspended: boolean;
+  hideCreateForUsers?: boolean;
   selectedPollId?: string | null;
   onClearSelectedPoll?: () => void;
   mpollBgTheme?: 'darkblue' | 'light';
@@ -688,8 +692,8 @@ function formatFriendlyPollError(
     }
     const pathTag = parsedPath ? ` [${parsedPath}]` : '';
     return tr(
-      `Ruhusa ya kuchapisha imezuiwa${pathTag}. Hakikisha umeingia na akaunti ya mmiliki iliyothibitishwa na viungo vyote vya picha ni sahihi (https://).`,
-      `Publish permission denied${pathTag}. Ensure you are signed in with a verified owner account and all photo URLs use https://.`
+      `Ruhusa ya kuhifadhi imezuiwa${pathTag}. Hakikisha umeingia kwenye akaunti yako hai (isiyozuiwa) na ujaribu tena.`,
+      `Save permission denied${pathTag}. Ensure you are signed in with an active account and try again.`
     );
   }
   return parsedErrorMsg || tr('Hitilafu imetokea. Jaribu tena.', 'An error occurred. Please try again.');
@@ -993,6 +997,7 @@ interface InlinePollBuilderProps {
   user: User;
   userDisplayName: string;
   userPhoto: string;
+  isAdmin: boolean;
   onCancel: () => void;
   onSaved: (pollId: string, isEdit: boolean) => void;
   onOpenTournamentStudio?: () => void;
@@ -1004,6 +1009,7 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
   user,
   userDisplayName,
   userPhoto,
+  isAdmin,
   onCancel,
   onSaved,
   onOpenTournamentStudio,
@@ -1023,6 +1029,7 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
   const [question, setQuestion] = useState(editingPoll?.question || '');
   const [description, setDescription] = useState(editingPoll?.description || '');
   const [questionImageUrl, setQuestionImageUrl] = useState(editingPoll?.imageUrl || '');
+  const [questionSourceFile, setQuestionSourceFile] = useState<File | null>(null);
   const [uploadingQuestionImg, setUploadingQuestionImg] = useState(false);
   const [pendingQuestionCropFile, setPendingQuestionCropFile] = useState<File | null>(null);
   const [questionImgUrlInputOpen, setQuestionImgUrlInputOpen] = useState(false);
@@ -1071,6 +1078,7 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
     return toDatetimeLocalValue(new Date(Date.now() + 24 * 60 * 60 * 1000));
   });
   const [uploadingOptionIdx, setUploadingOptionIdx] = useState<number | null>(null);
+  const [optionSourceFiles, setOptionSourceFiles] = useState<Record<number, File>>({});
   const [pendingCropOption, setPendingCropOption] = useState<{ idx: number; file: File } | null>(
     null
   );
@@ -1228,21 +1236,19 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
   const uploadCroppedCandidatePhoto = async (idx: number, croppedFile: File) => {
     setUploadingOptionIdx(idx);
     try {
-      const readyFile =
-        croppedFile.size > 7.5 * 1024 * 1024
-          ? await prepareSharedImageFile(croppedFile)
-          : croppedFile;
+      const readyFile = await prepareSharedImageFile(croppedFile);
       const url = await uploadImageToCloudinary(readyFile);
+      setOptionSourceFiles((prev) => ({ ...prev, [idx]: readyFile }));
       setOptions((prev) => prev.map((o, i) => (i === idx ? { ...o, imageUrl: url } : o)));
       onToast(
-        tr('Picha imekatwa na kupakiwa kama ulivyopanga!', 'Cropped photo uploaded accurately!'),
+        tr('Picha imepakiwa kikamilifu kupitia Cloudinary!', 'Photo uploaded cleanly via Cloudinary!'),
         'success'
       );
     } catch (err) {
       const msg =
         err instanceof Error
           ? err.message
-          : tr('Imeshindwa kupakia picha.', 'Failed to upload image.');
+          : tr('Imeshindwa kupakia picha kwenda Cloudinary.', 'Failed to upload image to Cloudinary.');
       onToast(msg, 'error');
     } finally {
       setUploadingOptionIdx(null);
@@ -1262,18 +1268,19 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
   const uploadCroppedQuestionImage = async (croppedFile: File) => {
     setUploadingQuestionImg(true);
     try {
-      const readyFile =
-        croppedFile.size > 7.5 * 1024 * 1024
-          ? await prepareSharedImageFile(croppedFile)
-          : croppedFile;
+      const readyFile = await prepareSharedImageFile(croppedFile);
       const url = await uploadImageToCloudinary(readyFile);
+      setQuestionSourceFile(readyFile);
       setQuestionImageUrl(url);
-      onToast(tr('Picha ya swali imepakiwa kikamilifu!', 'Question image uploaded!'), 'success');
+      onToast(
+        tr('Picha ya swali imepakiwa kupitia Cloudinary!', 'Question image uploaded via Cloudinary!'),
+        'success'
+      );
     } catch (err) {
       const msg =
         err instanceof Error
           ? err.message
-          : tr('Imeshindwa kupakia picha.', 'Failed to upload image.');
+          : tr('Imeshindwa kupakia picha kwenda Cloudinary.', 'Failed to upload image to Cloudinary.');
       onToast(msg, 'error');
     } finally {
       setUploadingQuestionImg(false);
@@ -1292,9 +1299,9 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (question.trim().length < 4) {
+    if (question.trim().length < 1) {
       onToast(
-        tr('Andika swali la Mpoll (angalau herufi 4).', 'Please enter a poll question (min 4 chars).'),
+        tr('Andika swali la Mpoll.', 'Please enter a poll question.'),
         'error'
       );
       return;
@@ -1331,7 +1338,7 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
         onToast(tr('Chagua tarehe na muda sahihi wa mwisho.', 'Select a valid end date/time.'), 'error');
         return;
       }
-      if ((!isEdit || status === 'open') && parsed.getTime() < Date.now() + 60 * 1000) {
+      if (!isEdit && status === 'open' && parsed.getTime() < Date.now() + 60 * 1000) {
         onToast(
           tr(
             'Muda wa mwisho lazima uwe mbele (angalau dakika 5 kutoka sasa).',
@@ -1368,7 +1375,7 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
         allowComments,
         quorumTarget: Math.max(0, Math.round(quorumTarget || 0)),
         allowShare,
-        isPinned,
+        isPinned: isAdmin ? isPinned : editingPoll ? editingPoll.isPinned : false,
         hasDeadline,
         endsAtDate,
       };
@@ -1748,20 +1755,20 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
               />
             </div>
 
-            {/* Question Photo Attachment (Great for Open Opinion & Visual Polls) */}
+            {/* Question Photo Attachment (Cloudinary Format matching Kijiweni) */}
             <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <ImageIcon size={15} className="text-[#1D4E89]" />
+                  <ImagePlus size={16} className="text-emerald-700" />
                   <div>
                     <div className="text-xs font-bold text-slate-800">
-                      {tr('Ambatanisha Picha ya Swali', 'Attach Question Photo')}{' '}
+                      {tr('Ambatanisha Picha ya Swali (Cloudinary)', 'Attach Question Photo (Cloudinary)')}{' '}
                       <span className="font-normal text-slate-400">({tr('Hiari', 'Optional')})</span>
                     </div>
                     <div className="text-[11px] text-slate-500">
                       {tr(
-                        'Pakia na kata picha itakayoonekana pamoja na swali na maelezo.',
-                        'Upload and crop an image displayed cleanly with the question & details.'
+                        'Chagua na kata picha kwenda Cloudinary kama ilivyo kwenye Kijiweni.',
+                        'Pick and crop a photo to Cloudinary just like in Kijiweni.'
                       )}
                     </div>
                   </div>
@@ -1781,12 +1788,12 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
                     onClick={() => questionImgInputRef.current?.click()}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1D4E89] hover:bg-[#163d6c] text-white text-xs font-bold transition-colors disabled:opacity-60"
                   >
-                    <Upload size={13} />
+                    <ImagePlus size={13} />
                     {uploadingQuestionImg
                       ? tr('Inapakia...', 'Uploading...')
                       : questionImageUrl
-                        ? tr('Badili / Kata Picha', 'Change / Crop Photo')
-                        : tr('Pakia Picha', 'Upload Photo')}
+                        ? tr('Badili Picha', 'Change Photo')
+                        : tr('Chagua Picha', 'Attach Photo')}
                   </button>
                   <button
                     type="button"
@@ -1795,24 +1802,24 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
                   >
                     {questionImgUrlInputOpen ? tr('Funga URL', 'Hide URL') : tr('Weka Link', 'Paste URL')}
                   </button>
-                  {questionImageUrl && (
-                    <button
-                      type="button"
-                      onClick={() => setQuestionImageUrl('')}
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-[11px] font-bold text-rose-700"
-                    >
-                      <X size={12} />
-                      {tr('Ondoa', 'Remove')}
-                    </button>
-                  )}
                 </div>
               </div>
+
+              {uploadingQuestionImg && (
+                <div className="flex items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3.5 py-2.5 text-xs font-medium text-[#163A5F]">
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  <span>{tr('Inapakia picha kwenda Cloudinary...', 'Uploading photo to Cloudinary...')}</span>
+                </div>
+              )}
 
               {questionImgUrlInputOpen && (
                 <input
                   type="url"
                   value={questionImageUrl}
-                  onChange={(e) => setQuestionImageUrl(e.target.value)}
+                  onChange={(e) => {
+                    setQuestionImageUrl(e.target.value);
+                    setQuestionSourceFile(null);
+                  }}
                   maxLength={500}
                   placeholder="https://..."
                   className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1D4E89]/25"
@@ -1820,12 +1827,36 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
               )}
 
               {questionImageUrl && (
-                <div className="rounded-lg border border-slate-200 bg-white p-2 overflow-hidden">
+                <div className="relative overflow-hidden rounded-lg border border-slate-200 bg-white">
                   <img
                     src={optimizeCloudinaryUrl(questionImageUrl, 900)}
                     alt={tr('Hakiki picha ya swali', 'Question photo preview')}
-                    className="w-full max-h-64 object-contain rounded-md bg-slate-50"
+                    referrerPolicy="no-referrer"
+                    className="block w-full max-h-72 object-contain bg-slate-50"
                   />
+                  <div className="absolute top-2 right-2 flex items-center gap-1">
+                    {questionSourceFile && (
+                      <button
+                        type="button"
+                        onClick={() => setPendingQuestionCropFile(questionSourceFile)}
+                        className="inline-flex h-7 items-center gap-1 rounded-md bg-slate-900/80 px-2 text-[11px] font-semibold text-white hover:bg-slate-900"
+                      >
+                        <Crop className="h-3 w-3" aria-hidden="true" />
+                        <span>{tr('Kata', 'Crop')}</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQuestionImageUrl('');
+                        setQuestionSourceFile(null);
+                      }}
+                      aria-label={tr('Ondoa picha ya swali', 'Remove question photo')}
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-red-600/90 text-white hover:bg-red-700"
+                    >
+                      <X className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -1904,6 +1935,7 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
                           <img
                             src={optimizeCloudinaryUrl(opt.imageUrl, 240)}
                             alt={opt.label || `Option ${idx + 1}`}
+                            referrerPolicy="no-referrer"
                             className="w-full h-full object-cover object-top"
                           />
                         ) : (
@@ -1918,8 +1950,8 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
                           </div>
                         )}
                         {isUploading && (
-                          <div className="absolute inset-0 bg-slate-900/60 text-white text-[10px] font-bold flex items-center justify-center">
-                            ...
+                          <div className="absolute inset-0 bg-slate-900/65 text-white flex items-center justify-center">
+                            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
                           </div>
                         )}
                       </div>
@@ -1939,19 +1971,36 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
                           disabled={isUploading}
                           onClick={() => fileInputRefs.current[idx]?.click()}
                           className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-white border border-slate-200 hover:border-[#1D4E89] text-[10px] font-bold text-slate-700 transition-colors"
-                          title={tr('Pakia na kata picha ya mgombea', 'Upload & crop candidate photo')}
+                          title={tr('Pakia picha kupitia Cloudinary', 'Upload photo via Cloudinary')}
                         >
-                          <Upload size={11} />
-                          {opt.imageUrl ? tr('Badili', 'Crop') : tr('Picha', 'Photo')}
+                          <ImagePlus size={11} className="text-emerald-700" />
+                          {opt.imageUrl ? tr('Badili', 'Change') : tr('Picha', 'Photo')}
                         </button>
-                        {opt.imageUrl && (
+                        {opt.imageUrl && optionSourceFiles[idx] && (
                           <button
                             type="button"
                             onClick={() =>
+                              setPendingCropOption({ idx, file: optionSourceFiles[idx] })
+                            }
+                            className="p-1 rounded-md bg-slate-900/80 text-white hover:bg-slate-900"
+                            title={tr('Kata picha', 'Crop photo')}
+                          >
+                            <Crop size={11} />
+                          </button>
+                        )}
+                        {opt.imageUrl && (
+                          <button
+                            type="button"
+                            onClick={() => {
                               setOptions((prev) =>
                                 prev.map((o, i) => (i === idx ? { ...o, imageUrl: undefined } : o))
-                              )
-                            }
+                              );
+                              setOptionSourceFiles((prev) => {
+                                const next = { ...prev };
+                                delete next[idx];
+                                return next;
+                              });
+                            }}
                             className="p-1 rounded-md bg-white border border-slate-200 hover:text-rose-600 text-slate-400"
                             title={tr('Ondoa picha', 'Remove photo')}
                           >
@@ -2198,7 +2247,7 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
                     ? tr('Imefungwa (Kusoma Pekee)', 'Closed (Read Only)')
                     : tr('Imefungwa (Matokeo Pekee)', 'Closed (Results Only)')}
                 </option>
-                <option value="draft">{tr('Rasimu (Mmiliki Pekee)', 'Draft (Owner Only)')}</option>
+                <option value="draft">{tr('Rasimu (Muundaji Pekee)', 'Draft (Creator Only)')}</option>
               </select>
             </div>
 
@@ -2221,7 +2270,7 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
                       {tr('Baada ya Kura Kufungwa', 'After Poll Closes')}
                     </option>
                     <option value="owner_only">
-                      {tr('Mmiliki Pekee (Siri)', 'Owner Only (Private)')}
+                      {tr('Muundaji & Msimamizi Pekee (Siri)', 'Creator & Admin Only (Private)')}
                     </option>
                   </select>
                 </div>
@@ -2280,8 +2329,8 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
                     </div>
                     <div className="text-[11px] text-slate-500">
                       {tr(
-                        'Wapiga kura wengine hawaoni majina ya wenzao, ila mmiliki anaona ukaguzi kamili.',
-                        'Public stays private while owner retains full verified audit visibility.'
+                        'Wapiga kura wengine hawaoni majina ya wenzao kwenye orodha ya umma.',
+                        'Public voters do not see each other’s identities.'
                       )}
                     </div>
                   </div>
@@ -2387,25 +2436,27 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
               </div>
             </label>
 
-            <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50/70 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={isPinned}
-                onChange={(e) => setIsPinned(e.target.checked)}
-                className="mt-0.5 rounded border-slate-300 text-[#1D4E89] focus:ring-[#1D4E89]"
-              />
-              <div>
-                <div className="font-bold text-slate-800">
-                  {tr('Bandika Juu ya Mpoll (Pin)', 'Pin to Top of Mpoll')}
+            {isAdmin && (
+              <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50/70 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isPinned}
+                  onChange={(e) => setIsPinned(e.target.checked)}
+                  className="mt-0.5 rounded border-slate-300 text-[#1D4E89] focus:ring-[#1D4E89]"
+                />
+                <div>
+                  <div className="font-bold text-slate-800">
+                    {tr('Bandika Juu ya Mpoll (Pin)', 'Pin to Top of Mpoll')}
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    {tr(
+                      'Kura hii itaonekana kwanza kabisa watu wakifungua sehemu ya Mpoll.',
+                      'Display this poll first in the Mpoll feed.'
+                    )}
+                  </div>
                 </div>
-                <div className="text-[11px] text-slate-500">
-                  {tr(
-                    'Kura hii itaonekana kwanza kabisa watu wakifungua sehemu ya Mpoll.',
-                    'Display this poll first in the Mpoll feed.'
-                  )}
-                </div>
-              </div>
-            </label>
+              </label>
+            )}
           </div>
 
           {/* Deadline — 5 Minutes to Multi-Year Flexible Controls */}
@@ -2561,8 +2612,8 @@ const InlinePollBuilder: React.FC<InlinePollBuilderProps> = ({
             <ShieldCheck size={16} className="text-emerald-700 shrink-0 mt-0.5" />
             <p className="leading-relaxed">
               {tr(
-                'Ulinzi wa Kura: Kila akaunti moja inaruhusiwa kura moja tu iliyothibitishwa na Firestore. Kama mmiliki, utaona majina ya wapiga kura wote na takwimu kamili.',
-                'Ballot Integrity: Strictly 1 verified ballot per account enforced by Firestore rules. As owner, you can inspect all voter names and analytics.'
+                'Ulinzi wa Kura: Kila akaunti moja inaruhusiwa kura moja tu iliyothibitishwa na Firestore. Kama muundaji wa kura, unaweza kuhariri, kufunga, au kufuatilia matokeo yake.',
+                'Ballot Integrity: Strictly 1 verified ballot per account enforced by Firestore rules. As the poll creator, you can edit, close, and monitor its results.'
               )}
             </p>
           </div>
@@ -2642,6 +2693,7 @@ interface InlinePollResultsPageProps {
   poll: Poll;
   tallies: Record<string, number>;
   isAdmin: boolean;
+  userUid: string | null;
   userBallot: PollBallot | undefined;
   onBack: () => void;
   onEdit: (poll: Poll) => void;
@@ -2653,6 +2705,7 @@ const InlinePollResultsPage: React.FC<InlinePollResultsPageProps> = ({
   poll,
   tallies,
   isAdmin,
+  userUid,
   userBallot,
   onBack,
   onEdit,
@@ -2660,6 +2713,7 @@ const InlinePollResultsPage: React.FC<InlinePollResultsPageProps> = ({
   onToast,
 }) => {
   const { tr, lang, formatTime } = useLanguage();
+  const canManagePoll = Boolean(userUid && (isAdmin || poll.createdBy === userUid));
   const [ballots, setBallots] = useState<PollBallot[]>([]);
   const [loadingBallots, setLoadingBallots] = useState(false);
   const [voterSearch, setVoterSearch] = useState('');
@@ -3390,15 +3444,17 @@ const InlinePollResultsPage: React.FC<InlinePollResultsPageProps> = ({
               </button>
             )}
             {isAdmin && (
+              <button
+                type="button"
+                onClick={() => exportPollResultsCsv(poll, tallies, ballots, lang)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold transition-colors whitespace-nowrap shrink-0"
+              >
+                <FileSpreadsheet size={14} />
+                {tr('CSV', 'CSV')}
+              </button>
+            )}
+            {canManagePoll && (
               <>
-                <button
-                  type="button"
-                  onClick={() => exportPollResultsCsv(poll, tallies, ballots, lang)}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold transition-colors whitespace-nowrap shrink-0"
-                >
-                  <FileSpreadsheet size={14} />
-                  {tr('CSV', 'CSV')}
-                </button>
                 <button
                   type="button"
                   onClick={() => onEdit(poll)}
@@ -3426,7 +3482,7 @@ const InlinePollResultsPage: React.FC<InlinePollResultsPageProps> = ({
           </p>
         )}
 
-        {confirmDelete && isAdmin && (
+        {confirmDelete && canManagePoll && (
           <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 flex flex-wrap items-center justify-between gap-2 text-xs">
             <span className="font-bold text-rose-900">
               {tr(
@@ -4913,12 +4969,13 @@ const PollCard: React.FC<PollCardProps> = ({
   const [, setCountdownTick] = useState(0);
 
   const isOpenOpinion = poll.questionType === 'open_opinion';
+  const canManagePoll = Boolean(user && !isSuspended && (isAdmin || poll.createdBy === user.uid));
   const hasVoted = Boolean(userBallot && userBallot.selectedOptionIds.length > 0);
   const canSeeResults =
     !isOpenOpinion &&
     Boolean(user) &&
-    canViewPollResults(poll, hasVoted, isAdmin, Date.now(), Boolean(user));
-  const showPercentages = isAdmin || poll.showLivePercentages !== false;
+    canViewPollResults(poll, hasVoted, isAdmin, Date.now(), Boolean(user), user?.uid || null);
+  const showPercentages = canManagePoll || poll.showLivePercentages !== false;
   const isOpen = isPollEffectivelyOpen(poll);
   const expired = isPollExpired(poll);
   const canCastOrUpdate =
@@ -5369,7 +5426,7 @@ const PollCard: React.FC<PollCardProps> = ({
           </div>
 
           {/* Optional Quorum / Turnout Goal Meter (Hidden from guests) */}
-          {Boolean(user) && !isOpenOpinion && quorumTarget > 0 && (poll.showVoterCount || isAdmin) && (
+          {Boolean(user) && !isOpenOpinion && quorumTarget > 0 && (poll.showVoterCount || canManagePoll) && (
             <div className="pt-1.5 space-y-1 text-left">
               <div className="flex items-center justify-between text-[11px] text-slate-600 tabular-nums">
                 <span className="inline-flex items-center gap-1 font-semibold">
@@ -5400,6 +5457,7 @@ const PollCard: React.FC<PollCardProps> = ({
             <img
               src={optimizeCloudinaryUrl(poll.imageUrl, 1200)}
               alt={poll.question}
+              referrerPolicy="no-referrer"
               className="w-full max-h-[420px] object-contain mx-auto transition-transform duration-300 group-hover:scale-[1.01]"
             />
             <span className="absolute bottom-2.5 right-2.5 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900/70 text-white text-[11px] font-semibold opacity-0 group-hover:opacity-100 transition-opacity">
@@ -5995,7 +6053,7 @@ const PollCard: React.FC<PollCardProps> = ({
               </span>
             ) : (
               <>
-                {Boolean(user) && (poll.showVoterCount || isAdmin) && (
+                {Boolean(user) && (poll.showVoterCount || canManagePoll) && (
                   <span className="inline-flex items-center gap-1 font-semibold">
                     <Users size={13} className="text-slate-400" />
                     {poll.totalBallots.toLocaleString()} {tr('wapiga kura', 'voters')}
@@ -6009,7 +6067,7 @@ const PollCard: React.FC<PollCardProps> = ({
                     className={`inline-flex items-center gap-1.5 font-bold hover:underline ${themePalette.badgeTextClass}`}
                   >
                     <BarChart3 size={14} />
-                    {isAdmin
+                    {canManagePoll
                       ? tr('Matokeo, Chati & Fomu Rasmi', 'Results, Charts & Official Sheet')
                       : tr('Matokeo & Fomu Rasmi', 'Results & Official Sheet')}
                   </button>
@@ -6072,19 +6130,21 @@ const PollCard: React.FC<PollCardProps> = ({
             )}
 
             {isAdmin && (
+              <button
+                type="button"
+                onClick={handleTogglePin}
+                className={`p-1.5 rounded-lg border text-xs transition-colors ${
+                  poll.isPinned
+                    ? 'bg-amber-50 border-amber-200 text-amber-700'
+                    : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
+                }`}
+                title={poll.isPinned ? tr('Bandua', 'Unpin') : tr('Bandika juu', 'Pin to top')}
+              >
+                <Pin size={13} />
+              </button>
+            )}
+            {canManagePoll && (
               <>
-                <button
-                  type="button"
-                  onClick={handleTogglePin}
-                  className={`p-1.5 rounded-lg border text-xs transition-colors ${
-                    poll.isPinned
-                      ? 'bg-amber-50 border-amber-200 text-amber-700'
-                      : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
-                  }`}
-                  title={poll.isPinned ? tr('Bandua', 'Unpin') : tr('Bandika juu', 'Pin to top')}
-                >
-                  <Pin size={13} />
-                </button>
                 <button
                   type="button"
                   onClick={handleToggleOpenClose}
@@ -6150,7 +6210,7 @@ const PollCard: React.FC<PollCardProps> = ({
         )}
 
         {/* Inline Delete Confirmation (NO POPUP) */}
-        {isAdmin && confirmDeleteOpen && (
+        {canManagePoll && confirmDeleteOpen && (
           <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 flex flex-wrap items-center justify-between gap-2 text-xs">
             <span className="font-bold text-rose-900">
               {isOpenOpinion
@@ -6208,6 +6268,7 @@ const PollCard: React.FC<PollCardProps> = ({
             <img
               src={optimizeCloudinaryUrl(poll.imageUrl, 1800)}
               alt={poll.question}
+              referrerPolicy="no-referrer"
               onClick={(e) => e.stopPropagation()}
               className="max-w-full max-h-[88vh] object-contain rounded-xl shadow-2xl"
             />
@@ -6225,6 +6286,7 @@ interface InlineTournamentBuilderProps {
   user: User;
   userDisplayName: string;
   userPhoto: string;
+  isAdmin: boolean;
   onCancel: () => void;
   onCreated: (tournamentId: string) => void;
   onToast: (text: string, kind?: 'success' | 'error') => void;
@@ -6244,6 +6306,7 @@ const InlineTournamentBuilder: React.FC<InlineTournamentBuilderProps> = ({
   user,
   userDisplayName,
   userPhoto,
+  isAdmin,
   onCancel,
   onCreated,
   onToast,
@@ -6264,6 +6327,9 @@ const InlineTournamentBuilder: React.FC<InlineTournamentBuilderProps> = ({
   const [pasteText, setPasteText] = useState('');
   const [candidates, setCandidates] = useState<TournamentCandidate[]>([]);
   const [candidateSearch, setCandidateSearch] = useState('');
+  const [uploadingCandId, setUploadingCandId] = useState<string | null>(null);
+  const [pendingCandCrop, setPendingCandCrop] = useState<{ candId: string; file: File } | null>(null);
+  const candFileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const [submitting, setSubmitting] = useState(false);
 
   const maleCount = useMemo(
@@ -6367,11 +6433,43 @@ const InlineTournamentBuilder: React.FC<InlineTournamentBuilderProps> = ({
     }
   };
 
+  const handleCandPhotoFileSelected = (candId: string, file: File | undefined) => {
+    const inputEl = candFileInputRefs.current[candId];
+    if (inputEl) inputEl.value = '';
+    if (!file) return;
+    if (file.type === 'image/gif') {
+      void uploadTournamentCandPhoto(candId, file);
+      return;
+    }
+    setPendingCandCrop({ candId, file });
+  };
+
+  const uploadTournamentCandPhoto = async (candId: string, croppedFile: File) => {
+    setUploadingCandId(candId);
+    try {
+      const readyFile = await prepareSharedImageFile(croppedFile);
+      const url = await uploadImageToCloudinary(readyFile);
+      updateCandidate(candId, { imageUrl: url });
+      onToast(
+        tr('Picha ya mgombea imepakiwa kupitia Cloudinary!', 'Candidate photo uploaded via Cloudinary!'),
+        'success'
+      );
+    } catch (err) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : tr('Imeshindwa kupakia picha kwenda Cloudinary.', 'Failed to upload image to Cloudinary.');
+      onToast(msg, 'error');
+    } finally {
+      setUploadingCandId(null);
+    }
+  };
+
   const handleLaunchTournament = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (title.trim().length < 4) {
+    if (title.trim().length < 1) {
       onToast(
-        tr('Andika kichwa cha mchakato (angalau herufi 4).', 'Enter a process title (min 4 chars).'),
+        tr('Andika kichwa cha mchakato.', 'Enter a process title.'),
         'error'
       );
       return;
@@ -6388,21 +6486,27 @@ const InlineTournamentBuilder: React.FC<InlineTournamentBuilderProps> = ({
         name: c.name.trim() || 'Mgombea',
         positionTitle: (c.positionTitle || positionTitle).trim() || undefined,
       }));
-      const id = await createPollTournament(user, userDisplayName, userPhoto, {
-        title: title.trim(),
-        description: description.trim(),
-        institutionName: institutionName.trim(),
-        category,
-        positionTitle: positionTitle.trim(),
-        pollStyle,
-        targetWinnersCount,
-        useGenderQuota,
-        requiredMaleCount: useGenderQuota ? requiredMaleCount : 0,
-        requiredFemaleCount: useGenderQuota ? requiredFemaleCount : 0,
-        groupSize,
-        roundDurationMinutes,
-        candidates: cleanCands,
-      });
+      const id = await createPollTournament(
+        user,
+        userDisplayName,
+        userPhoto,
+        {
+          title: title.trim(),
+          description: description.trim(),
+          institutionName: institutionName.trim(),
+          category,
+          positionTitle: positionTitle.trim(),
+          pollStyle,
+          targetWinnersCount,
+          useGenderQuota,
+          requiredMaleCount: useGenderQuota ? requiredMaleCount : 0,
+          requiredFemaleCount: useGenderQuota ? requiredFemaleCount : 0,
+          groupSize,
+          roundDurationMinutes,
+          candidates: cleanCands,
+        },
+        isAdmin
+      );
       onToast(
         tr(
           'Mchakato wa mtoano umeanza! Kadi za kura za Hatua ya 1 zimechapishwa.',
@@ -6802,7 +6906,7 @@ const InlineTournamentBuilder: React.FC<InlineTournamentBuilderProps> = ({
                 )}
               </div>
 
-              {/* Scrollable Roster with 1-Tap Gender & Role Editing */}
+              {/* Scrollable Roster with Cloudinary Portrait, 1-Tap Gender & Role Editing */}
               <div className="max-h-[340px] overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100">
                 {visibleCandidates.map((cand, idx) => (
                   <div
@@ -6812,6 +6916,48 @@ const InlineTournamentBuilder: React.FC<InlineTournamentBuilderProps> = ({
                     <span className="text-[11px] font-extrabold text-slate-400 w-7 text-center tabular-nums shrink-0">
                       #{idx + 1}
                     </span>
+
+                    <input
+                      ref={(el) => {
+                        candFileInputRefs.current[cand.id] = el;
+                      }}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/gif"
+                      className="hidden"
+                      onChange={(e) => handleCandPhotoFileSelected(cand.id, e.target.files?.[0])}
+                    />
+                    <div className="relative shrink-0">
+                      <button
+                        type="button"
+                        disabled={uploadingCandId === cand.id}
+                        onClick={() => candFileInputRefs.current[cand.id]?.click()}
+                        title={tr('Pakia picha ya mgombea (Cloudinary)', 'Upload candidate photo (Cloudinary)')}
+                        className="w-8 h-8 rounded-lg border border-slate-200 bg-slate-50 hover:border-[#1D4E89] overflow-hidden flex items-center justify-center text-slate-500 transition-colors"
+                      >
+                        {uploadingCandId === cand.id ? (
+                          <Loader2 size={13} className="animate-spin text-[#1D4E89]" />
+                        ) : cand.imageUrl ? (
+                          <img
+                            src={optimizeCloudinaryUrl(cand.imageUrl, 120)}
+                            alt={cand.name}
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full object-cover object-top"
+                          />
+                        ) : (
+                          <ImagePlus size={13} className="text-emerald-700" />
+                        )}
+                      </button>
+                      {cand.imageUrl && (
+                        <button
+                          type="button"
+                          onClick={() => updateCandidate(cand.id, { imageUrl: undefined })}
+                          title={tr('Ondoa picha', 'Remove photo')}
+                          className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-rose-600 text-white flex items-center justify-center shadow-2xs"
+                        >
+                          <X size={9} />
+                        </button>
+                      )}
+                    </div>
 
                     <input
                       type="text"
@@ -6926,7 +7072,7 @@ const InlineTournamentBuilder: React.FC<InlineTournamentBuilderProps> = ({
           </button>
           <button
             type="submit"
-            disabled={submitting || !roadmap.valid}
+            disabled={submitting || !roadmap.valid || uploadingCandId !== null}
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#0A2540] hover:bg-[#1D4E89] disabled:opacity-50 text-white text-xs sm:text-sm font-extrabold shadow-sm transition-colors"
           >
             <GitBranch size={15} />
@@ -6936,6 +7082,27 @@ const InlineTournamentBuilder: React.FC<InlineTournamentBuilderProps> = ({
           </button>
         </div>
       </div>
+
+      <ImageResizeModal
+        file={pendingCandCrop?.file || null}
+        defaultPreset="1:1"
+        showCircleGuide
+        showLivePreview
+        titleSw="Kata na Panga Picha ya Mgombea"
+        titleEn="Crop & Frame Candidate Photo"
+        subtitleSw="Chagua sehemu halisi — picha itapakiwa kupitia Cloudinary."
+        subtitleEn="Frame accurately — the photo will upload via Cloudinary."
+        confirmLabelSw="Kata & Pakia Picha"
+        confirmLabelEn="Crop & Upload Photo"
+        onCancel={() => setPendingCandCrop(null)}
+        onConfirm={(croppedFile) => {
+          const targetId = pendingCandCrop?.candId;
+          setPendingCandCrop(null);
+          if (targetId) {
+            void uploadTournamentCandPhoto(targetId, croppedFile);
+          }
+        }}
+      />
     </form>
   );
 };
@@ -6951,6 +7118,7 @@ interface TournamentTrackerCardProps {
   userDisplayName: string;
   userPhoto: string;
   isAdmin: boolean;
+  isSuspended?: boolean;
   isSelectedFilter: boolean;
   onToggleFilter: () => void;
   onFocusGroupPoll?: (pollId: string) => void;
@@ -6965,12 +7133,16 @@ const TournamentTrackerCard: React.FC<TournamentTrackerCardProps> = ({
   userDisplayName,
   userPhoto,
   isAdmin,
+  isSuspended = false,
   isSelectedFilter,
   onToggleFilter,
   onFocusGroupPoll,
   onToast,
 }) => {
   const { tr } = useLanguage();
+  const canManageTournament = Boolean(
+    user && (!isSuspended || isAdmin) && (isAdmin || tournament.createdBy === user.uid)
+  );
   const [advancing, setAdvancing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -7013,7 +7185,8 @@ const TournamentTrackerCard: React.FC<TournamentTrackerCardProps> = ({
         allPolls,
         user,
         userDisplayName,
-        userPhoto
+        userPhoto,
+        isAdmin
       );
       onToast(tr(res.messageSw, res.messageEn), 'success');
     } catch (err) {
@@ -7029,7 +7202,7 @@ const TournamentTrackerCard: React.FC<TournamentTrackerCardProps> = ({
   const handleDelete = async () => {
     setDeleting(true);
     try {
-      await deletePollTournament(tournament, linkedPolls);
+      await deletePollTournament(tournament, linkedPolls, isAdmin);
       onToast(tr('Mchakato wa mtoano na kadi zake umefutwa.', 'Tournament deleted.'), 'success');
     } catch (err) {
       onToast(
@@ -7126,7 +7299,7 @@ const TournamentTrackerCard: React.FC<TournamentTrackerCardProps> = ({
                 : tr('Onyesha Kura Zake', 'Filter Ballots')}
             </button>
 
-            {isAdmin && (
+            {canManageTournament && (
               <button
                 type="button"
                 onClick={() => setConfirmDelete((v) => !v)}
@@ -7212,7 +7385,7 @@ const TournamentTrackerCard: React.FC<TournamentTrackerCardProps> = ({
                             `This is the Final stage! Vote on the ${activeStage.groups.length} ballot(s) to crown ${tournament.targetWinnersCount} winner(s).`
                           )
                         : tr(
-                            `Piga kura kwenye makundi ${activeStage.groups.length} hapo chini. Kura zikikamilika, mmiliki atabofya kuchakata hatua na kufungua mchujo unaofuata kiotomatiki.`,
+                            `Piga kura kwenye makundi ${activeStage.groups.length} hapo chini. Kura zikikamilika, muundaji au msimamizi atabofya kuchakata hatua na kufungua mchujo unaofuata kiotomatiki.`,
                             `Vote in the ${activeStage.groups.length} group(s) below. Once done, advance to automatically launch the next round.`
                           )}
                   </p>
@@ -7260,8 +7433,8 @@ const TournamentTrackerCard: React.FC<TournamentTrackerCardProps> = ({
                 })}
               </div>
 
-              {/* Admin Deterministic Stage Resolution Button */}
-              {isAdmin && (
+              {/* Creator / Admin Deterministic Stage Resolution Button */}
+              {canManageTournament && (
                 <div className="pt-2 border-t border-[#1D4E89]/15 flex flex-wrap items-center justify-between gap-2.5">
                   <div className="text-[11px] text-slate-600 tabular-nums">
                     {tr('Jumla ya kura hatua hii:', 'Stage ballots cast:')}{' '}
@@ -7307,7 +7480,7 @@ const TournamentTrackerCard: React.FC<TournamentTrackerCardProps> = ({
         )}
 
         {/* Inline Delete Confirmation */}
-        {isAdmin && confirmDelete && (
+        {canManageTournament && confirmDelete && (
           <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 flex flex-wrap items-center justify-between gap-2 text-xs">
             <span className="font-bold text-rose-900">
               {tr(
@@ -7352,6 +7525,7 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
   userPhoto,
   isAdmin,
   isSuspended,
+  hideCreateForUsers = false,
   selectedPollId,
   onClearSelectedPoll,
   mpollBgTheme = 'darkblue',
@@ -7426,9 +7600,59 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
     }
   };
 
+  const canCreatePolls = !hideCreateForUsers || isAdmin;
+
+  useEffect(() => {
+    if (!canCreatePolls && (viewMode === 'tournament' || (viewMode === 'builder' && !editingPoll))) {
+      setViewMode('list');
+    }
+  }, [canCreatePolls, viewMode, editingPoll]);
+
   const openBuilderForNew = () => {
+    if (!canCreatePolls) {
+      onToast(
+        tr('Kutengeneza Mpoll mpya kumezimwa kwa muda na mmiliki.', 'Creating new Mpolls is currently restricted by the owner.'),
+        'error'
+      );
+      return;
+    }
+    if (!user) {
+      onSignIn('post');
+      return;
+    }
+    if (isSuspended && !isAdmin) {
+      onToast(
+        tr('Akaunti yako imezuiwa kutengeneza Mpoll.', 'Your account is suspended from creating Mpolls.'),
+        'error'
+      );
+      return;
+    }
     setEditingPoll(null);
     setViewMode('builder');
+    scrollToTop();
+  };
+
+  const openTournamentStudio = () => {
+    if (!canCreatePolls) {
+      onToast(
+        tr('Kuanzisha mchakato mpya wa Mtoano kumezimwa na mmiliki.', 'Creating new tournaments is currently restricted by the owner.'),
+        'error'
+      );
+      return;
+    }
+    if (!user) {
+      onSignIn('post');
+      return;
+    }
+    if (isSuspended && !isAdmin) {
+      onToast(
+        tr('Akaunti yako imezuiwa kuanzisha Mtoano.', 'Your account is suspended from creating tournaments.'),
+        'error'
+      );
+      return;
+    }
+    setEditingPoll(null);
+    setViewMode('tournament');
     scrollToTop();
   };
 
@@ -7466,14 +7690,15 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
       hasVoted,
       isAdmin,
       Date.now(),
-      Boolean(user)
+      Boolean(user),
+      user.uid
     );
     return subscribePollTallies(activeResultsPoll, allowed, setResultsTallies);
   }, [viewMode, activeResultsPoll, user, userBallots, isAdmin]);
 
   const handleDeletePollInline = async (poll: Poll) => {
     try {
-      await deletePoll(poll);
+      await deletePoll(poll, isAdmin);
       onToast(tr('Mpoll imefutwa.', 'Mpoll deleted.'), 'success');
       if (resultsPollId === poll.id) {
         setResultsPollId(null);
@@ -7540,8 +7765,8 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
     [polls]
   );
 
-  // SUB-VIEW 1: INLINE MPOLL BUILDER (ZERO POPUPS)
-  if (viewMode === 'builder' && isAdmin && user) {
+  // SUB-VIEW 1: INLINE MPOLL BUILDER
+  if (viewMode === 'builder' && user && (!isSuspended || isAdmin) && (canCreatePolls || Boolean(editingPoll))) {
     return (
       <div className="max-w-4xl mx-auto px-3 sm:px-5 py-4 sm:py-6">
         <InlinePollBuilder
@@ -7549,6 +7774,7 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
           user={user}
           userDisplayName={userDisplayName}
           userPhoto={userPhoto}
+          isAdmin={isAdmin}
           onCancel={() => {
             setEditingPoll(null);
             setViewMode('list');
@@ -7560,9 +7786,7 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
             scrollToTop();
           }}
           onOpenTournamentStudio={() => {
-            setEditingPoll(null);
-            setViewMode('tournament');
-            scrollToTop();
+            openTournamentStudio();
           }}
           onToast={onToast}
         />
@@ -7571,13 +7795,14 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
   }
 
   // SUB-VIEW 1B: INLINE DETERMINISTIC MULTI-STAGE TOURNAMENT STUDIO
-  if (viewMode === 'tournament' && isAdmin && user) {
+  if (viewMode === 'tournament' && user && (!isSuspended || isAdmin) && canCreatePolls) {
     return (
       <div className="max-w-4xl mx-auto px-3 sm:px-5 py-4 sm:py-6">
         <InlineTournamentBuilder
           user={user}
           userDisplayName={userDisplayName}
           userPhoto={userPhoto}
+          isAdmin={isAdmin}
           onCancel={() => {
             setViewMode('list');
             scrollToTop();
@@ -7601,6 +7826,7 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
           poll={activeResultsPoll}
           tallies={resultsTallies}
           isAdmin={isAdmin}
+          userUid={user.uid}
           userBallot={userBallots[activeResultsPoll.id]}
           onBack={() => {
             setViewMode('list');
@@ -7706,15 +7932,11 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
               </button>
             )}
 
-            {isAdmin && (
+            {canCreatePolls && (
               <>
                 <button
                   type="button"
-                  onClick={() => {
-                    setEditingPoll(null);
-                    setViewMode('tournament');
-                    scrollToTop();
-                  }}
+                  onClick={openTournamentStudio}
                   title={tr('Mchakato wa Mtoano wa Viongozi (30–300)', 'Multi-Stage Leader Elimination')}
                   className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl border text-xs font-bold transition-colors shrink-0 ${
                     isDarkBlue
@@ -7955,6 +8177,7 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
                 userDisplayName={userDisplayName}
                 userPhoto={userPhoto}
                 isAdmin={isAdmin}
+                isSuspended={isSuspended}
                 isSelectedFilter={selectedTournamentIdFilter === t.id}
                 onToggleFilter={() =>
                   setSelectedTournamentIdFilter((prev) => (prev === t.id ? null : t.id))
@@ -8008,15 +8231,20 @@ export const VotingPollsView: React.FC<VotingPollsViewProps> = ({
                 : tr('Hakuna Mpoll zilizopatikana.', 'No Mpolls found.')}
             </h3>
             <p className={`text-xs ${isDarkBlue ? 'text-sky-100/75' : 'text-slate-500'}`}>
-              {isAdmin && !selectedPollId
-                ? tr(
-                    'Bofya "Tengeneza Mpoll Mpya" kuanzisha kura au uchaguzi.',
-                    'Click "Create New Mpoll" to launch your first poll or election.'
-                  )
+              {!selectedPollId
+                ? canCreatePolls
+                  ? tr(
+                      'Bofya "Tengeneza Mpoll Mpya" kuanzisha kura au uchaguzi.',
+                      'Click "Create New Mpoll" to launch your first poll or election.'
+                    )
+                  : tr(
+                      'Kwa sasa hakuna kura zilizo wazi za kupigia kura.',
+                      'There are currently no polls available to vote on.'
+                    )
                 : tr('Jaribu kubadili utafutaji au vichujio.', 'Try adjusting your search or filters.')}
             </p>
           </div>
-          {isAdmin && !selectedPollId && (
+          {!selectedPollId && canCreatePolls && (
             <button
               type="button"
               onClick={openBuilderForNew}

@@ -72,6 +72,7 @@ import {
   seedStarterTopics,
   submitReport,
   subscribeContentRetentionSettings,
+  fetchPlatformUsersCount,
   subscribeSiteNavSettings,
   syncUserProfile,
   toggleTopicPin,
@@ -80,6 +81,7 @@ import {
   updateHideVideoTabForUsers,
   updatePrivatePhoneNumber,
   updateReportStatus,
+  updateSiteNavSettings,
   updateTopicStatus,
   updateUserProfile,
   updateUserProfilePhoto,
@@ -197,6 +199,7 @@ function ForumShell() {
   const [reports, setReports] = useState<Report[]>([]);
   const [userNotifications, setUserNotifications] = useState<UserNotification[]>([]);
   const [hideVideoTabForUsers, setHideVideoTabForUsers] = useState(false);
+  const [hideMpollTabForUsers, setHideMpollTabForUsers] = useState(false);
   const [retentionSettings, setRetentionSettings] = useState<ContentRetentionSettings>(() => ({
     ...DEFAULT_CONTENT_RETENTION_SETTINGS,
   }));
@@ -229,6 +232,8 @@ function ForumShell() {
     }
   });
   const [openAdminMembersSignal, setOpenAdminMembersSignal] = useState(0);
+  const [totalUsersCount, setTotalUsersCount] = useState<number | null>(null);
+  const [loadingUsersCount, setLoadingUsersCount] = useState(false);
 
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [loadingChat, setLoadingChat] = useState(true);
@@ -575,40 +580,61 @@ function ForumShell() {
     if (!authReady) return;
     setLoadingTopics(true);
     const path = 'topics';
-    const q = query(collection(db, 'topics'), where('status', 'in', ['open', 'locked']));
+    const mapTopicDoc = (d: { id: string; data: () => Record<string, unknown> }): Topic => {
+      const data = d.data();
+      return {
+        id: d.id,
+        title: String(data.title || ''),
+        body: String(data.body || ''),
+        category: data.category as Topic['category'],
+        tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
+        authorId: String(data.authorId || ''),
+        authorName: String(data.authorName || 'Mwanachama'),
+        authorPhoto: String(data.authorPhoto || ''),
+        status: (data.status as Topic['status']) || 'open',
+        isPinned: Boolean(data.isPinned),
+        repliesCount: Number(data.repliesCount || 0),
+        upvotesCount: Number(data.upvotesCount || 0),
+        acceptedReplyId: String(data.acceptedReplyId || ''),
+        company: String(data.company || ''),
+        location: String(data.location || ''),
+        jobType: String(data.jobType || ''),
+        deadline: String(data.deadline || ''),
+        applyInfo: String(data.applyInfo || ''),
+        coverImage: String(data.coverImage || ''),
+        images: Array.isArray(data.images) ? data.images.map(String).filter(Boolean) : [],
+        createdAt: (data.createdAt as Topic['createdAt']) || null,
+        updatedAt: (data.updatedAt as Topic['updatedAt']) || null,
+        lastActivityAt: ((data.lastActivityAt || data.createdAt) as Topic['lastActivityAt']) || null,
+      };
+    };
 
-    const unsub = onSnapshot(
-      q,
+    let publicTopics: Topic[] = [];
+    let ownTopics: Topic[] = [];
+
+    const mergeTopicLists = () => {
+      const byId = new Map<string, Topic>();
+      for (const item of publicTopics) {
+        if (item.status !== 'archived') byId.set(item.id, item);
+      }
+      for (const item of ownTopics) {
+        if (item.status !== 'archived') byId.set(item.id, item);
+      }
+      const merged = Array.from(byId.values()).sort((a, b) => {
+        const msA = a.createdAt ? a.createdAt.toMillis() : Date.now();
+        const msB = b.createdAt ? b.createdAt.toMillis() : Date.now();
+        return msB - msA;
+      });
+      setTopics(merged);
+      setLoadingTopics(false);
+    };
+
+    const qPublic = query(collection(db, path), where('status', 'in', ['open', 'locked']));
+    const unsubPublic = onSnapshot(
+      qPublic,
       (snapshot) => {
-        const list: Topic[] = snapshot.docs.map((d) => {
-          const data = d.data();
-          return {
-            id: d.id,
-            title: data.title,
-            body: data.body,
-            category: data.category,
-            tags: Array.isArray(data.tags) ? data.tags : [],
-            authorId: data.authorId,
-            authorName: data.authorName,
-            authorPhoto: data.authorPhoto || '',
-            status: data.status,
-            isPinned: Boolean(data.isPinned),
-            repliesCount: Number(data.repliesCount || 0),
-            upvotesCount: Number(data.upvotesCount || 0),
-            acceptedReplyId: data.acceptedReplyId || '',
-            company: data.company || '',
-            location: data.location || '',
-            jobType: data.jobType || '',
-            deadline: data.deadline || '',
-            applyInfo: data.applyInfo || '',
-            coverImage: data.coverImage || '',
-            createdAt: data.createdAt || null,
-            updatedAt: data.updatedAt || null,
-            lastActivityAt: data.lastActivityAt || data.createdAt || null,
-          };
-        });
-        setTopics(list);
-        setLoadingTopics(false);
+        publicTopics = snapshot.docs.map((d) => mapTopicDoc(d));
+        mergeTopicLists();
       },
       (error) => {
         setLoadingTopics(false);
@@ -616,8 +642,26 @@ function ForumShell() {
       }
     );
 
-    return () => unsub();
-  }, [authReady]);
+    let unsubOwn: (() => void) | null = null;
+    if (user?.uid) {
+      const qOwn = query(collection(db, path), where('authorId', '==', user.uid));
+      unsubOwn = onSnapshot(
+        qOwn,
+        (snapshot) => {
+          ownTopics = snapshot.docs.map((d) => mapTopicDoc(d));
+          mergeTopicLists();
+        },
+        () => {
+          // Non-fatal fallback if own topics listener encounters temporary error
+        }
+      );
+    }
+
+    return () => {
+      unsubPublic();
+      if (unsubOwn) unsubOwn();
+    };
+  }, [authReady, user?.uid]);
 
   // Real-time Malosha Reels short videos & photo-music feed listener (plus signed-in author's private posts)
   useEffect(() => {
@@ -742,12 +786,13 @@ function ForumShell() {
     };
   }, [authReady, user, videos]);
 
-  // Real-time community polls listener (open & closed public polls + drafts for owner)
+  // Real-time community polls listener (open & closed public polls + own drafts)
   useEffect(() => {
     if (!authReady) return;
     setLoadingPolls(true);
     const unsub = subscribePolls(
       isAdmin,
+      user?.uid || null,
       (list) => {
         setPolls(list);
         setLoadingPolls(false);
@@ -757,7 +802,7 @@ function ForumShell() {
       }
     );
     return () => unsub();
-  }, [authReady, isAdmin]);
+  }, [authReady, isAdmin, user?.uid]);
 
   // Sync current user's ballots across loaded polls
   useEffect(() => {
@@ -1648,6 +1693,7 @@ function ForumShell() {
       if (currentlyViewedBoard === board) return 0;
       const cutoff = boardLastSeen[board] || 0;
       return topics.filter((t) => {
+        if (t.status === 'private') return false;
         if (normalizeBoardCategory(t.category) !== board) return false;
         if (user?.uid && t.authorId === user.uid) return false;
         if (readTopicIds.has(t.id)) return false;
@@ -1707,14 +1753,32 @@ function ForumShell() {
     [userNotifications]
   );
 
-  // Real-time owner-controlled navigation setting (hideVideoTabForUsers)
+  // Real-time owner-controlled navigation setting (hideVideoTabForUsers & hideMpollTabForUsers)
   useEffect(() => {
     if (!authReady) return;
     const unsub = subscribeSiteNavSettings((settings) => {
       setHideVideoTabForUsers(settings.hideVideoTabForUsers);
+      setHideMpollTabForUsers(Boolean(settings.hideMpollTabForUsers));
     });
     return () => unsub();
   }, [authReady]);
+
+  const refreshPlatformUsersCount = useCallback(async () => {
+    setLoadingUsersCount(true);
+    try {
+      const count = await fetchPlatformUsersCount(isAdminRef.current);
+      setTotalUsersCount(count);
+    } catch {
+      // Keep previous count if fetch fails
+    } finally {
+      setLoadingUsersCount(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!authReady) return;
+    void refreshPlatformUsersCount();
+  }, [authReady, isAdmin, user?.uid, adminRecentSignups.length, refreshPlatformUsersCount]);
 
   // Owner-only real-time content auto-retention settings listener (Kijiweni & Video)
   useEffect(() => {
@@ -1906,6 +1970,7 @@ function ForumShell() {
   );
 
   const hideVideoTabForCurrentUser = hideVideoTabForUsers && !isAdmin;
+  const hideCreateMpollForCurrentUser = hideMpollTabForUsers && !isAdmin;
 
   // Redirect non-admin users away from Video tab immediately if owner hides Video
   useEffect(() => {
@@ -2397,7 +2462,11 @@ function ForumShell() {
           return;
         }
         const data = snap.data();
-        if (!isAdmin && data.status !== 'open' && data.status !== 'locked') {
+        const isAuthorViewingOwnPrivate =
+          Boolean(user?.uid) && data.authorId === user?.uid && data.status === 'private';
+        const isPublicStatus = data.status === 'open' || data.status === 'locked';
+        const isAdminNonPrivate = isAdmin && data.status !== 'private';
+        if (!isPublicStatus && !isAuthorViewingOwnPrivate && !isAdminNonPrivate) {
           setSharedTopicFallback(null);
           setSelectedTopicId(null);
           setActiveTab('kijiweni');
@@ -2424,6 +2493,7 @@ function ForumShell() {
           deadline: data.deadline || '',
           applyInfo: data.applyInfo || '',
           coverImage: data.coverImage || '',
+          images: Array.isArray(data.images) ? data.images.map(String).filter(Boolean) : [],
           createdAt: data.createdAt || null,
           updatedAt: data.updatedAt || null,
           lastActivityAt: data.lastActivityAt || data.createdAt || null,
@@ -2445,7 +2515,7 @@ function ForumShell() {
     return () => {
       cancelled = true;
     };
-  }, [authReady, selectedTopicId, topics, isAdmin]);
+  }, [authReady, selectedTopicId, topics, isAdmin, user?.uid]);
 
   useEffect(() => {
     if (!authReady || !user) {
@@ -2612,6 +2682,35 @@ function ForumShell() {
     }
   }, [user, isAdmin, hideVideoTabForUsers, showToast, tr]);
 
+  const handleToggleHideMpollTab = useCallback(async () => {
+    if (!user || !isAdmin) return;
+    const next = !hideMpollTabForUsers;
+    try {
+      await updateSiteNavSettings(user.uid, {
+        hideVideoTabForUsers,
+        hideMpollTabForUsers: next,
+      });
+      showToast(
+        next
+          ? tr(
+              'Kitufe cha "Tengeneza Mpoll Mpya" kimefichwa kwa watumiaji wengine (wanaweza kupiga kura tu).',
+              '"Create New Mpoll" button is now hidden from other users (voting remains open).'
+            )
+          : tr(
+              'Kitufe cha "Tengeneza Mpoll Mpya" kimewekwa wazi kwa watumiaji wote.',
+              '"Create New Mpoll" button is now visible to everyone.'
+            )
+      );
+    } catch (err) {
+      showToast(
+        err instanceof Error
+          ? err.message
+          : tr('Imeshindwa kubadilisha uonekano wa kitufe cha Mpoll.', 'Failed to update Mpoll button visibility.'),
+        'error'
+      );
+    }
+  }, [user, isAdmin, hideMpollTabForUsers, hideVideoTabForUsers, showToast, tr]);
+
   const handleOpenAdminMembers = useCallback(() => {
     setAuthPromptReason(null);
     setSelectedTopicId(null);
@@ -2756,10 +2855,12 @@ function ForumShell() {
       return;
     }
 
-    const newlyPublished = topics.find((t) => !knownTopicIdsRef.current.has(t.id));
+    const newlyPublished = topics.find(
+      (t) => !knownTopicIdsRef.current.has(t.id) && t.status !== 'private'
+    );
     knownTopicIdsRef.current = new Set(topics.map((t) => t.id));
 
-    if (newlyPublished && newlyPublished.authorId !== user?.uid) {
+    if (newlyPublished && newlyPublished.authorId !== user?.uid && newlyPublished.status !== 'private') {
       const board = normalizeBoardCategory(newlyPublished.category);
       const alertTitle =
         board === 'Makala'
@@ -2832,6 +2933,7 @@ function ForumShell() {
     deadline?: string;
     applyInfo?: string;
     coverImage?: string;
+    images?: string[];
   }) => {
     if (!user || blockIfSuspended()) return;
     if (editingTopic) {
@@ -2854,6 +2956,8 @@ function ForumShell() {
       body: string;
       tags: string[];
       coverImage?: string;
+      images?: string[];
+      status?: 'open' | 'private';
     },
     options?: { silent?: boolean }
   ) => {
@@ -2878,10 +2982,19 @@ function ForumShell() {
         category: 'Kijiweni',
         tags: data.tags,
         ...(data.coverImage ? { coverImage: data.coverImage } : {}),
+        ...(data.images && data.images.length > 0 ? { images: data.images } : {}),
+        ...(data.status === 'private' ? { status: 'private' } : {}),
       }
     );
     if (!options?.silent) {
-      showToast(tr('Chapisho lako limewekwa Kijiweni!', 'Your post is now live in Kijiweni!'));
+      showToast(
+        data.status === 'private'
+          ? tr(
+              'Chapisho lako limehifadhiwa kwa faragha (linaonekana kwenye akaunti yako tu).',
+              'Your post was saved privately (visible only in your account).'
+            )
+          : tr('Chapisho lako limewekwa Kijiweni!', 'Your post is now live in Kijiweni!')
+      );
     }
   };
 
@@ -3012,6 +3125,24 @@ function ForumShell() {
     );
   };
 
+  const handleTogglePrivateTopic = async (topic: Topic) => {
+    if (!user || topic.authorId !== user.uid || blockIfSuspended()) return;
+    if (topic.status === 'archived') return;
+    const nextStatus = topic.status === 'private' ? 'open' : 'private';
+    await updateTopicStatus(topic.id, nextStatus);
+    showToast(
+      nextStatus === 'private'
+        ? tr(
+            'Chapisho limefungwa na sasa linaonekana kwenye akaunti yako tu.',
+            'Post locked to private and visible only in your account.'
+          )
+        : tr(
+            'Chapisho limefunguliwa tena na sasa linaonekana kwa wote.',
+            'Post unlocked and now visible to everyone.'
+          )
+    );
+  };
+
   const handleToggleArchive = async (topic: Topic) => {
     if (!isAdmin) return;
     const nextStatus = topic.status === 'archived' ? 'open' : 'archived';
@@ -3131,7 +3262,7 @@ function ForumShell() {
   const isVideoView = activeTab === 'video' && !selectedTopic && !selectedTopicId;
   const isMpollView = activeTab === 'votes' && !selectedTopic && !selectedTopicId;
   const isMpollDarkBlue = isMpollView && mpollBgTheme === 'darkblue';
-  const isAuthView = activeTab === 'auth' && !user;
+  const isAuthView = activeTab === 'auth' && authReady && !user;
   const isFullStageView = isMchartView || isVideoView;
   const lockViewportToScreen = isFullStageView || isAuthView;
   const [mobileKeyboardOpen, setMobileKeyboardOpen] = useState(false);
@@ -3215,11 +3346,15 @@ function ForumShell() {
             onMarkNotificationRead={handleMarkNotificationRead}
             onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
             hideVideoTab={hideVideoTabForCurrentUser}
+            hideMpollTab={false}
             recentSignups={adminRecentSignups}
             unreadSignupCount={unreadSignupCount}
             signupLastSeenMs={adminSignupLastSeenMs}
             onMarkSignupsSeen={markAdminSignupsSeen}
             onOpenAdminMembers={handleOpenAdminMembers}
+            totalUsersCount={totalUsersCount}
+            loadingUsersCount={loadingUsersCount}
+            onRefreshTotalUsersCount={() => void refreshPlatformUsersCount()}
           />
         </div>
       )}
@@ -3299,6 +3434,7 @@ function ForumShell() {
             onToggleLock={handleToggleLock}
             onTogglePin={handleTogglePin}
             onToggleArchive={handleToggleArchive}
+            onTogglePrivate={handleTogglePrivateTopic}
             onDeleteTopic={handleDeleteTopic}
             onOpenReport={(targetType, targetId) => {
               if (blockIfSuspended()) return;
@@ -3314,7 +3450,7 @@ function ForumShell() {
             onRequestConfirm={(opts) => setConfirmState(opts)}
           />
         ) : activeTab === 'auth' ? (
-          !user ? (
+          authReady && !user ? (
             <AuthView
               promptReason={authPromptReason}
               onBack={() => {
@@ -3435,6 +3571,8 @@ function ForumShell() {
             onToast={showToast}
             hideVideoTabForUsers={hideVideoTabForUsers}
             onToggleHideVideoTab={isAdmin ? handleToggleHideVideoTab : undefined}
+            hideMpollTabForUsers={hideMpollTabForUsers}
+            onToggleHideMpollTab={isAdmin ? handleToggleHideMpollTab : undefined}
             retentionSettings={retentionSettings}
             retentionProgress={retentionProgress}
             onUpdateRetentionSettings={isAdmin ? handleUpdateRetentionSettings : undefined}
@@ -3505,6 +3643,7 @@ function ForumShell() {
             userPhoto={userProfile?.photoURL || user?.photoURL || ''}
             isAdmin={isAdmin}
             isSuspended={isSuspended}
+            hideCreateForUsers={hideCreateMpollForCurrentUser}
             selectedPollId={selectedPollId}
             onClearSelectedPoll={() => setSelectedPollId(null)}
             mpollBgTheme={mpollBgTheme}
@@ -3553,6 +3692,7 @@ function ForumShell() {
               setEditingTopic(t);
               setComposerOpen(true);
             }}
+            onTogglePrivate={handleTogglePrivateTopic}
             onDeleteTopic={handleDeleteTopic}
             onOpenReport={(targetType, targetId, topicId) => {
               if (blockIfSuspended()) return;
@@ -3570,6 +3710,7 @@ function ForumShell() {
             seeding={seeding}
             onVisibleTopicIdsChange={setVisibleTopicIds}
             unreadCounts={unreadCounts}
+            hideMpollTab={false}
           />
         )}
       </main>
@@ -3653,6 +3794,7 @@ function ForumShell() {
           hidden={isMchartView && mobileKeyboardOpen}
           darkTheme={isVideoView}
           hideVideoTab={hideVideoTabForCurrentUser}
+          hideMpollTab={false}
         />
       )}
 

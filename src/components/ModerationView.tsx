@@ -22,7 +22,7 @@ import {
   Video as VideoIcon,
   XCircle,
 } from 'lucide-react';
-import { collection, onSnapshot } from 'firebase/firestore';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { useLanguage } from '../context/LanguageContext';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import {
@@ -69,6 +69,8 @@ interface ModerationViewProps {
   embedded?: boolean;
   hideVideoTabForUsers?: boolean;
   onToggleHideVideoTab?: () => void | Promise<void>;
+  hideMpollTabForUsers?: boolean;
+  onToggleHideMpollTab?: () => void | Promise<void>;
   retentionSettings?: ContentRetentionSettings;
   retentionProgress?: {
     runningKijiweni: boolean;
@@ -117,6 +119,8 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
   embedded = false,
   hideVideoTabForUsers = false,
   onToggleHideVideoTab,
+  hideMpollTabForUsers = false,
+  onToggleHideMpollTab,
   retentionSettings = DEFAULT_CONTENT_RETENTION_SETTINGS,
   retentionProgress,
   onUpdateRetentionSettings,
@@ -257,8 +261,12 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
   useEffect(() => {
     setLoadingTopics(true);
     const path = 'topics';
-    const unsub = onSnapshot(
+    const topicsQuery = query(
       collection(db, 'topics'),
+      where('status', 'in', ['open', 'locked', 'archived'])
+    );
+    const unsub = onSnapshot(
+      topicsQuery,
       (snapshot) => {
         const list: Topic[] = snapshot.docs.map((d) => {
           const data = d.data();
@@ -282,6 +290,7 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
             deadline: data.deadline || '',
             applyInfo: data.applyInfo || '',
             coverImage: data.coverImage || '',
+            images: Array.isArray(data.images) ? data.images.map(String).filter(Boolean) : [],
             createdAt: data.createdAt || null,
             updatedAt: data.updatedAt || null,
             lastActivityAt: data.lastActivityAt || data.createdAt || null,
@@ -863,6 +872,73 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
               <>
                 <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
                 <span>{tr('Ficha Video kwa Watumiaji', 'Hide Video Tab')}</span>
+              </>
+            )}
+          </button>
+        </div>
+      )}
+
+      {/* Owner Quick Visibility Switch: Hide/Show Mpoll Tab for Non-Admin Users */}
+      {onToggleHideMpollTab && (
+        <div
+          className={`mt-4 flex flex-col justify-between gap-3 rounded-xl border p-4 sm:flex-row sm:items-center ${
+            hideMpollTabForUsers
+              ? 'border-amber-300 bg-amber-50/70'
+              : 'border-slate-200 bg-white'
+          }`}
+        >
+          <div className="flex items-start gap-2.5">
+            <span
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+                hideMpollTabForUsers
+                  ? 'bg-amber-200/80 text-amber-900'
+                  : 'bg-sky-50 text-[#1D4E89]'
+              }`}
+            >
+              {hideMpollTabForUsers ? (
+                <EyeOff className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <Eye className="h-4 w-4" aria-hidden="true" />
+              )}
+            </span>
+            <div>
+              <p className="text-xs font-bold text-slate-900 sm:text-sm">
+                {tr(
+                  'Kitufe cha "Tengeneza Mpoll Mpya" kwa Watumiaji Wengine',
+                  '"Create New Mpoll" Button Visibility for Users'
+                )}
+              </p>
+              <p className="text-[11px] text-slate-600">
+                {hideMpollTabForUsers
+                  ? tr(
+                      'Kitufe cha kutengeneza kura kimefichwa kwa watumiaji wengine (Mmiliki pekee ndiye anaweza kutengeneza Mpoll; watumiaji wengine wanapiga kura tu).',
+                      'The create poll button is hidden from non-admin users; Mpoll remains open for voting.'
+                    )
+                  : tr(
+                      'Watumiaji wote wanaona kitufe cha "Tengeneza Mpoll Mpya" na wanaweza kuanzisha kura zao pamoja na kupiga kura.',
+                      'All users can see "Create New Mpoll", create polls, and vote.'
+                    )}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void onToggleHideMpollTab()}
+            className={`inline-flex min-h-[38px] shrink-0 items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-bold transition-colors ${
+              hideMpollTabForUsers
+                ? 'bg-emerald-700 text-white hover:bg-emerald-800'
+                : 'bg-rose-700 text-white hover:bg-rose-800'
+            }`}
+          >
+            {hideMpollTabForUsers ? (
+              <>
+                <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>{tr('Onyesha "Tengeneza Mpoll"', 'Show Create Mpoll')}</span>
+              </>
+            ) : (
+              <>
+                <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>{tr('Ficha "Tengeneza Mpoll"', 'Hide Create Mpoll')}</span>
               </>
             )}
           </button>

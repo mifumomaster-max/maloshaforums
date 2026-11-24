@@ -11,6 +11,7 @@ interface MobileBottomNavProps {
   hidden?: boolean;
   darkTheme?: boolean;
   hideVideoTab?: boolean;
+  hideMpollTab?: boolean;
 }
 
 export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
@@ -21,6 +22,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   hidden = false,
   darkTheme = false,
   hideVideoTab = false,
+  hideMpollTab = false,
 }) => {
   const { tr } = useLanguage();
 
@@ -85,7 +87,14 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
     },
   ];
 
-  const items = hideVideoTab ? allItems.filter((item) => item.id !== 'video') : allItems;
+  const items = allItems.filter((item) => {
+    if (hideVideoTab && item.id === 'video') return false;
+    if (hideMpollTab && item.id === 'votes') return false;
+    return true;
+  });
+
+  const gridColsClass =
+    items.length <= 4 ? 'grid-cols-4' : items.length === 5 ? 'grid-cols-5' : 'grid-cols-6';
 
   return (
     <nav
@@ -96,11 +105,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
           : 'border-slate-200/90 bg-white/95 shadow-[0_-4px_16px_rgba(15,23,42,0.08)]'
       }`}
     >
-      <div
-        className={`grid h-[58px] items-center ${
-          items.length === 5 ? 'grid-cols-5' : 'grid-cols-6'
-        }`}
-      >
+      <div className={`grid h-[58px] items-center ${gridColsClass}`}>
         {items.map((item) => {
           const active = activeTab === item.id;
           const showBadge = item.unread > 0 && !active;

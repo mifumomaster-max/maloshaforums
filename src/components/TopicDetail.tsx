@@ -9,6 +9,7 @@ import {
   Clock,
   Edit3,
   ExternalLink,
+  Eye,
   EyeOff,
   Flag,
   Heart,
@@ -36,6 +37,7 @@ import { MakalaArticleRenderer } from './MakalaArticleRenderer';
 import { LinkedText, RichText, extractFirstUrl } from './RichText';
 import { FacebookCommentsThread } from './FacebookCommentsThread';
 import { AuthorVerificationBadge } from './VerificationBadge';
+import { OrderedPhotoAlbum } from './OrderedPhotoAlbum';
 
 interface TopicDetailProps {
   topic: Topic;
@@ -55,6 +57,7 @@ interface TopicDetailProps {
   onToggleLock: (topic: Topic) => void;
   onTogglePin: (topic: Topic) => void;
   onToggleArchive?: (topic: Topic) => void;
+  onTogglePrivate?: (topic: Topic) => void;
   onDeleteTopic: (topic: Topic) => void;
   onOpenReport: (targetType: 'topic' | 'reply', targetId: string) => void;
   onAuthorClick?: (author: { uid: string; displayName: string; photoURL?: string }) => void;
@@ -87,6 +90,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
   onToggleLock,
   onTogglePin,
   onToggleArchive,
+  onTogglePrivate,
   onDeleteTopic,
   onOpenReport,
   onAuthorClick,
@@ -103,11 +107,18 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
 
   const isTopicAuthor = userUid !== null && topic.authorId === userUid;
   const canManageTopic = isTopicAuthor || isAdmin;
+  const isPrivateTopic = topic.status === 'private';
   const normalizedBoard = normalizeBoardCategory(topic.category);
   const isMakala = normalizedBoard === 'Makala';
   const isFursa = normalizedBoard === 'Fursa';
   const isKijiweni = normalizedBoard === 'Kijiweni';
   const readMinutes = estimateReadMinutes(topic.body);
+  const albumImages = React.useMemo(() => {
+    if (Array.isArray(topic.images) && topic.images.length > 0) {
+      return topic.images;
+    }
+    return topic.coverImage ? [topic.coverImage] : [];
+  }, [topic.images, topic.coverImage]);
 
   const otherLatestMakala = latestMakala.filter((item) => item.id !== topic.id).slice(0, 6);
   const makalaSection = getMakalaSection(topic.tags);
@@ -170,6 +181,30 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
             >
               <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
               <span>{tr('Rejesha Hewani', 'Restore Post')}</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {isPrivateTopic && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-300 bg-slate-100 px-4 py-3 text-xs text-slate-900">
+          <div className="flex items-center gap-2 font-semibold">
+            <EyeOff className="h-4 w-4 shrink-0 text-slate-700" aria-hidden="true" />
+            <span>
+              {tr(
+                'Chapisho hili limefungwa kwa faragha — linaonekana kwenye akaunti yako pekee.',
+                'This post is locked to private — visible only in your account.'
+              )}
+            </span>
+          </div>
+          {isTopicAuthor && onTogglePrivate && (!isSuspended || isAdmin) && (
+            <button
+              type="button"
+              onClick={() => onTogglePrivate(topic)}
+              className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg bg-[#0E2640] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#163A5F]"
+            >
+              <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>{tr('Fungua kwa Wote', 'Make Public')}</span>
             </button>
           )}
         </div>
@@ -510,6 +545,12 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                         · <Lock className="h-3 w-3" aria-hidden="true" /> {tr('Imefungwa', 'Locked')}
                       </span>
                     )}
+                    {isPrivateTopic && (
+                      <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-semibold text-slate-700">
+                        <EyeOff className="h-3 w-3" aria-hidden="true" />
+                        <span>{tr('Binafsi (Yangu Tu)', 'Only Me')}</span>
+                      </span>
+                    )}
                   </div>
                   <p className="text-xs text-slate-500">
                     {formatTime(topic.createdAt)} · {getBoardLabel('Kijiweni')}
@@ -518,7 +559,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
               </div>
 
               <div className="flex flex-wrap items-center gap-2 text-xs">
-                {canManageTopic && topic.status === 'open' && (!isSuspended || isAdmin) && (
+                {canManageTopic && (topic.status === 'open' || topic.status === 'private') && (!isSuspended || isAdmin) && (
                   <button
                     type="button"
                     onClick={() => onEditTopic(topic)}
@@ -528,7 +569,30 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                     <span>{tr('Hariri', 'Edit')}</span>
                   </button>
                 )}
-                {canManageTopic && topic.status !== 'archived' && (!isSuspended || isAdmin) && (
+                {isTopicAuthor && onTogglePrivate && topic.status !== 'archived' && (!isSuspended || isAdmin) && (
+                  <button
+                    type="button"
+                    onClick={() => onTogglePrivate(topic)}
+                    className={`inline-flex min-h-[34px] items-center gap-1 rounded-md border px-2.5 py-1 font-semibold transition-colors ${
+                      isPrivateTopic
+                        ? 'border-emerald-300 bg-emerald-50 text-emerald-900 hover:bg-emerald-100'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    {isPrivateTopic ? (
+                      <>
+                        <Eye className="h-3 w-3" aria-hidden="true" />
+                        <span>{tr('Fungua kwa Wote', 'Make Public')}</span>
+                      </>
+                    ) : (
+                      <>
+                        <EyeOff className="h-3 w-3" aria-hidden="true" />
+                        <span>{tr('Funga (Yangu Tu)', 'Only Me')}</span>
+                      </>
+                    )}
+                  </button>
+                )}
+                {canManageTopic && topic.status !== 'archived' && !isPrivateTopic && (!isSuspended || isAdmin) && (
                   <button
                     type="button"
                     onClick={() => onToggleLock(topic)}
@@ -547,7 +611,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                     )}
                   </button>
                 )}
-                {isAdmin && (
+                {isAdmin && !isPrivateTopic && (
                   <button
                     type="button"
                     onClick={() => onTogglePin(topic)}
@@ -557,7 +621,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                     <span>{topic.isPinned ? tr('Ondoa Bandiko', 'Unpin') : tr('Bandika', 'Pin')}</span>
                   </button>
                 )}
-                {isAdmin && onToggleArchive && (
+                {isAdmin && onToggleArchive && !isPrivateTopic && (
                   <button
                     type="button"
                     onClick={() => onToggleArchive(topic)}
@@ -611,18 +675,13 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
               </div>
             )}
 
-            {topic.coverImage && !coverFailed && (
-              <figure className="-mx-4 mt-4 overflow-hidden border-y border-slate-200 bg-slate-100 sm:mx-0 sm:rounded-lg sm:border">
-                <img
-                  src={optimizeCloudinaryUrl(topic.coverImage, 1080)}
-                  alt={topic.title.trim() || tr('Picha iliyochapishwa Kijiweni', 'Kijiweni photo post')}
-                  loading="lazy"
-                  decoding="async"
-                  referrerPolicy="no-referrer"
-                  onError={() => setCoverFailed(true)}
-                  className="block h-auto w-full"
+            {albumImages.length > 0 && (
+              <div className="mt-4">
+                <OrderedPhotoAlbum
+                  images={albumImages}
+                  altBase={topic.title.trim() || tr('Picha iliyochapishwa Kijiweni', 'Kijiweni photo post')}
                 />
-              </figure>
+              </div>
             )}
 
             {topic.tags.length > 0 && (
@@ -782,7 +841,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                {canManageTopic && topic.status === 'open' && (!isSuspended || isAdmin) && (
+                {canManageTopic && (topic.status === 'open' || topic.status === 'private') && (!isSuspended || isAdmin) && (
                   <button
                     type="button"
                     onClick={() => onEditTopic(topic)}
@@ -792,7 +851,30 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                     <span>{tr('Hariri', 'Edit')}</span>
                   </button>
                 )}
-                {canManageTopic && topic.status !== 'archived' && (!isSuspended || isAdmin) && (
+                {isTopicAuthor && onTogglePrivate && topic.status !== 'archived' && (!isSuspended || isAdmin) && (
+                  <button
+                    type="button"
+                    onClick={() => onTogglePrivate(topic)}
+                    className={`inline-flex min-h-[36px] items-center gap-1 rounded-md border px-2.5 py-1 font-semibold transition-colors ${
+                      isPrivateTopic
+                        ? 'border-emerald-300 bg-emerald-50 text-emerald-900 hover:bg-emerald-100'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    {isPrivateTopic ? (
+                      <>
+                        <Eye className="h-3 w-3" aria-hidden="true" />
+                        <span>{tr('Fungua kwa Wote', 'Make Public')}</span>
+                      </>
+                    ) : (
+                      <>
+                        <EyeOff className="h-3 w-3" aria-hidden="true" />
+                        <span>{tr('Funga (Yangu Tu)', 'Only Me')}</span>
+                      </>
+                    )}
+                  </button>
+                )}
+                {canManageTopic && topic.status !== 'archived' && !isPrivateTopic && (!isSuspended || isAdmin) && (
                   <button
                     type="button"
                     onClick={() => onToggleLock(topic)}
@@ -811,7 +893,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                     )}
                   </button>
                 )}
-                {isAdmin && (
+                {isAdmin && !isPrivateTopic && (
                   <button
                     type="button"
                     onClick={() => onTogglePin(topic)}
@@ -821,7 +903,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                     <span>{topic.isPinned ? tr('Ondoa Bandiko', 'Unpin') : tr('Bandika', 'Pin')}</span>
                   </button>
                 )}
-                {isAdmin && onToggleArchive && (
+                {isAdmin && onToggleArchive && !isPrivateTopic && (
                   <button
                     type="button"
                     onClick={() => onToggleArchive(topic)}

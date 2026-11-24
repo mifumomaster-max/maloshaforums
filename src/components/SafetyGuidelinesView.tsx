@@ -116,6 +116,8 @@ interface SafetyGuidelinesViewProps {
   onToast: (message: string, kind?: 'success' | 'error') => void;
   hideVideoTabForUsers?: boolean;
   onToggleHideVideoTab?: () => void | Promise<void>;
+  hideMpollTabForUsers?: boolean;
+  onToggleHideMpollTab?: () => void | Promise<void>;
   retentionSettings?: ContentRetentionSettings;
   retentionProgress?: {
     runningKijiweni: boolean;
@@ -174,6 +176,8 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
   onToast,
   hideVideoTabForUsers = false,
   onToggleHideVideoTab,
+  hideMpollTabForUsers = false,
+  onToggleHideMpollTab,
   retentionSettings,
   retentionProgress,
   onUpdateRetentionSettings,
@@ -2262,6 +2266,8 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
                     onToast={onToast}
                     hideVideoTabForUsers={hideVideoTabForUsers}
                     onToggleHideVideoTab={onToggleHideVideoTab}
+                    hideMpollTabForUsers={hideMpollTabForUsers}
+                    onToggleHideMpollTab={onToggleHideMpollTab}
                     retentionSettings={retentionSettings}
                     retentionProgress={retentionProgress}
                     onUpdateRetentionSettings={onUpdateRetentionSettings}

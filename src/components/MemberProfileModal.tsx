@@ -126,16 +126,22 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
     [topics, videos, memberUid, effectiveFollowersCount]
   );
 
+  const isSelf = currentUser?.uid === memberUid;
+
   const recentPosts = useMemo(() => {
     if (!memberUid) return [];
     return topics
-      .filter((t) => t.authorId === memberUid && t.status !== 'archived')
+      .filter(
+        (t) =>
+          t.authorId === memberUid &&
+          t.status !== 'archived' &&
+          (t.status !== 'private' || isSelf)
+      )
       .slice(0, 5);
-  }, [topics, memberUid]);
+  }, [topics, memberUid, isSelf]);
 
   if (!memberUid) return null;
 
-  const isSelf = currentUser?.uid === memberUid;
   const isTargetSuspended = profile?.accountStatus === 'suspended';
 
   const handleToggleFollow = async () => {
