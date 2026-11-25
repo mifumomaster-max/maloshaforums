@@ -879,9 +879,13 @@
       "schema": { "$ref": "#/entities/VideoComment" },
       "description": "Comments under a video post."
     },
+    "/mchart_group_reads/{userId}": {
+      "schema": { "$ref": "#/entities/UserPresence" },
+      "description": "Group chat per-user read cursors powering accurate gray vs blue read ticks and Message Info."
+    },
     "/site_settings/{settingId}": {
       "schema": { "$ref": "#/entities/SiteNavSettings" },
-      "description": "Platform navigation visibility (navigation) and owner content retention schedules (retention)."
+      "description": "Platform navigation visibility (navigation), Mchart group config (mchart_group), stats (community_stats), and owner content retention schedules (retention)."
     },
     "/owner_id_cards/{cardId}": {
       "schema": { "$ref": "#/entities/OwnerCustomIdCard" },

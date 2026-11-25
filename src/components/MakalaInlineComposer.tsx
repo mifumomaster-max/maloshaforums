@@ -1,24 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  AtSign,
-  Bold,
   Eye,
-  Heading2,
-  Heading3,
   ImagePlus,
-  List,
-  ListOrdered,
   Loader2,
   Newspaper,
-  Quote,
   Send,
-  Sparkles,
   X,
 } from 'lucide-react';
 import { uploadImageToCloudinary } from '../services/cloudinaryService';
 import { AuthPromptReason, MAKALA_COVERS, MAKALA_SECTIONS } from '../types';
 import { autoFormatScholarlyText } from '../utils/editorialFormatter';
 import { parseTagsInput } from '../utils/formatters';
+import {
+  MakalaFormatAction,
+  applyMakalaFormatAction,
+  captureTextareaScrollSnapshot,
+  restoreTextareaSelectionAndScroll,
+} from '../utils/makalaSelectionFormatter';
 import { useLanguage } from '../context/LanguageContext';
 import { Avatar } from './Avatar';
 import { ImageResizeModal } from './ImageResizeModal';
@@ -28,6 +26,8 @@ import {
   computeTextAfterInlineMediaInsert,
 } from './InlineMediaInsertModal';
 import { MakalaArticleRenderer } from './MakalaArticleRenderer';
+import { MakalaFormatToolbar } from './MakalaFormatToolbar';
+import { StudioMakalaPickerBar } from './StudioMakalaPickerBar';
 import { AuthorVerificationBadge } from './VerificationBadge';
 
 interface MakalaInlineComposerProps {
@@ -115,30 +115,39 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
     onExpandedChange(false);
   };
 
-  const insertBodySyntax = (prefix: string, suffix = '', fallbackSample = '') => {
+  const [selectedWordCount, setSelectedWordCount] = useState(0);
+
+  const syncSelectionCount = () => {
     const el = bodyTextareaRef.current;
     if (!el) {
-      setBody((prev) => `${prev}${prev && !prev.endsWith('\n') ? '\n' : ''}${prefix}${fallbackSample}${suffix}`);
+      setSelectedWordCount(0);
       return;
     }
-    const start = el.selectionStart ?? body.length;
-    const end = el.selectionEnd ?? body.length;
-    const selected = body.slice(start, end) || fallbackSample;
-    const needsLeadingNewline =
-      prefix.startsWith('#') || prefix.startsWith('- ') || prefix.startsWith('1. ') || prefix.startsWith('> ')
-        ? start > 0 && body[start - 1] !== '\n'
-          ? '\n'
-          : ''
-        : '';
-    const insertion = `${needsLeadingNewline}${prefix}${selected}${suffix}`;
-    const nextValue = body.slice(0, start) + insertion + body.slice(end);
-    setBody(nextValue);
+    const start = el.selectionStart ?? 0;
+    const end = el.selectionEnd ?? 0;
+    if (end <= start) {
+      setSelectedWordCount(0);
+      return;
+    }
+    const words = body.slice(start, end).trim().split(/\s+/).filter(Boolean).length;
+    setSelectedWordCount(words);
+  };
+
+  const handleApplyBodyFormat = (action: MakalaFormatAction, fallbackSample: string) => {
+    const el = bodyTextareaRef.current;
+    const { nextBody, nextSelStart, nextSelEnd, snapshot } = applyMakalaFormatAction(
+      body,
+      el,
+      action,
+      fallbackSample
+    );
+    setBody(nextBody);
     setBodyPreviewMode(false);
-    window.requestAnimationFrame(() => {
-      el.focus();
-      const cursor = start + insertion.length;
-      el.setSelectionRange(cursor, cursor);
-    });
+    restoreTextareaSelectionAndScroll(el, nextSelStart, nextSelEnd, snapshot);
+    window.setTimeout(() => {
+      const words = nextBody.slice(nextSelStart, nextSelEnd).trim().split(/\s+/).filter(Boolean).length;
+      setSelectedWordCount(nextSelEnd > nextSelStart ? words : 0);
+    }, 0);
   };
 
   const handleBodyChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -151,14 +160,17 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
       nextVal[cursor - 1] === '@';
 
     setBody(nextVal);
+    setSelectedWordCount(0);
     if (wasAtTyped) {
       setInlineMediaPicker({ atIndex: cursor - 1, replaceAt: true });
     }
   };
 
   const handleInsertInlineMedia = (media: InsertedInlineMedia) => {
+    const el = bodyTextareaRef.current;
+    const snapshot = captureTextareaScrollSnapshot(el);
     const picker = inlineMediaPicker ?? {
-      atIndex: bodyTextareaRef.current?.selectionStart ?? body.length,
+      atIndex: el?.selectionStart ?? body.length,
       replaceAt: false,
     };
     const { nextText, nextCursor } = computeTextAfterInlineMediaInsert(
@@ -170,17 +182,18 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
     setBody(nextText);
     setInlineMediaPicker(null);
     setBodyPreviewMode(false);
-    window.requestAnimationFrame(() => {
-      const el = bodyTextareaRef.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(nextCursor, nextCursor);
-    });
+    restoreTextareaSelectionAndScroll(el, nextCursor, nextCursor, snapshot);
   };
 
   const handleAutoFormatBody = () => {
     if (!body.trim()) return;
-    setBody((prev) => autoFormatScholarlyText(prev));
+    const el = bodyTextareaRef.current;
+    const snapshot = captureTextareaScrollSnapshot(el);
+    const prevCursor = el?.selectionStart ?? 0;
+    const nextFormatted = autoFormatScholarlyText(body);
+    setBody(nextFormatted);
+    const clampedPos = Math.min(prevCursor, nextFormatted.length);
+    restoreTextareaSelectionAndScroll(el, clampedPos, clampedPos, snapshot);
     onToast(
       tr(
         'Makala imepangwa kisomi (vichwa, orodha na aya)!',
@@ -243,11 +256,11 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
       );
       return;
     }
-    if (cleanBody.length < 10 || cleanBody.length > 8000) {
+    if (cleanBody.length < 10 || cleanBody.length > 16000) {
       setError(
         tr(
-          'Matini ya makala lazima yawe na herufi kati ya 10 na 8000.',
-          'Article body must be between 10 and 8000 characters.'
+          'Matini ya makala lazima yawe na herufi kati ya 10 na 16000.',
+          'Article body must be between 10 and 16000 characters.'
         )
       );
       return;
@@ -328,6 +341,56 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
 
       {/* Inline Editorial Form */}
       <form onSubmit={handleSubmit} className="space-y-4 p-4 sm:p-5">
+        <StudioMakalaPickerBar
+          autoConsumePending={expanded}
+          hasExistingBody={body.trim().length > 0}
+          onApplyFullItem={({ title: sTitle, bodyDraft, tags, coverUrl, mode }) => {
+            if (sTitle.trim() && (mode === 'replace' || !title.trim())) {
+              setTitle(sTitle.trim().slice(0, 140));
+            }
+            if (coverUrl) {
+              setCoverImage(coverUrl);
+              setPreviewFailed(false);
+              setShowPresets(false);
+            }
+            if (bodyDraft.trim()) {
+              if (mode === 'append' && body.trim()) {
+                setBody((prev) => `${prev.trim()}\n\n${bodyDraft.trim()}`.slice(0, 16000));
+              } else {
+                setBody(bodyDraft.trim().slice(0, 16000));
+              }
+              setBodyPreviewMode(false);
+            }
+            if (Array.isArray(tags) && tags.length > 0 && !extraTags.trim()) {
+              const lowerSections = new Set(MAKALA_SECTIONS.map((s) => s.toLowerCase()));
+              const cleanedTags = tags.filter((t) => !lowerSections.has(t.toLowerCase()));
+              if (cleanedTags.length > 0) {
+                setExtraTags(cleanedTags.join(', '));
+              }
+            }
+          }}
+          onApplyCoverOnly={(coverUrl) => {
+            setCoverImage(coverUrl);
+            setPreviewFailed(false);
+            setShowPresets(false);
+          }}
+          onInsertImageInline={(coverUrl, caption) => {
+            const el = bodyTextareaRef.current;
+            const snapshot = captureTextareaScrollSnapshot(el);
+            const atIndex = el?.selectionStart ?? body.length;
+            const { nextText, nextCursor } = computeTextAfterInlineMediaInsert(
+              body,
+              atIndex,
+              false,
+              { type: 'image', url: coverUrl, caption: caption || '' }
+            );
+            setBody(nextText.slice(0, 16000));
+            setBodyPreviewMode(false);
+            restoreTextareaSelectionAndScroll(el, nextCursor, nextCursor, snapshot);
+          }}
+          onToast={onToast}
+        />
+
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="sm:col-span-2">
             <label htmlFor="inline-makala-title" className="block text-xs font-bold text-slate-800">
@@ -514,82 +577,18 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
             </div>
           </div>
 
-          {/* Scholarly BBC Formatting Toolbar */}
-          <div className="mt-1.5 flex flex-wrap items-center gap-1 border border-b-0 border-slate-300 bg-[#F6F6F6] px-2 py-1.5">
-            <button
-              type="button"
-              onClick={() => insertBodySyntax('## ', '', tr('Kichwa cha Sehemu', 'Section Title'))}
-              className="inline-flex min-h-[30px] items-center gap-1 border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000] hover:text-[#B80000]"
-            >
-              <Heading2 className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>{tr('Kichwa', 'Heading')}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => insertBodySyntax('### ', '', tr('Kichwa Kidogo', 'Subtitle'))}
-              className="inline-flex min-h-[30px] items-center gap-1 border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000] hover:text-[#B80000]"
-            >
-              <Heading3 className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>{tr('Kichwa Kidogo', 'Subtitle')}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => insertBodySyntax('- ', '', tr('Hoja muhimu hapa', 'Bullet point'))}
-              className="inline-flex min-h-[30px] items-center gap-1 border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000] hover:text-[#B80000]"
-            >
-              <List className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>{tr('Orodha', 'Bullets')}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => insertBodySyntax('1. ', '', tr('Hatua ya kwanza', 'First point'))}
-              className="inline-flex min-h-[30px] items-center gap-1 border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000] hover:text-[#B80000]"
-            >
-              <ListOrdered className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>{tr('Namba', 'Numbered')}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => insertBodySyntax('> ', '', tr('Nukuu ya msemaji...', 'Quote text...'))}
-              className="inline-flex min-h-[30px] items-center gap-1 border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000] hover:text-[#B80000]"
-            >
-              <Quote className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>{tr('Nukuu', 'Quote')}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => insertBodySyntax('**', '**', tr('maneno mazito', 'bold text'))}
-              className="inline-flex min-h-[30px] items-center gap-1 border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000] hover:text-[#B80000]"
-            >
-              <Bold className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>{tr('Nzito', 'Bold')}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                setInlineMediaPicker({
-                  atIndex: bodyTextareaRef.current?.selectionStart ?? body.length,
-                  replaceAt: false,
-                })
-              }
-              title={tr(
-                'Weka picha au video mahali hapa (au andika @)',
-                'Insert photo or video at cursor (or type @)'
-              )}
-              className="inline-flex min-h-[30px] items-center gap-1 border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-bold text-[#0E2640] hover:border-[#B80000] hover:bg-amber-100"
-            >
-              <AtSign className="h-3.5 w-3.5 text-[#B80000]" aria-hidden="true" />
-              <span>{tr('Picha / Video', 'Photo / Video')}</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleAutoFormatBody}
-              className="ml-auto inline-flex min-h-[30px] items-center gap-1 bg-[#0E2640] px-2.5 py-1 text-[11px] font-bold text-white hover:bg-[#163A5F]"
-            >
-              <Sparkles className="h-3.5 w-3.5 text-amber-300" aria-hidden="true" />
-              <span>{tr('Panga Kisomi', 'Auto-Format')}</span>
-            </button>
-          </div>
+          {/* Scholarly BBC + Rich Selection Formatting Toolbar */}
+          <MakalaFormatToolbar
+            selectedWordCount={selectedWordCount}
+            onApplyFormat={handleApplyBodyFormat}
+            onOpenInlineMedia={() =>
+              setInlineMediaPicker({
+                atIndex: bodyTextareaRef.current?.selectionStart ?? body.length,
+                replaceAt: false,
+              })
+            }
+            onAutoFormat={handleAutoFormatBody}
+          />
 
           {bodyPreviewMode ? (
             <div className="min-h-[190px] border border-slate-300 bg-white p-4 sm:p-6">
@@ -605,18 +604,21 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
               id="inline-makala-body"
               ref={bodyTextareaRef}
               rows={8}
-              maxLength={8000}
+              maxLength={16000}
               value={body}
               onChange={handleBodyChange}
+              onSelect={syncSelectionCount}
+              onKeyUp={syncSelectionCount}
+              onMouseUp={syncSelectionCount}
               placeholder={tr(
-                'Anza na aya ya muhtasari (lead), andika @ popote kupakia picha au video katikati ya makala, au tumia ## Vichwa, - Orodha, na > Nukuu...',
-                'Start with a lead paragraph, type @ anywhere to insert a photo or video inline, or use ## Headings, - Bullets, and > Quotes...'
+                'Anza na aya ya muhtasari (lead), chagua/highlight maneno kuyageuza nukuu, orodha, herufi kubwa au rangi, au andika @ kupakia picha/video...',
+                'Start with a lead paragraph, select words to format as quotes, bullets, uppercase or colors, or type @ to insert media...'
               )}
               className="w-full resize-y border border-slate-300 bg-[#F9FAFB] p-3.5 text-sm leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-[#B80000] focus:bg-white focus:outline-none"
             />
           )}
           <div className="mt-1 flex justify-end font-mono text-[11px] text-slate-500 tabular-nums">
-            {body.length}/8000
+            {body.length}/16000
           </div>
         </div>
 

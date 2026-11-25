@@ -26,6 +26,8 @@ import {
   ContentRetentionSettings,
   DirectChatThread,
   MAKALA_COVERS,
+  MchartGroupReadCursor,
+  MchartGroupSettings,
   MchartNote,
   MchartNoteAccess,
   MchartNoteContent,
@@ -56,11 +58,14 @@ import {
 import { sanitizeTextInput } from '../utils/formatters';
 
 const syncQueueByUid = new Map<string, Promise<void>>();
-const pendingRegMetaByEmail = new Map<string, { displayName?: string; phoneNumber?: string }>();
+const pendingRegMetaByEmail = new Map<
+  string,
+  { displayName?: string; phoneNumber?: string; photoURL?: string }
+>();
 
 export function setPendingRegistrationMeta(
   email: string,
-  meta: { displayName?: string; phoneNumber?: string }
+  meta: { displayName?: string; phoneNumber?: string; photoURL?: string }
 ): void {
   const key = email.trim().toLowerCase();
   if (!key) return;
@@ -103,7 +108,7 @@ async function upsertMemberDirectoryEntry(
 
 async function runSyncUserProfile(
   user: User,
-  extra?: { displayName?: string; phoneNumber?: string }
+  extra?: { displayName?: string; phoneNumber?: string; photoURL?: string }
 ): Promise<void> {
   const userPath = `users/${user.uid}`;
   const privatePath = `users/${user.uid}/private/info`;
@@ -114,13 +119,14 @@ async function runSyncUserProfile(
   const pendingMeta = emailKey ? pendingRegMetaByEmail.get(emailKey) : undefined;
   const effectiveDisplayName = extra?.displayName || pendingMeta?.displayName || user.displayName;
   const effectivePhone = extra?.phoneNumber || pendingMeta?.phoneNumber;
+  const effectivePhoto = extra?.photoURL || pendingMeta?.photoURL || user.photoURL || '';
 
   const safeName =
     sanitizeTextInput(effectiveDisplayName || 'Mwanachama', 80) || 'Mwanachama';
-  const safePhoto = sanitizeTextInput(user.photoURL || '', 500);
+  const safePhoto = sanitizeTextInput(effectivePhoto, 500);
   const safeEmail = sanitizeTextInput(user.email || 'unknown@example.com', 200);
   const safePhone = effectivePhone ? sanitizeTextInput(effectivePhone, 30) : '';
-  const isPlatformOwner = user.email === ADMIN_EMAIL && user.emailVerified;
+  const isPlatformOwner = (user.email || '').toLowerCase() === ADMIN_EMAIL;
 
   let dirDisplayName = safeName;
   let dirPhoto = safePhoto;
@@ -174,6 +180,13 @@ async function runSyncUserProfile(
     if (!isSuspendedAccount && effectiveDisplayName && existingData.displayName !== safeName) {
       updates.displayName = safeName;
     }
+    if (
+      !isSuspendedAccount &&
+      safePhoto &&
+      (!existingData.photoURL || String(existingData.photoURL).trim() === '')
+    ) {
+      updates.photoURL = safePhoto;
+    }
     if (Object.keys(updates).length > 0) {
       updates.updatedAt = serverTimestamp();
       writeTasks.push(
@@ -187,7 +200,9 @@ async function runSyncUserProfile(
       (typeof existingData.displayName === 'string' && existingData.displayName) ||
       safeName;
     dirPhoto =
-      (typeof existingData.photoURL === 'string' ? existingData.photoURL : '') || safePhoto;
+      (typeof updates.photoURL === 'string' && updates.photoURL) ||
+      (typeof existingData.photoURL === 'string' ? existingData.photoURL : '') ||
+      safePhoto;
     dirBadge = normalizeVerificationBadge(
       (updates.verificationBadge as string) || (existingData.verificationBadge as string)
     );
@@ -244,7 +259,7 @@ async function runSyncUserProfile(
 
 export async function syncUserProfile(
   user: User,
-  extra?: { displayName?: string; phoneNumber?: string }
+  extra?: { displayName?: string; phoneNumber?: string; photoURL?: string }
 ): Promise<void> {
   const prev = syncQueueByUid.get(user.uid) || Promise.resolve();
   const next = prev.catch(() => undefined).then(() => runSyncUserProfile(user, extra));
@@ -539,14 +554,14 @@ export async function createTopic(
   input: CreateTopicInput
 ): Promise<string> {
   const title = sanitizeTextInput(input.title, 140);
-  const body = sanitizeTextInput(input.body, 8000);
+  const body = sanitizeTextInput(input.body, input.category === 'Makala' ? 16000 : 8000);
   const cleanImages = Array.isArray(input.images)
     ? input.images
-        .map((url) => sanitizeTextInput(url, 500))
+        .map((url) => sanitizeTextInput(url, 2000))
         .filter((url) => url.length >= 10 && url.startsWith('https://'))
         .slice(0, 300)
     : [];
-  const rawCover = input.coverImage ? sanitizeTextInput(input.coverImage, 500) : '';
+  const rawCover = input.coverImage ? sanitizeTextInput(input.coverImage, 2000) : '';
   const coverImage = rawCover || cleanImages[0] || '';
   const isImageOnlyKijiweni =
     input.category === 'Kijiweni' && (coverImage.length >= 10 || cleanImages.length > 0);
@@ -610,14 +625,14 @@ export async function editTopic(
   input: CreateTopicInput
 ): Promise<void> {
   const title = sanitizeTextInput(input.title, 140);
-  const body = sanitizeTextInput(input.body, 8000);
+  const body = sanitizeTextInput(input.body, input.category === 'Makala' ? 16000 : 8000);
   const cleanImages = Array.isArray(input.images)
     ? input.images
-        .map((url) => sanitizeTextInput(url, 500))
+        .map((url) => sanitizeTextInput(url, 2000))
         .filter((url) => url.length >= 10 && url.startsWith('https://'))
         .slice(0, 300)
     : undefined;
-  const rawCover = input.coverImage !== undefined ? sanitizeTextInput(input.coverImage, 500) : undefined;
+  const rawCover = input.coverImage !== undefined ? sanitizeTextInput(input.coverImage, 2000) : undefined;
   const coverImage = rawCover ?? (cleanImages && cleanImages.length > 0 ? cleanImages[0] : '');
   const isImageOnlyKijiweni =
     input.category === 'Kijiweni' &&
@@ -1178,9 +1193,11 @@ export interface SendChatMessageInput {
   attachmentName?: string;
   attachmentSize?: number;
   attachmentMime?: string;
+  audioDurationSec?: number;
   replyToId?: string;
   replyToSenderName?: string;
   replyToPreview?: string;
+  forwardedFromName?: string;
   viewOnce?: boolean;
 }
 
@@ -1195,7 +1212,9 @@ export async function sendChatMessage(
 ): Promise<string> {
   const text = sanitizeTextInput(input.text || '', 2000);
   const attachmentType: ChatAttachmentType =
-    input.attachmentType === 'image' || input.attachmentType === 'document'
+    input.attachmentType === 'image' ||
+    input.attachmentType === 'document' ||
+    input.attachmentType === 'audio'
       ? input.attachmentType
       : 'none';
   const attachmentUrl =
@@ -1208,9 +1227,16 @@ export async function sendChatMessage(
       : Math.max(0, Math.min(Math.floor(Number(input.attachmentSize || 0)), 15_728_640));
   const attachmentMime =
     attachmentType === 'none' ? '' : sanitizeTextInput(input.attachmentMime || '', 120);
+  const audioDurationSec =
+    attachmentType === 'audio'
+      ? Math.max(0, Math.min(Math.round(Number(input.audioDurationSec || 0)), 600))
+      : undefined;
+  const forwardedFromName = input.forwardedFromName
+    ? sanitizeTextInput(input.forwardedFromName, 80)
+    : undefined;
 
   if (text.length === 0 && (attachmentType === 'none' || !attachmentUrl.startsWith('https://'))) {
-    throw new Error('Andika ujumbe au ambatanisha picha/nyaraka kabla ya kutuma.');
+    throw new Error('Andika ujumbe au ambatanisha picha/sauti/nyaraka kabla ya kutuma.');
   }
 
   const msgRef =
@@ -1230,9 +1256,11 @@ export async function sendChatMessage(
       attachmentName,
       attachmentSize,
       attachmentMime,
+      ...(audioDurationSec !== undefined ? { audioDurationSec } : {}),
       replyToId: sanitizeTextInput(input.replyToId || '', 128),
       replyToSenderName: sanitizeTextInput(input.replyToSenderName || '', 80),
       replyToPreview: sanitizeTextInput(input.replyToPreview || '', 160),
+      ...(forwardedFromName ? { forwardedFromName } : {}),
       isDeleted: false,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -1240,6 +1268,54 @@ export async function sendChatMessage(
     return msgRef.id;
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function editChatMessage(messageId: string, newText: string): Promise<void> {
+  const cleanText = sanitizeTextInput(newText, 2000);
+  if (!cleanText) {
+    throw new Error('Ujumbe hauwezi kuwa mtupu.');
+  }
+  const path = `forum_chat_messages/${messageId}`;
+  try {
+    await updateDoc(doc(db, 'forum_chat_messages', messageId), {
+      text: cleanText,
+      isEdited: true,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function toggleChatMessageReaction(
+  messageId: string,
+  emoji: string,
+  uid: string,
+  currentReactions?: Record<string, string[]>
+): Promise<void> {
+  if (!uid || !emoji) return;
+  const path = `forum_chat_messages/${messageId}`;
+  const nextReactions: Record<string, string[]> = {};
+  if (currentReactions && typeof currentReactions === 'object') {
+    Object.entries(currentReactions).forEach(([k, arr]) => {
+      if (Array.isArray(arr) && arr.length > 0) {
+        const filtered = arr.filter((id) => id !== uid);
+        if (filtered.length > 0) nextReactions[k] = filtered.slice(0, 200);
+      }
+    });
+  }
+  const alreadySame = Boolean(currentReactions?.[emoji]?.includes(uid));
+  if (!alreadySame) {
+    nextReactions[emoji] = [...(nextReactions[emoji] || []), uid].slice(0, 200);
+  }
+  try {
+    await updateDoc(doc(db, 'forum_chat_messages', messageId), {
+      reactions: nextReactions,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 
@@ -1280,6 +1356,188 @@ export async function clearAllChatMessages(): Promise<number> {
   }
 }
 
+export const DEFAULT_MCHART_GROUP_SETTINGS: MchartGroupSettings = {
+  groupName: 'Malosha Forums · Kundi Kuu',
+  groupPhotoUrl: '',
+  description:
+    'Kundi rasmi la mijadala, taarifa za haraka, nyaraka, picha na sauti za wanachama wote wa Malosha Forums.',
+  isLocked: false,
+  disappearAfterSeconds: 86400,
+  kickedUids: [],
+  inviteCode: 'malosha',
+  updatedBy: '',
+  updatedAt: null,
+};
+
+function parseGroupSettingsDoc(data: Record<string, unknown> | undefined): MchartGroupSettings {
+  if (!data) return DEFAULT_MCHART_GROUP_SETTINGS;
+  return {
+    groupName:
+      typeof data.groupName === 'string' && data.groupName.trim().length >= 2
+        ? data.groupName.trim()
+        : DEFAULT_MCHART_GROUP_SETTINGS.groupName,
+    groupPhotoUrl: typeof data.groupPhotoUrl === 'string' ? data.groupPhotoUrl : '',
+    description:
+      typeof data.description === 'string'
+        ? data.description
+        : DEFAULT_MCHART_GROUP_SETTINGS.description,
+    isLocked: Boolean(data.isLocked),
+    disappearAfterSeconds:
+      typeof data.disappearAfterSeconds === 'number' && data.disappearAfterSeconds >= 0
+        ? Math.min(2592000, Math.floor(data.disappearAfterSeconds))
+        : DEFAULT_MCHART_GROUP_SETTINGS.disappearAfterSeconds,
+    kickedUids: Array.isArray(data.kickedUids)
+      ? data.kickedUids.filter((u): u is string => typeof u === 'string').slice(0, 200)
+      : [],
+    inviteCode:
+      typeof data.inviteCode === 'string' && /^[a-zA-Z0-9_\-]{3,40}$/.test(data.inviteCode)
+        ? data.inviteCode
+        : DEFAULT_MCHART_GROUP_SETTINGS.inviteCode,
+    updatedBy: typeof data.updatedBy === 'string' ? data.updatedBy : '',
+    updatedAt: (data.updatedAt as Timestamp | null) || null,
+  };
+}
+
+export function subscribeMchartGroupSettings(
+  onChange: (settings: MchartGroupSettings) => void
+): () => void {
+  const ref = doc(db, 'site_settings', 'mchart_group');
+  return onSnapshot(
+    ref,
+    (snap) => {
+      onChange(snap.exists() ? parseGroupSettingsDoc(snap.data()) : DEFAULT_MCHART_GROUP_SETTINGS);
+    },
+    () => {
+      onChange(DEFAULT_MCHART_GROUP_SETTINGS);
+    }
+  );
+}
+
+export async function fetchMchartGroupSettings(): Promise<MchartGroupSettings> {
+  try {
+    const snap = await getDoc(doc(db, 'site_settings', 'mchart_group'));
+    return snap.exists() ? parseGroupSettingsDoc(snap.data()) : DEFAULT_MCHART_GROUP_SETTINGS;
+  } catch {
+    return DEFAULT_MCHART_GROUP_SETTINGS;
+  }
+}
+
+export async function updateMchartGroupSettings(
+  user: User,
+  current: MchartGroupSettings,
+  patch: Partial<Omit<MchartGroupSettings, 'updatedBy' | 'updatedAt'>>
+): Promise<MchartGroupSettings> {
+  const path = 'site_settings/mchart_group';
+  const mergedGroupName =
+    sanitizeTextInput(patch.groupName ?? current.groupName, 80) ||
+    DEFAULT_MCHART_GROUP_SETTINGS.groupName;
+  const mergedPhoto = sanitizeTextInput(patch.groupPhotoUrl ?? current.groupPhotoUrl, 500);
+  const mergedDescription = sanitizeTextInput(patch.description ?? current.description, 400);
+  const mergedIsLocked = patch.isLocked !== undefined ? Boolean(patch.isLocked) : current.isLocked;
+  const rawDisappear =
+    patch.disappearAfterSeconds !== undefined
+      ? patch.disappearAfterSeconds
+      : current.disappearAfterSeconds;
+  const mergedDisappear = Math.max(0, Math.min(2592000, Math.floor(Number(rawDisappear) || 0)));
+  const mergedKicked = Array.from(
+    new Set((patch.kickedUids ?? current.kickedUids).filter((u) => /^[a-zA-Z0-9_\-]{1,128}$/.test(u)))
+  ).slice(0, 200);
+  const rawInvite = sanitizeTextInput(patch.inviteCode ?? current.inviteCode, 40);
+  const mergedInvite = /^[a-zA-Z0-9_\-]{3,40}$/.test(rawInvite)
+    ? rawInvite
+    : DEFAULT_MCHART_GROUP_SETTINGS.inviteCode;
+
+  try {
+    await setDoc(doc(db, 'site_settings', 'mchart_group'), {
+      groupName: mergedGroupName,
+      groupPhotoUrl: mergedPhoto.startsWith('https://') ? mergedPhoto : '',
+      description: mergedDescription,
+      isLocked: mergedIsLocked,
+      disappearAfterSeconds: mergedDisappear,
+      kickedUids: mergedKicked,
+      inviteCode: mergedInvite,
+      updatedBy: user.uid,
+      updatedAt: serverTimestamp(),
+    });
+    return {
+      groupName: mergedGroupName,
+      groupPhotoUrl: mergedPhoto.startsWith('https://') ? mergedPhoto : '',
+      description: mergedDescription,
+      isLocked: mergedIsLocked,
+      disappearAfterSeconds: mergedDisappear,
+      kickedUids: mergedKicked,
+      inviteCode: mergedInvite,
+      updatedBy: user.uid,
+      updatedAt: Timestamp.now(),
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function pruneExpiredGroupMessages(disappearAfterSeconds: number): Promise<number> {
+  if (!disappearAfterSeconds || disappearAfterSeconds <= 0) return 0;
+  try {
+    const cutoffTs = Timestamp.fromMillis(Date.now() - disappearAfterSeconds * 1000);
+    const snap = await getDocs(
+      query(
+        collection(db, 'forum_chat_messages'),
+        where('createdAt', '<=', cutoffTs),
+        limit(200)
+      )
+    );
+    if (snap.empty) return 0;
+    const batch = writeBatch(db);
+    snap.docs.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+    return snap.size;
+  } catch {
+    return 0;
+  }
+}
+
+export function subscribeMchartGroupReadCursors(
+  onChange: (cursors: MchartGroupReadCursor[]) => void
+): () => void {
+  const q = query(collection(db, 'mchart_group_reads'), limit(200));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list: MchartGroupReadCursor[] = snap.docs.map((d) => {
+        const data = d.data();
+        return {
+          uid: String(data.uid || d.id),
+          displayName: String(data.displayName || 'Mwanachama'),
+          photoURL: String(data.photoURL || ''),
+          lastReadAt: (data.lastReadAt as Timestamp | null) || null,
+        };
+      });
+      onChange(list);
+    },
+    () => {
+      onChange([]);
+    }
+  );
+}
+
+export async function markGroupChatRead(
+  user: User,
+  displayName: string,
+  photoURL: string
+): Promise<void> {
+  if (!user.uid) return;
+  try {
+    await setDoc(doc(db, 'mchart_group_reads', user.uid), {
+      uid: user.uid,
+      displayName: sanitizeTextInput(displayName || user.displayName || 'Mwanachama', 80) || 'Mwanachama',
+      photoURL: sanitizeTextInput(photoURL || user.photoURL || '', 500),
+      lastReadAt: serverTimestamp(),
+    });
+  } catch {
+    // Non-blocking read receipt sync
+  }
+}
+
 export interface FormattedNoteResult {
   title: string;
   subtitle: string;
@@ -1289,8 +1547,14 @@ export interface FormattedNoteResult {
   fileName: string;
 }
 
+const MAX_FIRESTORE_NOTE_CHARS = 900_000;
+
 function splitDenseParagraphForMobile(paragraph: string): string[] {
   if (paragraph.length <= 420) return [paragraph];
+  // Never split inside inline color/bg/underline/link markup
+  if (/\[(?:color|bg)=#[0-9a-fA-F]{3,6}\]/i.test(paragraph)) {
+    return [paragraph];
+  }
   const sentences = paragraph.match(/[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g) || [paragraph];
   const chunks: string[] = [];
   let current = '';
@@ -1308,12 +1572,20 @@ function splitDenseParagraphForMobile(paragraph: string): string[] {
   return chunks.length > 0 ? chunks : [paragraph];
 }
 
+const CLI_COMMAND_REGEX =
+  /^(?:\$\s+|sudo\s+|npm\s+|npx\s+|yarn\s+|pnpm\s+|bun\s+|pip3?\s+|python3?\s+|node\s+|tsx\s+|ts-node\s+|git\s+|docker(?:-compose)?\s+|kubectl\s+|helm\s+|curl\s+|wget\s+|ssh\s+|scp\s+|rsync\s+|firebase\s+|gcloud\s+|aws\s+|az\s+|terraform\s+|ansible\s+|systemctl\s+|service\s+|journalctl\s+|apt(?:-get)?\s+|yum\s+|dnf\s+|brew\s+|apk\s+|pkg\s+|termux-[\w-]+\s+|adb\s+|fastboot\s+|ffmpeg\s+|openssl\s+|chmod\s+|chown\s+|mkdir\s+|cd\s+|ls(?:\s+-[\w-]+|\s+\S*[/.])|rm\s+-|cp\s+|mv\s+|cat\s+\S*[/.~]|touch\s+|tail\s+-|head\s+-|grep\s+|sed\s+|awk\s+|tar\s+|unzip\s+|pm2\s+|nginx\s+|psql\s+|mysql\s+|sqlite3\s+|redis-cli\s+|export\s+[A-Z0-9_]+=)/i;
+
 function detectCodeLanguage(codeLines: string[]): string {
   const joined = codeLines.join('\n');
-  if (/^\s*(npm|npx|yarn|pnpm|bun|pip3?|git|docker|kubectl|curl|wget|sudo|cd|mkdir|chmod)\s+/m.test(joined)) {
+  if (
+    CLI_COMMAND_REGEX.test(joined.trim()) ||
+    /^\s*(?:\$\s+)?(?:npm|npx|yarn|pnpm|bun|pip3?|git|docker|kubectl|curl|wget|sudo|cd|mkdir|chmod|firebase|gcloud|aws|apt|apt-get|brew|pkg|python3?|node|tsx|systemctl|ssh|export)\b/m.test(
+      joined
+    )
+  ) {
     return 'bash';
   }
-  if (/^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE TABLE|ALTER TABLE)\b/im.test(joined)) {
+  if (/^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE TABLE|ALTER TABLE|DROP TABLE)\b/im.test(joined)) {
     return 'sql';
   }
   if (/<\/?[a-zA-Z][a-zA-Z0-9-]*(\s|>|\/>)/.test(joined) && !/=>/.test(joined)) {
@@ -1325,7 +1597,10 @@ function detectCodeLanguage(codeLines: string[]): string {
   if (/^\s*(interface |type \w+\s*=|:\s*(string|number|boolean)\b)/m.test(joined)) {
     return 'typescript';
   }
-  if (/^\s*(const|let|var|function|export|import|async\s+function|console\.log)\b/m.test(joined) || /=>/.test(joined)) {
+  if (
+    /^\s*(const|let|var|function|export|import|async\s+function|console\.log)\b/m.test(joined) ||
+    /=>/.test(joined)
+  ) {
     return 'javascript';
   }
   if (/^\s*[\[{]/.test(joined) && /"[\w-]+"\s*:/.test(joined)) {
@@ -1338,10 +1613,23 @@ function detectCodeLanguage(codeLines: string[]): string {
 }
 
 function isStrongSingleCodeLine(trimmed: string): boolean {
-  if (!trimmed || trimmed.length > 220) return false;
+  if (!trimmed || trimmed.length > 340) return false;
+  // Never misclassify Markdown links, media tokens, headings, or blockquotes as code
   if (
-    /^(npm|npx|yarn|pnpm|bun|pip3?|git|docker|kubectl|curl|wget)\s+\S+/i.test(trimmed) ||
-    /^(SELECT|INSERT INTO|UPDATE\s+\w+\s+SET|DELETE FROM|CREATE TABLE)\b/i.test(trimmed) ||
+    /^#{1,4}\s+/.test(trimmed) ||
+    trimmed.startsWith('>') ||
+    /^!\[[^\]]*\]\(/i.test(trimmed) ||
+    /^@\[video/i.test(trimmed) ||
+    /^\[(?:color|bg)=/i.test(trimmed)
+  ) {
+    return false;
+  }
+  if (
+    CLI_COMMAND_REGEX.test(trimmed) ||
+    /^[A-Z][A-Z0-9_]{2,}=\S+/.test(trimmed) ||
+    /^(SELECT|INSERT INTO|UPDATE\s+\w+\s+SET|DELETE FROM|CREATE TABLE|ALTER TABLE)\b/i.test(
+      trimmed
+    ) ||
     /^(const|let|var|import|export|async\s+function|function)\s+\S+/.test(trimmed) ||
     /^console\.(log|error|warn)\(.*\);?$/.test(trimmed) ||
     /^<\/?[a-zA-Z][a-zA-Z0-9-]*(\s[^>]*)?>$/.test(trimmed)
@@ -1351,16 +1639,50 @@ function isStrongSingleCodeLine(trimmed: string): boolean {
   return false;
 }
 
+function extractInlineLabeledCommand(
+  trimmed: string
+): { label: string; command: string } | null {
+  const match = trimmed.match(
+    /^([A-Za-z0-9\u00C0-\u024F\s()_-]{2,55}):\s+(.+)$/
+  );
+  if (!match) return null;
+  const label = match[1].trim();
+  const candidate = match[2].trim();
+  if (/^https?$/i.test(label)) return null;
+  const strippedBackticks =
+    candidate.startsWith('`') && candidate.endsWith('`') && candidate.length >= 4
+      ? candidate.slice(1, -1).trim()
+      : candidate;
+  if (isStrongSingleCodeLine(strippedBackticks)) {
+    return { label, command: strippedBackticks };
+  }
+  return null;
+}
+
 function isLikelyCodeContinuation(rawLine: string): boolean {
   const trimmed = rawLine.trim();
   if (!trimmed) return false;
-  if (/^(\s{2,}|\t+)/.test(rawLine) && !/^[-•*]\s+/.test(trimmed) && !/^\d{1,2}[.)]\s+/.test(trimmed)) {
+  if (
+    /^#{1,4}\s+/.test(trimmed) ||
+    trimmed.startsWith('>') ||
+    /^!\[[^\]]*\]\(/i.test(trimmed) ||
+    /^@\[video/i.test(trimmed)
+  ) {
+    return false;
+  }
+  if (
+    /^(\s{2,}|\t+)/.test(rawLine) &&
+    !/^[-•*]\s+/.test(trimmed) &&
+    !/^\d{1,2}[.)]\s+/.test(trimmed)
+  ) {
     return true;
   }
   if (isStrongSingleCodeLine(trimmed)) return true;
   if (
     /^(\{|\}|\[|\]|\);?|\};?)$/.test(trimmed) ||
-    /^(if|else|for|while|switch|try|catch|finally|return|def|class|elif|from|public|private)\b/.test(trimmed) ||
+    /^(if|else|for|while|switch|try|catch|finally|return|def|class|elif|from|public|private)\b/.test(
+      trimmed
+    ) ||
     /;\s*$/.test(trimmed) ||
     /=>/.test(trimmed) ||
     /^[a-zA-Z_][a-zA-Z0-9_.]*\s*=\s*[^=]/.test(trimmed) ||
@@ -1437,7 +1759,7 @@ export function formatRawTextAsStructuredNote(
       const isBulletOrNum =
         /^[•·–—▪‣✓✔➢►*-]\s+/.test(nextTrim) || /^\d{1,2}[.)]\s+/.test(nextTrim);
       const isFence = nextTrim.startsWith('```') || nextTrim.startsWith('~~~');
-      const isHeading = /^#{1,3}\s+/.test(nextTrim) || nextTrim.endsWith(':');
+      const isHeading = /^#{1,3}\s+/.test(nextTrim) || nextTrim.endsWith(':') || nextTrim.startsWith('>');
       const isMediaToken =
         /^!\[[^\]]*\]\(https:\/\/[^\s)]+\)$/i.test(nextTrim) ||
         /^@\[video(?:\|[^\]]*)?\]\(https:\/\/[^\s)]+\)$/i.test(nextTrim);
@@ -1449,6 +1771,7 @@ export function formatRawTextAsStructuredNote(
         !isHeading &&
         !isMediaToken &&
         !isStrongSingleCodeLine(nextTrim) &&
+        !extractInlineLabeledCommand(nextTrim) &&
         nextTrim.length >= 10 &&
         nextTrim.length <= 150
       ) {
@@ -1494,6 +1817,18 @@ export function formatRawTextAsStructuredNote(
       continue;
     }
 
+    // 0b. Horizontal divider
+    if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      if (formattedLines.length > 0 && formattedLines[formattedLines.length - 1] !== '') {
+        formattedLines.push('');
+      }
+      formattedLines.push('---');
+      formattedLines.push('');
+      prevBlank = true;
+      i++;
+      continue;
+    }
+
     // 1. Explicit Markdown Fenced Code Block (``` or ~~~)
     const fenceMatch = trimmed.match(/^(```|~~~)([a-zA-Z0-9_+-]*)\s*$/);
     if (fenceMatch) {
@@ -1521,7 +1856,7 @@ export function formatRawTextAsStructuredNote(
       continue;
     }
 
-    // 2. Unfenced Pasted Code Detection (single strong command or 2+ consecutive code lines)
+    // 2. Unfenced Pasted Code or CLI Command Detection (single strong command or 2+ consecutive code lines)
     if (isLikelyCodeContinuation(raw)) {
       const probeLines: string[] = [raw];
       let j = i + 1;
@@ -1571,6 +1906,22 @@ export function formatRawTextAsStructuredNote(
       }
     }
 
+    // 2b. Isolate labeled command lines (e.g. "Amri: npm install firebase") so commands don't sit as plain notes
+    const labeledCmd = extractInlineLabeledCommand(trimmed);
+    if (labeledCmd) {
+      if (formattedLines.length > 0 && formattedLines[formattedLines.length - 1] !== '') {
+        formattedLines.push('');
+      }
+      formattedLines.push(`**${labeledCmd.label}:**`);
+      formattedLines.push(`\`\`\`${detectCodeLanguage([labeledCmd.command])}`);
+      formattedLines.push(labeledCmd.command);
+      formattedLines.push('```');
+      formattedLines.push('');
+      prevBlank = true;
+      i++;
+      continue;
+    }
+
     prevBlank = false;
 
     // 3. Markdown Subheading (### or ##)
@@ -1592,32 +1943,77 @@ export function formatRawTextAsStructuredNote(
       continue;
     }
 
-    // 4. Bullet item normalization
-    if (/^[•·–—▪‣✓✔➢►*]\s+/.test(trimmed) || /^-\s+/.test(trimmed)) {
-      const itemText = trimmed.replace(/^[•·–—▪‣✓✔➢►*-]\s+/, '').trim();
-      if (itemText) formattedLines.push(`- ${itemText}`);
+    // 3b. Blockquote preservation (> quote)
+    if (trimmed.startsWith('>')) {
+      const qText = trimmed.replace(/^>\s*/, '').trim();
+      if (qText) {
+        formattedLines.push(`> ${qText}`);
+      }
       i++;
       continue;
     }
 
-    // 5. Numbered list normalization
+    // 4. Bullet item normalization (isolate command-only bullets into copyable bash blocks!)
+    if (/^[•·–—▪‣✓✔➢►*]\s+/.test(trimmed) || /^-\s+/.test(trimmed)) {
+      const itemText = trimmed.replace(/^[•·–—▪‣✓✔➢►*-]\s+/, '').trim();
+      const itemCmd = extractInlineLabeledCommand(itemText);
+      if (itemCmd) {
+        formattedLines.push(`- **${itemCmd.label}:**`);
+        formattedLines.push(`\`\`\`${detectCodeLanguage([itemCmd.command])}`);
+        formattedLines.push(itemCmd.command);
+        formattedLines.push('```');
+      } else if (isStrongSingleCodeLine(itemText.replace(/^`|`$/g, '').trim())) {
+        const cleanCmd = itemText.replace(/^`|`$/g, '').trim();
+        formattedLines.push(`\`\`\`${detectCodeLanguage([cleanCmd])}`);
+        formattedLines.push(cleanCmd);
+        formattedLines.push('```');
+      } else if (itemText) {
+        formattedLines.push(`- ${itemText}`);
+      }
+      i++;
+      continue;
+    }
+
+    // 5. Numbered list normalization (isolate command-only steps into copyable bash blocks!)
     const numMatch = trimmed.match(/^(\d{1,2})[.)]\s+(.+)$/);
     if (numMatch) {
-      formattedLines.push(`${numMatch[1]}. ${numMatch[2].trim()}`);
+      const itemText = numMatch[2].trim();
+      const itemCmd = extractInlineLabeledCommand(itemText);
+      if (itemCmd) {
+        formattedLines.push(`${numMatch[1]}. **${itemCmd.label}:**`);
+        formattedLines.push(`\`\`\`${detectCodeLanguage([itemCmd.command])}`);
+        formattedLines.push(itemCmd.command);
+        formattedLines.push('```');
+      } else if (isStrongSingleCodeLine(itemText.replace(/^`|`$/g, '').trim())) {
+        const cleanCmd = itemText.replace(/^`|`$/g, '').trim();
+        formattedLines.push(`${numMatch[1]}. Amri ya kutekeleza:`);
+        formattedLines.push(`\`\`\`${detectCodeLanguage([cleanCmd])}`);
+        formattedLines.push(cleanCmd);
+        formattedLines.push('```');
+      } else {
+        formattedLines.push(`${numMatch[1]}. ${itemText}`);
+      }
       i++;
       continue;
     }
 
     // 6. Auto-detected Section Titles & Subheadings
     const looksLikeUrl = /https?:\/\//i.test(trimmed);
+    const hasInlineMarkup = /^\[(?:color|bg)=/i.test(trimmed) || /^\*\*[^*]+\*\*/.test(trimmed);
     const lettersOnly = trimmed.replace(/[^a-zA-Z]/g, '');
     const isAllCapsHeading =
+      !hasInlineMarkup &&
       lettersOnly.length >= 3 &&
       lettersOnly === lettersOnly.toUpperCase() &&
       trimmed.length <= 70;
     const isColonHeading =
-      !looksLikeUrl && trimmed.endsWith(':') && trimmed.length >= 4 && trimmed.length <= 75;
+      !looksLikeUrl &&
+      !hasInlineMarkup &&
+      trimmed.endsWith(':') &&
+      trimmed.length >= 4 &&
+      trimmed.length <= 75;
     const isNamedSection =
+      !hasInlineMarkup &&
       /^(sehemu|somo|chapter|part|hatua|muhtasari|utangulizi|hitimisho|kumbuka|zingatia)\b/i.test(
         trimmed
       ) && trimmed.length <= 80;
@@ -1653,15 +2049,19 @@ export function formatRawTextAsStructuredNote(
 
   let body = formattedLines.join('\n').trim();
   if (body.length < 5) {
-    body = normalizedRaw.slice(0, 14800);
+    body = normalizedRaw.slice(0, MAX_FIRESTORE_NOTE_CHARS);
   }
-  body = sanitizeTextInput(body, 15000);
+  body = sanitizeTextInput(body, MAX_FIRESTORE_NOTE_CHARS);
 
   const plainForSummary = body
     .replace(/!\[[^\]]*\]\(https:\/\/[^\s)]+\)/gi, ' [Picha] ')
     .replace(/@\[video(?:\|[^\]]*)?\]\(https:\/\/[^\s)]+\)/gi, ' [Video] ')
-    .replace(/```[\s\S]*?```/g, ' [Code Snippet] ')
+    .replace(/```[\s\S]*?```/g, ' [Code/Amri] ')
+    .replace(/\[(?:color|bg)=#[0-9a-fA-F]{3,6}\]/gi, '')
+    .replace(/\[\/(?:color|bg|u)\]/gi, '')
+    .replace(/\[u\]/gi, '')
     .replace(/^#{2,3}\s+/gm, '')
+    .replace(/^>\s*/gm, '')
     .replace(/^[-*]\s+/gm, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -1671,7 +2071,7 @@ export function formatRawTextAsStructuredNote(
   );
 
   const words = plainForSummary.split(/\s+/).filter(Boolean);
-  const wordCount = Math.max(1, Math.min(words.length, 50000));
+  const wordCount = Math.max(1, words.length);
 
   const now = new Date();
   const datePart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
@@ -1838,46 +2238,67 @@ export async function updateMchartNote(
     isArchived?: boolean;
     isPinned?: boolean;
   }
-): Promise<void> {
+): Promise<{ updatedBody?: string }> {
   const path = `mchart_notes/${noteId}`;
+  const noteRef = doc(db, 'mchart_notes', noteId);
   const payload: Record<string, unknown> = {
     updatedAt: serverTimestamp(),
   };
 
-  if (updates.rawText !== undefined) {
-    const formatted = formatRawTextAsStructuredNote(
-      updates.rawText,
-      updates.title,
-      updates.subtitle
-    );
-    payload.title = formatted.title;
-    payload.subtitle = formatted.subtitle;
-    payload.body = formatted.body;
-    payload.summary = formatted.summary;
-    payload.wordCount = formatted.wordCount;
-    payload.fileName = formatted.fileName;
-  } else {
-    if (updates.title !== undefined) {
-      const cleanTitle = sanitizeTextInput(updates.title, 160);
-      if (cleanTitle.length < 2) {
-        throw new Error('Kichwa cha note lazima kiwe na herufi angalau 2.');
-      }
-      payload.title = cleanTitle;
-    }
-    if (updates.subtitle !== undefined) {
-      payload.subtitle = sanitizeTextInput(updates.subtitle, 220);
-    }
-  }
-
-  if (updates.isArchived !== undefined) {
-    payload.isArchived = Boolean(updates.isArchived);
-  }
-  if (updates.isPinned !== undefined) {
-    payload.isPinned = Boolean(updates.isPinned);
-  }
+  let updatedBody: string | undefined;
 
   try {
-    await updateDoc(doc(db, 'mchart_notes', noteId), payload);
+    if (updates.rawText !== undefined) {
+      const existingSnap = await getDoc(noteRef);
+      const isCurrentlyLocked = existingSnap.exists() && Boolean(existingSnap.data()?.isLocked);
+
+      const formatted = formatRawTextAsStructuredNote(
+        updates.rawText,
+        updates.title,
+        updates.subtitle
+      );
+      payload.title = formatted.title;
+      payload.subtitle = formatted.subtitle;
+      payload.wordCount = formatted.wordCount;
+      payload.fileName = formatted.fileName;
+      updatedBody = formatted.body;
+
+      if (isCurrentlyLocked) {
+        await setDoc(
+          doc(db, 'mchart_notes', noteId, 'content', 'full'),
+          {
+            noteId,
+            body: formatted.body,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+      } else {
+        payload.body = formatted.body;
+        payload.summary = formatted.summary;
+      }
+    } else {
+      if (updates.title !== undefined) {
+        const cleanTitle = sanitizeTextInput(updates.title, 160);
+        if (cleanTitle.length < 2) {
+          throw new Error('Kichwa cha note lazima kiwe na herufi angalau 2.');
+        }
+        payload.title = cleanTitle;
+      }
+      if (updates.subtitle !== undefined) {
+        payload.subtitle = sanitizeTextInput(updates.subtitle, 220);
+      }
+    }
+
+    if (updates.isArchived !== undefined) {
+      payload.isArchived = Boolean(updates.isArchived);
+    }
+    if (updates.isPinned !== undefined) {
+      payload.isPinned = Boolean(updates.isPinned);
+    }
+
+    await updateDoc(noteRef, payload);
+    return { updatedBody };
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -2723,7 +3144,9 @@ export async function sendDirectMessage(
 ): Promise<string> {
   const text = sanitizeTextInput(input.text || '', 2000);
   const attachmentType: ChatAttachmentType =
-    input.attachmentType === 'image' || input.attachmentType === 'document'
+    input.attachmentType === 'image' ||
+    input.attachmentType === 'document' ||
+    input.attachmentType === 'audio'
       ? input.attachmentType
       : 'none';
   const attachmentUrl =
@@ -2736,9 +3159,16 @@ export async function sendDirectMessage(
       : Math.max(0, Math.min(Math.floor(Number(input.attachmentSize || 0)), 15_728_640));
   const attachmentMime =
     attachmentType === 'none' ? '' : sanitizeTextInput(input.attachmentMime || '', 120);
+  const audioDurationSec =
+    attachmentType === 'audio'
+      ? Math.max(0, Math.min(Math.round(Number(input.audioDurationSec || 0)), 600))
+      : undefined;
+  const forwardedFromName = input.forwardedFromName
+    ? sanitizeTextInput(input.forwardedFromName, 80)
+    : undefined;
 
   if (text.length === 0 && (attachmentType === 'none' || !attachmentUrl.startsWith('https://'))) {
-    throw new Error('Andika ujumbe au ambatanisha picha/nyaraka kabla ya kutuma.');
+    throw new Error('Andika ujumbe au ambatanisha picha/sauti/nyaraka kabla ya kutuma.');
   }
 
   const chatId = thread.chatId;
@@ -2759,7 +3189,9 @@ export async function sendDirectMessage(
         ? isViewOnce
           ? '👁️ Picha ya Mara Moja (1x)'
           : '📷 Picha'
-        : `📄 ${attachmentName || 'Nyaraka'}`),
+        : attachmentType === 'audio'
+          ? '🎤 Ujumbe wa sauti'
+          : `📄 ${attachmentName || 'Nyaraka'}`),
     200
   );
 
@@ -2777,9 +3209,11 @@ export async function sendDirectMessage(
       attachmentName,
       attachmentSize,
       attachmentMime,
+      ...(audioDurationSec !== undefined ? { audioDurationSec } : {}),
       replyToId: sanitizeTextInput(input.replyToId || '', 128),
       replyToSenderName: sanitizeTextInput(input.replyToSenderName || '', 80),
       replyToPreview: sanitizeTextInput(input.replyToPreview || '', 160),
+      ...(forwardedFromName ? { forwardedFromName } : {}),
       isDeleted: false,
       ...(isViewOnce ? { viewOnce: true, viewOnceConsumed: false, viewOnceOpenedAt: null } : {}),
       createdAt: serverTimestamp(),
@@ -2800,6 +3234,59 @@ export async function sendDirectMessage(
     return msgRef.id;
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function editDirectMessage(
+  chatId: string,
+  messageId: string,
+  newText: string
+): Promise<void> {
+  const cleanText = sanitizeTextInput(newText, 2000);
+  if (!cleanText) {
+    throw new Error('Ujumbe hauwezi kuwa mtupu.');
+  }
+  const path = `direct_chats/${chatId}/messages/${messageId}`;
+  try {
+    await updateDoc(doc(db, 'direct_chats', chatId, 'messages', messageId), {
+      text: cleanText,
+      isEdited: true,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function toggleDirectMessageReaction(
+  chatId: string,
+  messageId: string,
+  emoji: string,
+  uid: string,
+  currentReactions?: Record<string, string[]>
+): Promise<void> {
+  if (!uid || !emoji) return;
+  const path = `direct_chats/${chatId}/messages/${messageId}`;
+  const nextReactions: Record<string, string[]> = {};
+  if (currentReactions && typeof currentReactions === 'object') {
+    Object.entries(currentReactions).forEach(([k, arr]) => {
+      if (Array.isArray(arr) && arr.length > 0) {
+        const filtered = arr.filter((id) => id !== uid);
+        if (filtered.length > 0) nextReactions[k] = filtered.slice(0, 10);
+      }
+    });
+  }
+  const alreadySame = Boolean(currentReactions?.[emoji]?.includes(uid));
+  if (!alreadySame) {
+    nextReactions[emoji] = [...(nextReactions[emoji] || []), uid].slice(0, 10);
+  }
+  try {
+    await updateDoc(doc(db, 'direct_chats', chatId, 'messages', messageId), {
+      reactions: nextReactions,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 

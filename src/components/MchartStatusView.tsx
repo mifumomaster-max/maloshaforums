@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { User } from 'firebase/auth';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import {
@@ -62,7 +61,8 @@ interface MchartStatusTabProps {
   ) => Promise<void>;
   onSignIn: (reason?: AuthPromptReason) => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
-  onRequestConfirm: (opts: {
+  onFullscreenActiveChange?: (active: boolean) => void;
+  onRequestConfirm?: (opts: {
     title: string;
     message: string;
     confirmLabel: string;
@@ -93,7 +93,7 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
   onStartPrivateChatWith,
   onSignIn,
   onToast,
-  onRequestConfirm,
+  onFullscreenActiveChange,
 }) => {
   const { tr, formatTime } = useLanguage();
   const [seenIds, setSeenIds] = useState<Set<string>>(() => {
@@ -109,6 +109,8 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
       return new Set();
     }
   });
+  const [confirmDeleteStatusId, setConfirmDeleteStatusId] = useState<string | null>(null);
+  const [deletingStatus, setDeletingStatus] = useState(false);
 
   // Upload & Composer State
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -237,6 +239,12 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
 
   const activeGroup = activeGroupIndex >= 0 ? allGroupsForNavigation[activeGroupIndex] : null;
   const currentSlide = activeGroup ? activeGroup.items[viewerSlideIndex] || null : null;
+
+  useEffect(() => {
+    onFullscreenActiveChange?.(
+      Boolean(pendingCropFile || composerOpen || (activeGroup && currentSlide))
+    );
+  }, [pendingCropFile, composerOpen, activeGroup, currentSlide, onFullscreenActiveChange]);
 
   // Record view receipt when viewing another member's status
   useEffect(() => {
@@ -511,22 +519,23 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
     }
   };
 
-  const handleDeleteCurrentStatus = (status: MchartStatus) => {
-    onRequestConfirm({
-      title: tr('Futa Status Hii?', 'Delete This Status?'),
-      message: tr(
-        'Picha hii ya Status itaondolewa mara moja kwa watu wote.',
-        'This status photo will be permanently removed for all viewers.'
-      ),
-      confirmLabel: tr('Futa Status', 'Delete Status'),
-      destructive: true,
-      action: async () => {
-        await deleteMchartStatus(status.id);
-        setViewersSheetOpen(false);
-        setViewerGroupAuthorId(null);
-        onToast(tr('Status imefutwa.', 'Status deleted.'));
-      },
-    });
+  const handleDeleteCurrentStatus = async (status: MchartStatus) => {
+    if (deletingStatus) return;
+    setDeletingStatus(true);
+    try {
+      await deleteMchartStatus(status.id);
+      setConfirmDeleteStatusId(null);
+      setViewersSheetOpen(false);
+      setViewerGroupAuthorId(null);
+      onToast(tr('Status imefutwa.', 'Status deleted.'));
+    } catch (err) {
+      onToast(
+        err instanceof Error ? err.message : tr('Imeshindwa kufuta status.', 'Failed to delete status.'),
+        'error'
+      );
+    } finally {
+      setDeletingStatus(false);
+    }
   };
 
   const handleSendStatusDmReply = async (e: React.FormEvent) => {
@@ -974,56 +983,60 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
         </div>
       )}
 
-      {/* Image Crop Modal for Status */}
-      <ImageResizeModal
-        file={pendingCropFile}
-        defaultPreset="4:5"
-        onCancel={() => setPendingCropFile(null)}
-        onConfirm={(resizedFile) => void handleConfirmCroppedImage(resizedFile)}
-      />
+      {/* Inline Image Crop View for Status */}
+      {pendingCropFile && (
+        <div className="absolute inset-0 z-20 flex flex-col overflow-hidden bg-[#0F172A]">
+          <ImageResizeModal
+            inline
+            file={pendingCropFile}
+            defaultPreset="4:5"
+            onCancel={() => {
+              setPendingCropFile(null);
+              onFullscreenActiveChange?.(false);
+            }}
+            onConfirm={(resizedFile) => {
+              onFullscreenActiveChange?.(true);
+              void handleConfirmCroppedImage(resizedFile);
+            }}
+          />
+        </div>
+      )}
 
-      {/* New Status Composer Modal (Portaled above MobileBottomNav with pinned submit footer) */}
-      {composerOpen &&
-        typeof document !== 'undefined' &&
-        createPortal(
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label={tr('Weka Status ya Picha', 'Create Photo Status')}
-            className="fixed inset-0 z-[90] flex items-center justify-center bg-black/75 p-3 pb-[calc(14px+env(safe-area-inset-bottom,0px))] sm:p-4"
-          >
-            <div className="flex max-h-[84dvh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
-              <div className="flex shrink-0 items-center justify-between bg-[#075E54] px-4 py-3 text-white">
-                <div className="flex items-center gap-2">
-                  {stagedMediaType === 'video' ? (
-                    <Film className="h-4 w-4 text-[#25D366]" aria-hidden="true" />
-                  ) : (
-                    <Camera className="h-4 w-4 text-[#25D366]" aria-hidden="true" />
-                  )}
-                  <h3 className="text-sm font-bold">
-                    {stagedMediaType === 'video'
-                      ? tr('Chapisha Status ya Video (Saa 24)', 'Post 24h Video Status')
-                      : tr('Chapisha Status ya Picha (Saa 24)', 'Post 24h Photo Status')}
-                  </h3>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setComposerOpen(false);
-                    setStagedMediaType('image');
-                    setStagedImageUrl('');
-                    setStagedVideoUrl('');
-                    setStagedDurationSec(0);
-                    setCaption('');
-                  }}
-                  aria-label={tr('Funga', 'Close')}
-                  className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
+      {/* Inline Status Composer View (inside Mchart page, zero popup) */}
+      {composerOpen && (
+        <div className="absolute inset-0 z-20 flex flex-col overflow-hidden bg-[#F4F7FA]">
+          <div className="flex shrink-0 items-center justify-between bg-[#075E54] px-4 py-3 text-white">
+            <div className="flex items-center gap-2">
+              {stagedMediaType === 'video' ? (
+                <Film className="h-4 w-4 text-[#25D366]" aria-hidden="true" />
+              ) : (
+                <Camera className="h-4 w-4 text-[#25D366]" aria-hidden="true" />
+              )}
+              <h3 className="text-sm font-bold">
+                {stagedMediaType === 'video'
+                  ? tr('Chapisha Status ya Video (Saa 24)', 'Post 24h Video Status')
+                  : tr('Chapisha Status ya Picha (Saa 24)', 'Post 24h Photo Status')}
+              </h3>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setComposerOpen(false);
+                setStagedMediaType('image');
+                setStagedImageUrl('');
+                setStagedVideoUrl('');
+                setStagedDurationSec(0);
+                setCaption('');
+                onFullscreenActiveChange?.(false);
+              }}
+              aria-label={tr('Funga', 'Close')}
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
 
-              <form onSubmit={handlePublishStatus} className="flex min-h-0 flex-1 flex-col">
+          <form onSubmit={handlePublishStatus} className="mx-auto flex min-h-0 w-full max-w-xl flex-1 flex-col bg-white">
                 <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto p-4">
                   {uploadingImage ? (
                     <div className="flex h-48 flex-col items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-600">
@@ -1199,25 +1212,18 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
                   </button>
                 </div>
               </form>
-            </div>
-          </div>,
-          document.body
-        )}
+        </div>
+      )}
 
-      {/* Fullscreen WhatsApp-Style Story Viewer (Portaled above bottom navigation) */}
-      {activeGroup &&
-        currentSlide &&
-        typeof document !== 'undefined' &&
-        createPortal(
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label={activeGroup.authorName}
-            className="fixed inset-0 z-[90] flex flex-col bg-black text-white select-none"
-            onPointerDown={() => setIsPaused(true)}
-            onPointerUp={() => setIsPaused(false)}
-            onPointerCancel={() => setIsPaused(false)}
-          >
+      {/* Inline WhatsApp-Style Story Viewer inside Mchart */}
+      {activeGroup && currentSlide && (
+        <div
+          aria-label={activeGroup.authorName}
+          className="absolute inset-0 z-20 flex flex-col overflow-hidden bg-black text-white select-none"
+          onPointerDown={() => setIsPaused(true)}
+          onPointerUp={() => setIsPaused(false)}
+          onPointerCancel={() => setIsPaused(false)}
+        >
           {/* Progress Bars */}
           <div className="mx-auto flex w-full max-w-2xl gap-1.5 px-3 pt-3">
             {activeGroup.items.map((item, idx) => {
@@ -1299,7 +1305,8 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => {
                     e.stopPropagation();
-                    handleDeleteCurrentStatus(currentSlide);
+                    setConfirmDeleteStatusId(currentSlide.id);
+                    setIsPaused(true);
                   }}
                   aria-label={tr('Futa status', 'Delete status')}
                   className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-red-300 hover:bg-red-500/30 hover:text-white"
@@ -1312,6 +1319,7 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation();
+                  setConfirmDeleteStatusId(null);
                   setViewerGroupAuthorId(null);
                   setViewersSheetOpen(false);
                 }}
@@ -1322,6 +1330,38 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
               </button>
             </div>
           </div>
+
+          {confirmDeleteStatusId === currentSlide.id && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="mx-auto mb-2 flex w-full max-w-2xl items-center justify-between gap-2 rounded-xl bg-red-950/90 px-3.5 py-2 text-xs text-white"
+            >
+              <span className="font-semibold">
+                {tr('Futa Status hii kabisa?', 'Delete this status permanently?')}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={deletingStatus}
+                  onClick={() => {
+                    setConfirmDeleteStatusId(null);
+                    setIsPaused(false);
+                  }}
+                  className="rounded-lg bg-white/15 px-3 py-1 font-bold hover:bg-white/25"
+                >
+                  {tr('Hapana', 'Cancel')}
+                </button>
+                <button
+                  type="button"
+                  disabled={deletingStatus}
+                  onClick={() => void handleDeleteCurrentStatus(currentSlide)}
+                  className="rounded-lg bg-red-600 px-3 py-1 font-bold text-white hover:bg-red-500 disabled:opacity-50"
+                >
+                  {deletingStatus ? '...' : tr('Futa', 'Delete')}
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Story Media Area (Photo or Video) with Left/Right Tap Navigation */}
           <div className="relative mx-auto flex min-h-0 w-full max-w-2xl flex-1 items-center justify-center overflow-hidden px-2">
@@ -1455,11 +1495,11 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
             )}
           </div>
 
-          {/* Owner-Only Viewers Slide-up Sheet */}
+          {/* Owner-Only Viewers Inline Drawer */}
           {viewersSheetOpen && user && currentSlide.authorId === user.uid && (
             <div
               onClick={(e) => e.stopPropagation()}
-              className="fixed inset-x-0 bottom-0 z-50 mx-auto max-h-[55vh] w-full max-w-2xl overflow-hidden rounded-t-2xl bg-white text-slate-900 shadow-2xl"
+              className="absolute inset-x-0 bottom-0 z-30 mx-auto max-h-[55%] w-full max-w-2xl overflow-hidden rounded-t-2xl bg-white text-slate-900 shadow-2xl"
             >
               <div className="flex items-center justify-between bg-[#075E54] px-4 py-3 text-white">
                 <div className="flex items-center gap-2 text-xs font-bold">
@@ -1509,8 +1549,7 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
               </div>
             </div>
           )}
-        </div>,
-        document.body
+        </div>
       )}
     </div>
   );

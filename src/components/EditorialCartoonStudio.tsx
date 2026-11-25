@@ -21,6 +21,7 @@ import {
   MessageCircle,
   Minus,
   MousePointer,
+  Newspaper,
   PaintBucket,
   PenTool,
   Pipette,
@@ -30,6 +31,7 @@ import {
   Save,
   Search,
   Send,
+  Share2,
   Sparkles,
   Square,
   Trash2,
@@ -63,6 +65,11 @@ import {
   loadStudioDraft,
   saveStudioDraft,
 } from '../utils/studioDraftStorage';
+import {
+  buildStudioMakalaBody,
+  saveStudioMakalaSnapshot,
+  setPendingStudioMakalaImportId,
+} from '../utils/studioMakalaBridge';
 
 interface EditorialCartoonStudioProps {
   onPublishToPlatform: (input: {
@@ -923,9 +930,12 @@ export const EditorialCartoonStudio: React.FC<EditorialCartoonStudioProps> = ({
   const [publishBoard, setPublishBoard] = useState<PrimaryBoard>('Kijiweni');
   const [postTitle, setPostTitle] = useState('');
   const [postCaption, setPostCaption] = useState('');
+  const [hasCustomTitle, setHasCustomTitle] = useState(false);
+  const [hasCustomCaption, setHasCustomCaption] = useState(false);
   const [postTagsRaw, setPostTagsRaw] = useState('katuni, maoni, malosha');
   const [publishing, setPublishing] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [sendingToMakala, setSendingToMakala] = useState(false);
 
   // Reset confirm + Auto-save status
   const [confirmClearAll, setConfirmClearAll] = useState(false);
@@ -1038,8 +1048,8 @@ export const EditorialCartoonStudio: React.FC<EditorialCartoonStudioProps> = ({
   );
 
   const compositeCanvas = useCallback(
-    (forExport: boolean) => {
-      const out = displayCanvasRef.current;
+    (forExport: boolean, targetCanvas?: HTMLCanvasElement) => {
+      const out = targetCanvas || displayCanvasRef.current;
       if (!out) return;
       const dims = ASPECT_DIMENSIONS[aspect];
       if (out.width !== dims.width) out.width = dims.width;
@@ -1304,8 +1314,14 @@ export const EditorialCartoonStudio: React.FC<EditorialCartoonStudioProps> = ({
           setShowSignature(draft.showSignature !== false);
           if (typeof draft.signatureText === 'string') setSignatureText(draft.signatureText);
           if (draft.publishBoard) setPublishBoard(draft.publishBoard);
-          if (typeof draft.postTitle === 'string') setPostTitle(draft.postTitle);
-          if (typeof draft.postCaption === 'string') setPostCaption(draft.postCaption);
+          if (typeof draft.postTitle === 'string' && draft.postTitle.trim()) {
+            setPostTitle(draft.postTitle);
+            setHasCustomTitle(true);
+          }
+          if (typeof draft.postCaption === 'string' && draft.postCaption.trim()) {
+            setPostCaption(draft.postCaption);
+            setHasCustomCaption(true);
+          }
           if (typeof draft.postTagsRaw === 'string') setPostTagsRaw(draft.postTagsRaw);
 
           const targetDims = ASPECT_DIMENSIONS[draft.aspect || '4:3'];
@@ -2003,17 +2019,83 @@ export const EditorialCartoonStudio: React.FC<EditorialCartoonStudioProps> = ({
     })();
   };
 
-  const exportCleanPngBlob = async (): Promise<Blob> => {
-    compositeCanvas(true);
-    const canvas = displayCanvasRef.current;
-    if (!canvas) throw new Error('Canvas haipo.');
+  const autoCartoonTexts = useMemo(() => {
+    const cleanTexts = bubbles
+      .map((b) => ({ kind: b.kind, text: b.text.trim() }))
+      .filter((b) => b.text.length > 0 && b.text !== 'ANDIKA POPOTE HAPA');
+    const banner = cleanTexts.find((b) => b.kind === 'banner');
+    const first = cleanTexts[0];
+    const autoTitle = (banner?.text || first?.text || tr('Katuni ya Siku · Malosha Forums', 'Editorial Cartoon · Malosha Forums')).slice(0, 140);
+    const bubbleLines = cleanTexts.map((b) => b.text);
+    const autoCaption =
+      bubbleLines.join('\n\n') ||
+      tr('Katuni ya maoni iliyotengenezwa ndani ya Studio ya Malosha Forums.', 'Editorial cartoon created in Malosha Forums Studio.');
+    return { autoTitle, autoCaption, bubbleLines };
+  }, [bubbles, tr]);
+
+  useEffect(() => {
+    if (!hasCustomTitle) {
+      setPostTitle(autoCartoonTexts.autoTitle);
+    }
+  }, [hasCustomTitle, autoCartoonTexts.autoTitle]);
+
+  useEffect(() => {
+    if (!hasCustomCaption) {
+      setPostCaption(autoCartoonTexts.autoCaption);
+    }
+  }, [hasCustomCaption, autoCartoonTexts.autoCaption]);
+
+  const exportCleanPngBlob = useCallback(async (): Promise<Blob> => {
+    const dims = ASPECT_DIMENSIONS[aspect];
+    const offscreen = document.createElement('canvas');
+    offscreen.width = dims.width;
+    offscreen.height = dims.height;
+    compositeCanvas(true, offscreen);
     const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, 'image/png', 1)
+      offscreen.toBlob(resolve, 'image/png', 1)
     );
-    compositeCanvas(false);
     if (!blob) throw new Error('Imeshindwa kutengeneza picha ya katuni.');
     return blob;
-  };
+  }, [aspect, compositeCanvas]);
+
+  const syncCartoonToMakalaBridge = useCallback(
+    async (options?: { saveHistory?: boolean; uploadedImageUrl?: string; existingBlob?: Blob }) => {
+      try {
+        const blob = options?.existingBlob || (await exportCleanPngBlob());
+        const cleanTitle = (postTitle.trim() || autoCartoonTexts.autoTitle).slice(0, 140);
+        const bodyDraft = buildStudioMakalaBody({
+          headline: cleanTitle,
+          subheadline: hasCustomCaption && postCaption.trim() ? postCaption.trim() : autoCartoonTexts.autoCaption,
+          bubbles: autoCartoonTexts.bubbleLines,
+        });
+        await saveStudioMakalaSnapshot(
+          {
+            id: 'latest_cartoon',
+            source: 'cartoon',
+            title: cleanTitle,
+            subheadline: postCaption.trim() || autoCartoonTexts.autoCaption,
+            bodyDraft,
+            tags: parseTagsInput(postTagsRaw),
+            imageBlob: blob,
+            ...(options?.uploadedImageUrl ? { uploadedImageUrl: options.uploadedImageUrl } : {}),
+            updatedAt: Date.now(),
+          },
+          options?.saveHistory ? { saveHistory: true } : undefined
+        );
+      } catch {
+        // Ignore bridge background sync errors
+      }
+    },
+    [exportCleanPngBlob, postTitle, postCaption, hasCustomCaption, autoCartoonTexts, postTagsRaw]
+  );
+
+  useEffect(() => {
+    if (!draftHydratedRef.current) return;
+    const timer = window.setTimeout(() => {
+      void syncCartoonToMakalaBridge();
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [syncCartoonToMakalaBridge, canvasRevision]);
 
   const handleDownloadPng = async () => {
     setExporting(true);
@@ -2026,11 +2108,85 @@ export const EditorialCartoonStudio: React.FC<EditorialCartoonStudioProps> = ({
       a.click();
       a.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      await syncCartoonToMakalaBridge({ saveHistory: true, existingBlob: blob });
       onToast(tr('Katuni yako imepakuliwa (PNG)!', 'Your cartoon PNG has been downloaded!'));
     } catch {
       onToast(tr('Imeshindwa kupakua katuni.', 'Failed to export cartoon.'));
     } finally {
       setExporting(false);
+    }
+  };
+
+  const handleShareCartoonAnywhere = async () => {
+    setExporting(true);
+    try {
+      const blob = await exportCleanPngBlob();
+      await syncCartoonToMakalaBridge({ saveHistory: true, existingBlob: blob });
+      const file = new File([blob], `malosha-katuni-${Date.now()}.png`, { type: 'image/png' });
+      const chosenTitle = postTitle.trim() || autoCartoonTexts.autoTitle;
+      const chosenCaption = postCaption.trim() || autoCartoonTexts.autoCaption;
+      const shareText = [chosenTitle, chosenCaption !== chosenTitle ? chosenCaption : '', 'https://maloshaforums.web.app']
+        .filter(Boolean)
+        .join('\n\n');
+
+      if (
+        typeof navigator !== 'undefined' &&
+        typeof navigator.share === 'function' &&
+        (!navigator.canShare || navigator.canShare({ files: [file] }))
+      ) {
+        await navigator.share({
+          files: [file],
+          title: chosenTitle,
+          text: shareText,
+        });
+        onToast(tr('Katuni imeshirikiwa kikamilifu!', 'Cartoon shared successfully!'));
+        return;
+      }
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.name;
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareText).catch(() => {});
+      }
+      onToast(
+        tr(
+          'Katuni imepakuliwa na maelezo yamenakiliwa — tuma WhatsApp, Facebook au X.',
+          'Cartoon downloaded and caption copied — upload to WhatsApp, Facebook, or X.'
+        )
+      );
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      onToast(tr('Imeshindwa kushare katuni.', 'Failed to share cartoon.'));
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleSendCartoonToMakala = async () => {
+    if (sendingToMakala) return;
+    setSendingToMakala(true);
+    try {
+      const blob = await exportCleanPngBlob();
+      await syncCartoonToMakalaBridge({ saveHistory: true, existingBlob: blob });
+      setPendingStudioMakalaImportId('latest_cartoon');
+      onToast(
+        tr(
+          'Inafungua Makala — katuni na maelezo yatajijaza kiotomatiki!',
+          'Opening Makala — cartoon & notes will auto-fill!'
+        )
+      );
+      if (onNavigateBoard) {
+        onNavigateBoard('Makala');
+      }
+    } catch {
+      onToast(tr('Imeshindwa kutuma katuni kwenda Makala.', 'Failed to send cartoon to Makala.'));
+    } finally {
+      setSendingToMakala(false);
     }
   };
 
@@ -2042,17 +2198,19 @@ export const EditorialCartoonStudio: React.FC<EditorialCartoonStudioProps> = ({
       const file = new File([blob], `malosha-katuni-${Date.now()}.png`, { type: 'image/png' });
       const coverUrl = await uploadImageToCloudinary(file);
       const tags = parseTagsInput(postTagsRaw);
-      const defaultBody = tr(
-        'Katuni ya maoni iliyotengenezwa ndani ya Studio ya Malosha Forums.',
-        'Editorial cartoon created in Malosha Forums Studio.'
-      );
+      const chosenTitle = postTitle.trim() || autoCartoonTexts.autoTitle;
+      const chosenBody = postCaption.trim() || autoCartoonTexts.autoCaption;
       const createdId = await onPublishToPlatform({
-        title:
-          postTitle.trim() || tr('Katuni ya Siku · Malosha Forums', 'Editorial Cartoon · Malosha Forums'),
-        body: postCaption.trim() || defaultBody,
+        title: chosenTitle,
+        body: chosenBody,
         category: publishBoard,
         tags,
         coverImage: coverUrl,
+      });
+      await syncCartoonToMakalaBridge({
+        saveHistory: true,
+        existingBlob: blob,
+        uploadedImageUrl: coverUrl,
       });
       onToast(tr(`Katuni imechapishwa kwenye ${publishBoard}!`, `Cartoon published to ${publishBoard}!`));
       if (createdId && onOpenPublishedTopic) {
@@ -3190,20 +3348,47 @@ export const EditorialCartoonStudio: React.FC<EditorialCartoonStudioProps> = ({
                 </button>
               ))}
             </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[11px] font-semibold text-emerald-700">
+                {!hasCustomTitle && !hasCustomCaption
+                  ? tr('Inatumia maneno ya katuni yako kiotomatiki.', 'Auto-using your cartoon bubble text.')
+                  : tr('Umehariri maneno hapa chini.', 'Custom caption active.')}
+              </span>
+              {(hasCustomTitle || hasCustomCaption) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHasCustomTitle(false);
+                    setHasCustomCaption(false);
+                    setPostTitle(autoCartoonTexts.autoTitle);
+                    setPostCaption(autoCartoonTexts.autoCaption);
+                  }}
+                  className="text-[10px] font-bold text-[#0E2640] underline"
+                >
+                  {tr('Vuta kutoka Katuni', 'Sync Bubbles')}
+                </button>
+              )}
+            </div>
             <input
               type="text"
               value={postTitle}
               maxLength={140}
-              onChange={(e) => setPostTitle(e.target.value)}
-              placeholder={tr('Kichwa cha katuni (hiari)...', 'Cartoon headline (optional)...')}
+              onChange={(e) => {
+                setPostTitle(e.target.value);
+                setHasCustomTitle(e.target.value.trim().length > 0 && e.target.value.trim() !== autoCartoonTexts.autoTitle);
+              }}
+              placeholder={tr('Kichwa cha katuni (kinatoka juu kiotomatiki)...', 'Cartoon headline (auto-filled)...')}
               className="h-9 w-full rounded-lg border border-slate-300 px-3 text-xs text-slate-900 focus:border-[#0E2640] focus:outline-none"
             />
             <textarea
               rows={2}
               value={postCaption}
-              maxLength={1200}
-              onChange={(e) => setPostCaption(e.target.value)}
-              placeholder={tr('Ujumbe wa katuni kwa jamii (hiari)...', 'Commentary (optional)...')}
+              maxLength={publishBoard === 'Makala' ? 16000 : 8000}
+              onChange={(e) => {
+                setPostCaption(e.target.value);
+                setHasCustomCaption(e.target.value.trim().length > 0 && e.target.value.trim() !== autoCartoonTexts.autoCaption);
+              }}
+              placeholder={tr('Ujumbe wa katuni kwa jamii (unatoka juu kiotomatiki)...', 'Commentary (auto-filled)...')}
               className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-900 focus:border-[#0E2640] focus:outline-none"
             />
             <input
@@ -3214,7 +3399,7 @@ export const EditorialCartoonStudio: React.FC<EditorialCartoonStudioProps> = ({
               className="h-8 w-full rounded-lg border border-slate-300 px-3 text-[11px] text-slate-700"
             />
 
-            <div className="flex items-center gap-2 pt-1">
+            <div className="flex flex-wrap items-center gap-2 pt-1">
               <button
                 type="button"
                 disabled={publishing}
@@ -3230,6 +3415,16 @@ export const EditorialCartoonStudio: React.FC<EditorialCartoonStudioProps> = ({
               </button>
               <button
                 type="button"
+                disabled={exporting}
+                onClick={() => void handleShareCartoonAnywhere()}
+                title={tr('Shiriki katuni na maneno popote', 'Share cartoon anywhere')}
+                className="inline-flex min-h-[42px] items-center gap-1.5 rounded-lg bg-[#0E2640] px-3 text-xs font-bold text-white hover:bg-[#163A5F] disabled:opacity-60"
+              >
+                <Share2 className="h-4 w-4 text-amber-300" />
+                <span>{tr('Share', 'Share')}</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => {
                   compositeCanvas(true);
                   onToast(tr('Umehakiki mwonekano safi wa kuchapisha.', 'Clean export previewed.'));
@@ -3241,6 +3436,15 @@ export const EditorialCartoonStudio: React.FC<EditorialCartoonStudioProps> = ({
                 <Check className="h-4 w-4 text-emerald-700" />
               </button>
             </div>
+            <button
+              type="button"
+              disabled={sendingToMakala}
+              onClick={() => void handleSendCartoonToMakala()}
+              className="inline-flex min-h-[38px] w-full items-center justify-center gap-1.5 rounded-lg border border-[#B80000] bg-red-50 px-3 py-1.5 text-xs font-bold text-[#B80000] hover:bg-red-100 disabled:opacity-60"
+            >
+              {sendingToMakala ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Newspaper className="h-3.5 w-3.5" />}
+              <span>{tr('Andika Makala na Katuni Hii (Jaza Automatic)', 'Use in Makala Article (Auto-Fill)')}</span>
+            </button>
           </div>
         </div>
       </div>

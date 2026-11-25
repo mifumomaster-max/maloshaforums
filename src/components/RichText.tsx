@@ -12,7 +12,7 @@ interface RichTextProps {
 }
 
 const INLINE_TOKEN_PATTERN =
-  /(\[[^\]]+\]\(https?:\/\/[^\s)]+\)|\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|https?:\/\/[^\s<>"']+|www\.[^\s<>"']+\.[^\s<>"']+|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi;
+  /(\[color=#[0-9a-fA-F]{3,6}\].+?\[\/color\]|\[bg=#[0-9a-fA-F]{3,6}\].+?\[\/bg\]|\[u\].+?\[\/u\]|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|https?:\/\/[^\s<>"']+|www\.[^\s<>"']+\.[^\s<>"']+|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi;
 
 function splitTrailingPunctuation(raw: string): { core: string; trailing: string } {
   let core = raw;
@@ -66,7 +66,33 @@ export function renderLinkedInline(text: string): React.ReactNode[] {
 
     const token = match[0];
 
-    if (token.startsWith('[') && token.includes('](') && token.endsWith(')')) {
+    const colorMatch = token.match(/^\[color=(#[0-9a-fA-F]{3,6})\](.+)\[\/color\]$/i);
+    const bgMatch = token.match(/^\[bg=(#[0-9a-fA-F]{3,6})\](.+)\[\/bg\]$/i);
+    const uMatch = token.match(/^\[u\](.+)\[\/u\]$/i);
+
+    if (colorMatch) {
+      tokens.push(
+        <span key={keyIdx++} style={{ color: colorMatch[1] }} className="font-medium">
+          {renderLinkedInline(colorMatch[2])}
+        </span>
+      );
+    } else if (bgMatch) {
+      tokens.push(
+        <mark
+          key={keyIdx++}
+          style={{ backgroundColor: bgMatch[1] }}
+          className="rounded px-1 py-0.5 text-slate-900"
+        >
+          {renderLinkedInline(bgMatch[2])}
+        </mark>
+      );
+    } else if (uMatch) {
+      tokens.push(
+        <span key={keyIdx++} className="underline decoration-2 underline-offset-2">
+          {renderLinkedInline(uMatch[1])}
+        </span>
+      );
+    } else if (token.startsWith('[') && token.includes('](') && token.endsWith(')')) {
       const splitIdx = token.indexOf('](');
       const label = token.slice(1, splitIdx);
       const rawUrl = token.slice(splitIdx + 2, -1);

@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { User } from 'firebase/auth';
 import {
   Timestamp,
@@ -16,18 +15,23 @@ import {
   BookOpen,
   Check,
   CheckCheck,
+  Clock,
   Copy,
   Download,
+  Edit3,
   ExternalLink,
   Eye,
   EyeOff,
   FileSpreadsheet,
   FileText,
+  Forward,
   Image as ImageIcon,
+  Info,
   Loader2,
   Lock,
   MessageCirclePlus,
   Paperclip,
+  Pin,
   Reply as ReplyIcon,
   Search,
   Send,
@@ -46,17 +50,25 @@ import {
   uploadChatFileToCloudinary,
 } from '../services/cloudinaryService';
 import {
+  DEFAULT_MCHART_GROUP_SETTINGS,
+  editDirectMessage,
+  ensureDirectChatThread,
   generateDirectMessageId,
   lookupMemberProfileByIdOrCard,
   markDirectChatRead,
   markDirectViewOnceConsumed,
+  sendChatMessage,
   sendDirectMessage,
   softDeleteDirectMessage,
+  toggleDirectMessageReaction,
 } from '../services/forumService';
 import {
   AuthPromptReason,
+  ChatMessage,
   DirectChatMessage,
   DirectChatThread,
+  MchartGroupReadCursor,
+  MchartGroupSettings,
   MchartStatus,
   MemberDirectoryCandidate,
 } from '../types';
@@ -65,9 +77,11 @@ import { useUserPresence } from '../context/UserPresenceContext';
 import { Avatar, OnlineStatusPill } from './Avatar';
 import { ImageResizeModal } from './ImageResizeModal';
 import { MchartStatusTab } from './MchartStatusView';
+import { EditMessageModal, ForwardMessageModal, MessageInfoModal } from './MchartMessageModals';
 import { MobilePdfNoteReader } from './MobilePdfNoteReader';
 import { LinkedText } from './RichText';
 import { AuthorVerificationBadge } from './VerificationBadge';
+import { VoiceNoteBubble, VoiceRecorderBar, formatAudioSeconds } from './VoiceNoteControls';
 
 type OptimisticDmMessage = DirectChatMessage & { __localMs: number };
 
@@ -147,6 +161,8 @@ export function getPartnerFromThread(
   };
 }
 
+const REACTION_CHOICES = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+
 interface MchartDirectInboxProps {
   user: User | null;
   userDisplayName: string;
@@ -156,6 +172,13 @@ interface MchartDirectInboxProps {
   statuses: MchartStatus[];
   loadingStatuses: boolean;
   memberCandidates: MemberDirectoryCandidate[];
+  groupSettings?: MchartGroupSettings;
+  latestGroupMessage?: ChatMessage | null;
+  groupReadCursors?: MchartGroupReadCursor[];
+  groupUnreadCount?: number;
+  groupTypingLabel?: string;
+  isKickedFromGroup?: boolean;
+  onOpenGroupChat?: () => void;
   onSelectThread: (thread: DirectChatThread) => void;
   onStartPrivateChatWith: (
     target: {
@@ -168,7 +191,7 @@ interface MchartDirectInboxProps {
   onSwitchToGroup: () => void;
   onSignIn: (reason?: AuthPromptReason) => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
-  onRequestConfirm: (opts: {
+  onRequestConfirm?: (opts: {
     title: string;
     message: string;
     confirmLabel: string;
@@ -213,20 +236,28 @@ export const MchartDirectInbox: React.FC<MchartDirectInboxProps> = ({
   statuses,
   loadingStatuses,
   memberCandidates,
+  groupSettings = DEFAULT_MCHART_GROUP_SETTINGS,
+  latestGroupMessage = null,
+  groupReadCursors = [],
+  groupUnreadCount = 0,
+  groupTypingLabel = '',
+  isKickedFromGroup = false,
+  onOpenGroupChat,
   onSelectThread,
   onStartPrivateChatWith,
   onSwitchToGroup,
   onSignIn,
   onToast,
-  onRequestConfirm,
 }) => {
   const { tr, formatTime } = useLanguage();
+  const openGroupHandler = onOpenGroupChat || onSwitchToGroup;
   const { isUserOnline, getDirectPartnerTyping } = useUserPresence();
   const [search, setSearch] = useState('');
   const [pickerOpen, setPickerOpen] = useState(false);
   const [memberSearch, setMemberSearch] = useState('');
   const [lookingUp, setLookingUp] = useState(false);
   const [startingUid, setStartingUid] = useState<string | null>(null);
+  const [statusFullscreen, setStatusFullscreen] = useState(false);
 
   const sortedThreads = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -357,7 +388,7 @@ export const MchartDirectInbox: React.FC<MchartDirectInboxProps> = ({
             </button>
             <button
               type="button"
-              onClick={onSwitchToGroup}
+              onClick={openGroupHandler}
               className="min-h-[38px] rounded-xl border border-slate-300 bg-white px-4 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
             >
               {tr('Rudi Kwenye Kundi Kuu', 'Back to Group Chat')}
@@ -369,34 +400,39 @@ export const MchartDirectInbox: React.FC<MchartDirectInboxProps> = ({
   }
 
   return (
-    <div className="h-full overflow-y-auto bg-[#F4F7FA] px-3 py-3.5 sm:px-5 sm:py-4">
-      <div className="mx-auto max-w-3xl space-y-3">
-        {/* Privacy Guarantee */}
-        <div className="flex items-start gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50/90 px-3.5 py-2.5 text-xs text-[#064E46]">
-          <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-[#00A884]" aria-hidden="true" />
-          <p className="leading-relaxed">
-            {tr(
-              'Faragha Imelindwa: Mazungumzo binafsi yanasomwa na nyinyi wawili pekee (mtumaji na mpokeaji). Hakuna mtu wa tatu wala msimamizi anayeweza kuyafikia.',
-              'Privacy Protected: Private 1-on-1 chats are readable strictly by the two participants only.'
-            )}
-          </p>
-        </div>
+    <div className="relative h-full min-h-0 bg-[#F4F7FA]">
+      <div
+        className={`h-full px-3 py-3.5 sm:px-5 sm:py-4 ${
+          statusFullscreen ? 'overflow-hidden' : 'overflow-y-auto'
+        }`}
+      >
+        <div className="mx-auto max-w-3xl space-y-3">
+          {/* Privacy Guarantee */}
+          <div className="flex items-start gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50/90 px-3.5 py-2.5 text-xs text-[#064E46]">
+            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-[#00A884]" aria-hidden="true" />
+            <p className="leading-relaxed">
+              {tr(
+                'Faragha Imelindwa: Mazungumzo binafsi yanasomwa na nyinyi wawili pekee (mtumaji na mpokeaji). Hakuna mtu wa tatu wala msimamizi anayeweza kuyafikia.',
+                'Privacy Protected: Private 1-on-1 chats are readable strictly by the two participants only.'
+              )}
+            </p>
+          </div>
 
-        {/* Embedded Status Strip inside Private Chat */}
-        <MchartStatusTab
-          embedded
-          statuses={statuses}
-          loading={loadingStatuses}
-          user={user}
-          userDisplayName={userDisplayName}
-          userPhoto={userPhoto}
-          isSuspended={isSuspended}
-          memberCandidates={memberCandidates}
-          onStartPrivateChatWith={onStartPrivateChatWith}
-          onSignIn={onSignIn}
-          onToast={onToast}
-          onRequestConfirm={onRequestConfirm}
-        />
+          {/* Embedded Status Strip inside Private Chat */}
+          <MchartStatusTab
+            embedded
+            statuses={statuses}
+            loading={loadingStatuses}
+            user={user}
+            userDisplayName={userDisplayName}
+            userPhoto={userPhoto}
+            isSuspended={isSuspended}
+            memberCandidates={memberCandidates}
+            onStartPrivateChatWith={onStartPrivateChatWith}
+            onSignIn={onSignIn}
+            onToast={onToast}
+            onFullscreenActiveChange={setStatusFullscreen}
+          />
 
         {/* Search + New Private Chat Bar */}
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -527,43 +563,171 @@ export const MchartDirectInbox: React.FC<MchartDirectInboxProps> = ({
           </section>
         )}
 
-        {/* Active 1-on-1 Conversations List */}
+        {/* Unified WhatsApp Chats List (Group pinned #1 + 1-on-1 DMs) */}
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
-          <div className="border-b border-slate-100 px-4 py-2.5">
+          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2.5">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
-              {tr('Mazungumzo Yako Binafsi', 'Your Private Chats')} ({sortedThreads.length})
+              {tr('Mazungumzo (Chats)', 'Chats')} ({sortedThreads.length + 1})
             </h3>
+            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[#075E54]">
+              <Pin className="h-3 w-3 text-[#00A884]" aria-hidden="true" />
+              {tr('Kundi lipo juu', 'Group pinned')}
+            </span>
           </div>
 
-          {sortedThreads.length === 0 ? (
-            <div className="px-5 py-10 text-center">
-              <Lock className="mx-auto h-8 w-8 text-slate-300" aria-hidden="true" />
-              <p className="mt-2 text-sm font-bold text-slate-800">
-                {tr(
-                  'Bado huna mazungumzo binafsi ya DM.',
-                  'No private 1-on-1 conversations yet.'
-                )}
-              </p>
-              <p className="mx-auto mt-1 max-w-sm text-xs text-slate-500">
-                {tr(
-                  'Bonyeza "Anza Chat na Mtu" hapo juu au gusa jina la mwanachama yeyote kwenye Kundi Kuu au Kijiweni kuanza kuchart kwa siri.',
-                  'Tap "New Private Chat" above or tap any member name in Group Chat or Kijiweni to start a private conversation.'
-                )}
-              </p>
-              <button
-                type="button"
-                onClick={() => setPickerOpen(true)}
-                className="mt-4 inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-[#075E54] px-4 py-2 text-xs font-bold text-white hover:bg-[#064E46]"
-              >
-                <UserPlus className="h-4 w-4 text-[#25D366]" aria-hidden="true" />
-                <span>{tr('Chagua Mwanachama Sasa', 'Pick a Member Now')}</span>
-              </button>
-            </div>
-          ) : (
-            <div className="divide-y divide-slate-100">
-              {sortedThreads.map((thread) => {
+          <div className="divide-y divide-slate-100">
+            {/* #1 PINNED COMMUNITY GROUP CHAT ROW */}
+            {(() => {
+              const q = search.trim().toLowerCase();
+              const latestText = latestGroupMessage
+                ? latestGroupMessage.isDeleted
+                  ? tr('Ujumbe ulifutwa', 'Message deleted')
+                  : latestGroupMessage.text.trim() ||
+                    (latestGroupMessage.attachmentType === 'audio'
+                      ? `🎤 ${tr('Ujumbe wa sauti', 'Voice note')}`
+                      : latestGroupMessage.attachmentType === 'image'
+                        ? `📷 ${tr('Picha', 'Photo')}`
+                        : `📄 ${latestGroupMessage.attachmentName || tr('Nyaraka', 'Document')}`)
+                : tr('Gusa hapa kufungua kundi kuu la gumzo', 'Tap to open community group chat');
+              const matchesSearch =
+                !q ||
+                groupSettings.groupName.toLowerCase().includes(q) ||
+                latestText.toLowerCase().includes(q);
+              if (!matchesSearch) return null;
+
+              const isOwnLatestGroup = Boolean(
+                latestGroupMessage && user && latestGroupMessage.senderId === user.uid && !latestGroupMessage.isDeleted
+              );
+              const latestGroupMs = latestGroupMessage?.createdAt ? latestGroupMessage.createdAt.toMillis() : 0;
+              const groupMsgWasReadBySomeone = Boolean(
+                isOwnLatestGroup &&
+                  latestGroupMs > 0 &&
+                  groupReadCursors.some(
+                    (r) => r.uid !== user.uid && r.lastReadAt && r.lastReadAt.toMillis() >= latestGroupMs
+                  )
+              );
+
+              return (
+                <button
+                  type="button"
+                  onClick={openGroupHandler}
+                  className="flex w-full items-center gap-3 bg-emerald-50/45 px-4 py-3 text-left transition-colors hover:bg-emerald-50"
+                >
+                  <div className="relative h-11 w-11 shrink-0">
+                    {groupSettings.groupPhotoUrl ? (
+                      <img
+                        src={groupSettings.groupPhotoUrl}
+                        alt={groupSettings.groupName}
+                        referrerPolicy="no-referrer"
+                        className="h-11 w-11 rounded-full border border-[#00A884]/40 object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[#075E54] text-white shadow-xs">
+                        <Users className="h-5 w-5 text-[#25D366]" aria-hidden="true" />
+                      </div>
+                    )}
+                    <span
+                      title={tr('Imebandikwa juu', 'Pinned at top')}
+                      className="absolute -right-0.5 -bottom-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-[#00A884] text-white ring-2 ring-white"
+                    >
+                      <Pin className="h-2.5 w-2.5" aria-hidden="true" />
+                    </span>
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate text-sm font-extrabold text-slate-900">
+                          {groupSettings.groupName}
+                        </span>
+                        {groupSettings.isLocked && (
+                          <Lock className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden="true" />
+                        )}
+                        {groupSettings.disappearAfterSeconds > 0 && (
+                          <Clock className="h-3.5 w-3.5 shrink-0 text-[#00A884]" aria-hidden="true" />
+                        )}
+                      </div>
+                      <span className="shrink-0 text-[11px] text-slate-500 tabular-nums">
+                        {latestGroupMessage?.createdAt ? formatTime(latestGroupMessage.createdAt) : ''}
+                      </span>
+                    </div>
+
+                    <div className="mt-0.5 flex items-center justify-between gap-2">
+                      {isKickedFromGroup ? (
+                        <p className="truncate text-xs font-semibold text-red-600">
+                          {tr('Umeondolewa kwenye kundi na msimamizi', 'Removed from group')}
+                        </p>
+                      ) : groupTypingLabel ? (
+                        <p className="truncate text-xs font-bold italic text-[#00A884]">
+                          {groupTypingLabel}
+                        </p>
+                      ) : (
+                        <p className="flex min-w-0 items-center gap-1 truncate text-xs text-slate-600">
+                          {isOwnLatestGroup &&
+                            (groupMsgWasReadBySomeone ? (
+                              <CheckCheck className="h-3.5 w-3.5 shrink-0 text-[#0284C7]" aria-hidden="true" />
+                            ) : (
+                              <CheckCheck className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
+                            ))}
+                          <span className="truncate">
+                            {latestGroupMessage ? (
+                              <>
+                                <span className="font-semibold text-[#075E54]">
+                                  {latestGroupMessage.senderId === user.uid
+                                    ? tr('Wewe: ', 'You: ')
+                                    : `${latestGroupMessage.senderName}: `}
+                                </span>
+                                {latestText}
+                              </>
+                            ) : (
+                              latestText
+                            )}
+                          </span>
+                        </p>
+                      )}
+                      {groupUnreadCount > 0 && !isKickedFromGroup && (
+                        <span className="flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-[#25D366] px-1.5 text-[10px] font-extrabold text-[#064E46] tabular-nums">
+                          {groupUnreadCount > 99 ? '99+' : groupUnreadCount}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </button>
+              );
+            })()}
+
+            {/* 1-on-1 DM THREADS BELOW PINNED GROUP */}
+            {sortedThreads.length === 0 ? (
+              <div className="px-5 py-7 text-center">
+                <Lock className="mx-auto h-7 w-7 text-slate-300" aria-hidden="true" />
+                <p className="mt-2 text-xs font-bold text-slate-700">
+                  {tr(
+                    'Bado huna mazungumzo binafsi (DM) na mtu mmoja.',
+                    'No private 1-on-1 conversations yet.'
+                  )}
+                </p>
+                <p className="mx-auto mt-1 max-w-sm text-[11px] text-slate-500">
+                  {tr(
+                    'Bonyeza "Anza Chat na Mtu" hapo juu au gusa jina la mwanachama hapa chini.',
+                    'Tap "New Private Chat" above or tap any member below to message.'
+                  )}
+                </p>
+              </div>
+            ) : (
+              sortedThreads.map((thread) => {
                 const partner = getPartnerFromThread(thread, user.uid);
                 const partnerTyping = getDirectPartnerTyping(partner.uid, thread.chatId);
+                const isOwnLast = thread.lastSenderId === user.uid;
+                const partnerReadAt =
+                  user.uid === thread.participantA ? thread.lastReadAtB : thread.lastReadAtA;
+                const lastMsgMs = thread.lastMessageAt ? thread.lastMessageAt.toMillis() : 0;
+                const partnerReadLast = Boolean(
+                  isOwnLast &&
+                    partnerReadAt &&
+                    lastMsgMs > 0 &&
+                    partnerReadAt.toMillis() >= lastMsgMs
+                );
+
                 return (
                   <button
                     key={thread.chatId}
@@ -597,14 +761,28 @@ export const MchartDirectInbox: React.FC<MchartDirectInboxProps> = ({
                             {tr('anaandika...', 'typing...')}
                           </p>
                         ) : (
-                          <p className="truncate text-xs text-slate-600">
-                            {thread.lastSenderId === user.uid ? (
-                              <span className="font-semibold text-[#075E54]">
-                                {tr('Wewe: ', 'You: ')}
-                              </span>
-                            ) : null}
-                            {thread.lastMessageText ||
-                              tr('Anza kuandika ujumbe wenu wa kwanza...', 'Start your conversation...')}
+                          <p className="flex min-w-0 items-center gap-1 truncate text-xs text-slate-600">
+                            {isOwnLast &&
+                              (partnerReadLast ? (
+                                <CheckCheck
+                                  className="h-3.5 w-3.5 shrink-0 text-[#0284C7]"
+                                  aria-hidden="true"
+                                />
+                              ) : (
+                                <CheckCheck
+                                  className="h-3.5 w-3.5 shrink-0 text-slate-400"
+                                  aria-hidden="true"
+                                />
+                              ))}
+                            <span className="truncate">
+                              {isOwnLast ? (
+                                <span className="font-semibold text-[#075E54]">
+                                  {tr('Wewe: ', 'You: ')}
+                                </span>
+                              ) : null}
+                              {thread.lastMessageText ||
+                                tr('Anza kuandika ujumbe wenu wa kwanza...', 'Start your conversation...')}
+                            </span>
                           </p>
                         )}
                         {partner.unreadCount > 0 && (
@@ -616,9 +794,9 @@ export const MchartDirectInbox: React.FC<MchartDirectInboxProps> = ({
                     </div>
                   </button>
                 );
-              })}
-            </div>
-          )}
+              })
+            )}
+          </div>
         </section>
 
         {/* Full WhatsApp-Style A-Z Member Contacts Directory */}
@@ -712,6 +890,7 @@ export const MchartDirectInbox: React.FC<MchartDirectInboxProps> = ({
           )}
         </section>
       </div>
+      </div>
     </div>
   );
 };
@@ -722,9 +901,12 @@ interface MchartDirectRoomProps {
   userDisplayName: string;
   userPhoto: string;
   isSuspended?: boolean;
+  memberCandidates?: MemberDirectoryCandidate[];
+  groupSettings?: MchartGroupSettings;
+  canSendToGroup?: boolean;
   onBackToInbox: () => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
-  onRequestConfirm: (opts: {
+  onRequestConfirm?: (opts: {
     title: string;
     message: string;
     confirmLabel: string;
@@ -739,9 +921,11 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
   userDisplayName,
   userPhoto,
   isSuspended = false,
+  memberCandidates = [],
+  groupSettings = DEFAULT_MCHART_GROUP_SETTINGS,
+  canSendToGroup = true,
   onBackToInbox,
   onToast,
-  onRequestConfirm,
 }) => {
   const { lang, tr } = useLanguage();
   const { setMchartTyping, getDirectPartnerTyping } = useUserPresence();
@@ -753,12 +937,17 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
   const [optimisticMessages, setOptimisticMessages] = useState<OptimisticDmMessage[]>([]);
   const [draft, setDraft] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [recordingVoice, setRecordingVoice] = useState(false);
   const [pendingAttachment, setPendingAttachment] =
     useState<ChatAttachmentUploadResult | null>(null);
   const [viewOnceDraft, setViewOnceDraft] = useState(false);
   const [replyTo, setReplyTo] = useState<DirectChatMessage | null>(null);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [reactionPickerForId, setReactionPickerForId] = useState<string | null>(null);
+  const [forwardingMsg, setForwardingMsg] = useState<DirectChatMessage | null>(null);
+  const [editingMsg, setEditingMsg] = useState<DirectChatMessage | null>(null);
+  const [infoMsg, setInfoMsg] = useState<DirectChatMessage | null>(null);
   const [lightboxImage, setLightboxImage] = useState<{ url: string; name: string } | null>(null);
   const [activePdfDoc, setActivePdfDoc] = useState<{ url: string; name: string } | null>(null);
   const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
@@ -768,6 +957,8 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
     text?: string;
   } | null>(null);
   const [pendingCropImage, setPendingCropImage] = useState<File | null>(null);
+  const [pendingDeleteMsg, setPendingDeleteMsg] = useState<DirectChatMessage | null>(null);
+  const [deletingMsg, setDeletingMsg] = useState(false);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [unseenWhileScrolled, setUnseenWhileScrolled] = useState(0);
@@ -782,6 +973,7 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
   const typingIdleTimerRef = useRef<number | null>(null);
   const initialScrolledRef = useRef(false);
   const prevNewestIdRef = useRef<string | null>(null);
+  const lastMarkedReadMsgMsRef = useRef<number>(0);
 
   useEffect(() => {
     return () => {
@@ -823,13 +1015,23 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
             senderPhoto: String(data.senderPhoto || ''),
             text: String(data.text || ''),
             attachmentType:
-              data.attachmentType === 'image' || data.attachmentType === 'document'
+              data.attachmentType === 'image' ||
+              data.attachmentType === 'document' ||
+              data.attachmentType === 'audio'
                 ? data.attachmentType
                 : 'none',
             attachmentUrl: String(data.attachmentUrl || ''),
             attachmentName: String(data.attachmentName || ''),
             attachmentSize: Number(data.attachmentSize || 0),
             attachmentMime: String(data.attachmentMime || ''),
+            audioDurationSec: Number(data.audioDurationSec || 0),
+            reactions:
+              data.reactions && typeof data.reactions === 'object'
+                ? (data.reactions as Record<string, string[]>)
+                : undefined,
+            isEdited: Boolean(data.isEdited),
+            forwardedFromName:
+              typeof data.forwardedFromName === 'string' ? data.forwardedFromName : '',
             viewOnce: Boolean(data.viewOnce),
             viewOnceConsumed: Boolean(data.viewOnceConsumed),
             viewOnceOpenedAt: data.viewOnceOpenedAt || null,
@@ -853,13 +1055,47 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
     return () => unsub();
   }, [thread.chatId, thread.participants, user.uid]);
 
-  // Mark DM thread read when opened or when incoming messages arrive
+  // Partner's real read cursor (only turns ticks blue when partner actually read!)
+  const partnerLastReadAt =
+    user.uid === thread.participantA ? thread.lastReadAtB : thread.lastReadAtA;
+  const partnerLastReadMs = partnerLastReadAt ? partnerLastReadAt.toMillis() : 0;
+
+  // Mark DM thread read when visibly open AND there is unread count or newer incoming partner msg
   useEffect(() => {
-    const unread = user.uid === thread.participantA ? thread.unreadCountA : thread.unreadCountB;
-    if (unread > 0) {
-      void markDirectChatRead(thread.chatId, user.uid, thread.participantA);
-    }
-  }, [thread.chatId, thread.participantA, thread.unreadCountA, thread.unreadCountB, user.uid]);
+    const syncRead = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      const unread = user.uid === thread.participantA ? thread.unreadCountA : thread.unreadCountB;
+      const selfLastReadMs =
+        (user.uid === thread.participantA ? thread.lastReadAtA : thread.lastReadAtB)?.toMillis() ?? 0;
+      let latestPartnerMsgMs = 0;
+      messages.forEach((m) => {
+        if (m.senderId !== user.uid && m.createdAt) {
+          const ms = m.createdAt.toMillis();
+          if (ms > latestPartnerMsgMs) latestPartnerMsgMs = ms;
+        }
+      });
+      const needsRead =
+        unread > 0 ||
+        (latestPartnerMsgMs > selfLastReadMs && latestPartnerMsgMs > lastMarkedReadMsgMsRef.current);
+      if (needsRead) {
+        if (latestPartnerMsgMs > 0) lastMarkedReadMsgMsRef.current = latestPartnerMsgMs;
+        void markDirectChatRead(thread.chatId, user.uid, thread.participantA);
+      }
+    };
+
+    syncRead();
+    document.addEventListener('visibilitychange', syncRead);
+    return () => document.removeEventListener('visibilitychange', syncRead);
+  }, [
+    thread.chatId,
+    thread.participantA,
+    thread.unreadCountA,
+    thread.unreadCountB,
+    thread.lastReadAtA,
+    thread.lastReadAtB,
+    messages,
+    user.uid,
+  ]);
 
   // Drop optimistic sends once echoed from Firestore
   useEffect(() => {
@@ -1022,9 +1258,11 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
     const replySnapshot = replyTo;
     const replyPreviewRaw = replySnapshot
       ? replySnapshot.text ||
-        (replySnapshot.attachmentType === 'image'
-          ? '📷 Picha'
-          : `📄 ${replySnapshot.attachmentName || 'Nyaraka'}`)
+        (replySnapshot.attachmentType === 'audio'
+          ? `🎤 Sauti (${formatAudioSeconds(replySnapshot.audioDurationSec)})`
+          : replySnapshot.attachmentType === 'image'
+            ? '📷 Picha'
+            : `📄 ${replySnapshot.attachmentName || 'Nyaraka'}`)
       : '';
 
     const messageId = generateDirectMessageId(thread.chatId);
@@ -1107,24 +1345,85 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
     }
   };
 
-  const handleConfirmDelete = (msg: DirectChatMessage) => {
-    onRequestConfirm({
-      title: tr('Futa Ujumbe Huu?', 'Delete This Message?'),
-      message: tr(
-        'Ujumbe huu utafutwa kwenu nyote wawili.',
-        'This message will be deleted for both participants.'
-      ),
-      confirmLabel: tr('Futa Ujumbe', 'Delete Message'),
-      destructive: true,
-      action: async () => {
-        await softDeleteDirectMessage(thread.chatId, msg.id);
-        onToast(tr('Ujumbe umefutwa.', 'Message deleted.'));
-      },
-    });
+  const handleSendVoiceNote = async (voice: {
+    url: string;
+    durationSec: number;
+    fileName: string;
+    fileSize: number;
+    mimeType: string;
+  }) => {
+    if (isSuspended) {
+      onToast(tr('Akaunti yako imesimamishwa kutuma ujumbe.', 'Your account is suspended.'), 'error');
+      return;
+    }
+    const messageId = generateDirectMessageId(thread.chatId);
+    const localMs = Date.now();
+    const optimisticItem: OptimisticDmMessage = {
+      id: messageId,
+      chatId: thread.chatId,
+      participants: thread.participants,
+      senderId: user.uid,
+      senderName: userDisplayName,
+      senderPhoto: userPhoto,
+      text: '',
+      attachmentType: 'audio',
+      attachmentUrl: voice.url,
+      attachmentName: voice.fileName,
+      attachmentSize: voice.fileSize,
+      attachmentMime: voice.mimeType,
+      audioDurationSec: voice.durationSec,
+      replyToId: replyTo ? replyTo.id : '',
+      replyToSenderName: replyTo ? replyTo.senderName : '',
+      replyToPreview: replyTo ? (replyTo.text || replyTo.attachmentName || '').slice(0, 160) : '',
+      isDeleted: false,
+      createdAt: null,
+      updatedAt: null,
+      __localMs: localMs,
+    };
+    const replySnapshot = replyTo;
+    setOptimisticMessages((prev) => [...prev, optimisticItem]);
+    setReplyTo(null);
+    window.requestAnimationFrame(() => scrollToBottom(true));
+    try {
+      await sendDirectMessage(user, userDisplayName, userPhoto, thread, {
+        customId: messageId,
+        text: '',
+        attachmentType: 'audio',
+        attachmentUrl: voice.url,
+        attachmentName: voice.fileName,
+        attachmentSize: voice.fileSize,
+        attachmentMime: voice.mimeType,
+        audioDurationSec: voice.durationSec,
+        replyToId: replySnapshot?.id,
+        replyToSenderName: replySnapshot?.senderName,
+        replyToPreview: replySnapshot ? (replySnapshot.text || '').slice(0, 160) : '',
+      });
+    } catch (err) {
+      setOptimisticMessages((prev) => prev.filter((om) => om.id !== messageId));
+      onToast(
+        err instanceof Error ? err.message : tr('Imeshindwa kutuma sauti.', 'Failed to send voice note.'),
+        'error'
+      );
+    }
   };
 
+  const handleConfirmDelete = (msg: DirectChatMessage) => {
+    setPendingDeleteMsg(msg);
+  };
+
+  const hasInlineOverlay = Boolean(
+    pendingCropImage ||
+      viewOnceModal ||
+      lightboxImage ||
+      activePdfDoc ||
+      forwardingMsg ||
+      infoMsg ||
+      editingMsg
+  );
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="relative flex h-full min-h-0 flex-col bg-[#EFEAE2]">
+      <div className={hasInlineOverlay ? 'hidden' : 'flex h-full min-h-0 flex-col'}>
       {/* Partner Sub-Header */}
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-white px-3 py-2 sm:px-4">
         <div className="flex min-w-0 items-center gap-2.5">
@@ -1252,6 +1551,12 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
                           </div>
                         ) : (
                           <>
+                            {msg.forwardedFromName && (
+                              <div className="mb-1 flex items-center gap-1 text-[10px] italic text-slate-500">
+                                <Forward className="h-3 w-3 shrink-0" aria-hidden="true" />
+                                <span>{tr('Umesambazwa', 'Forwarded')}</span>
+                              </div>
+                            )}
                             {msg.replyToId && (
                               <button
                                 type="button"
@@ -1269,6 +1574,14 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
                                   {msg.replyToPreview || tr('Ujumbe', 'Message')}
                                 </p>
                               </button>
+                            )}
+
+                            {msg.attachmentType === 'audio' && msg.attachmentUrl && (
+                              <VoiceNoteBubble
+                                url={msg.attachmentUrl}
+                                durationSec={msg.audioDurationSec}
+                                isOwn={isOwn}
+                              />
                             )}
 
                             {msg.attachmentType === 'image' && msg.viewOnce ? (
@@ -1474,12 +1787,81 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
                                 <LinkedText text={msg.text} />
                               </p>
                             )}
+
+                            {/* Reactions Summary Pills */}
+                            {msg.reactions && Object.keys(msg.reactions).length > 0 && (
+                              <div className="mt-1.5 flex flex-wrap gap-1">
+                                {Object.entries(msg.reactions)
+                                  .filter(([, uids]) => Array.isArray(uids) && uids.length > 0)
+                                  .map(([emoji, uids]) => {
+                                    const reacted = uids.includes(user.uid);
+                                    return (
+                                      <button
+                                        key={emoji}
+                                        type="button"
+                                        onClick={() =>
+                                          void toggleDirectMessageReaction(
+                                            thread.chatId,
+                                            msg.id,
+                                            emoji,
+                                            user.uid
+                                          )
+                                        }
+                                        className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] font-semibold transition-colors ${
+                                          reacted
+                                            ? 'border-[#00A884] bg-emerald-50 text-[#075E54]'
+                                            : 'border-slate-200 bg-white/90 text-slate-700 hover:bg-slate-100'
+                                        }`}
+                                      >
+                                        <span>{emoji}</span>
+                                        <span className="text-[10px] tabular-nums">{uids.length}</span>
+                                      </button>
+                                    );
+                                  })}
+                              </div>
+                            )}
+
+                            {/* Inline Quick Reaction Picker */}
+                            {reactionPickerForId === msg.id && (
+                              <div className="mt-1.5 inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-1 shadow-md">
+                                {REACTION_CHOICES.map((emoji) => (
+                                  <button
+                                    key={emoji}
+                                    type="button"
+                                    onClick={() => {
+                                      setReactionPickerForId(null);
+                                      void toggleDirectMessageReaction(
+                                        thread.chatId,
+                                        msg.id,
+                                        emoji,
+                                        user.uid
+                                      );
+                                    }}
+                                    className="rounded-full p-1 text-base transition-transform hover:scale-125"
+                                  >
+                                    {emoji}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
                           </>
                         )}
 
-                        <div className="mt-1 flex items-center justify-end gap-2 text-[10px] text-slate-500">
+                        <div className="mt-1 flex flex-wrap items-center justify-end gap-1.5 text-[10px] text-slate-500">
                           {!msg.isDeleted && (
                             <>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setReactionPickerForId((prevId) =>
+                                    prevId === msg.id ? null : msg.id
+                                  )
+                                }
+                                aria-label={tr('Weka emoji', 'React')}
+                                className="inline-flex items-center rounded px-1 py-0.5 text-slate-500 hover:bg-black/5 hover:text-[#075E54]"
+                              >
+                                <Smile className="h-3 w-3" aria-hidden="true" />
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => {
@@ -1497,7 +1879,7 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
                                 className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-black/5 hover:text-[#075E54]"
                               >
                                 <Copy className="h-3 w-3" aria-hidden="true" />
-                                <span>{tr('Nakili', 'Copy')}</span>
+                                <span className="hidden sm:inline">{tr('Nakili', 'Copy')}</span>
                               </button>
                               <button
                                 type="button"
@@ -1511,7 +1893,37 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
                                 <ReplyIcon className="h-3 w-3" aria-hidden="true" />
                                 <span>{tr('Jibu', 'Reply')}</span>
                               </button>
+                              {!msg.viewOnce && (
+                                <button
+                                  type="button"
+                                  onClick={() => setForwardingMsg(msg)}
+                                  aria-label={tr('Sambaza ujumbe', 'Forward message')}
+                                  className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-black/5 hover:text-[#075E54]"
+                                >
+                                  <Forward className="h-3 w-3" aria-hidden="true" />
+                                </button>
+                              )}
                             </>
+                          )}
+                          {canDelete && Boolean(msg.text.trim()) && (
+                            <button
+                              type="button"
+                              onClick={() => setEditingMsg(msg)}
+                              aria-label={tr('Hariri ujumbe', 'Edit message')}
+                              className="inline-flex items-center rounded px-1 py-0.5 text-slate-500 hover:bg-black/5 hover:text-[#075E54]"
+                            >
+                              <Edit3 className="h-3 w-3" aria-hidden="true" />
+                            </button>
+                          )}
+                          {isOwn && !msg.isDeleted && (
+                            <button
+                              type="button"
+                              onClick={() => setInfoMsg(msg)}
+                              aria-label={tr('Maelezo ya ujumbe', 'Message info')}
+                              className="inline-flex items-center rounded px-1 py-0.5 text-slate-500 hover:bg-black/5 hover:text-[#075E54]"
+                            >
+                              <Info className="h-3 w-3" aria-hidden="true" />
+                            </button>
                           )}
                           {canDelete && (
                             <button
@@ -1523,16 +1935,32 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
                               <Trash2 className="h-3 w-3" aria-hidden="true" />
                             </button>
                           )}
+                          {msg.isEdited && !msg.isDeleted && (
+                            <span className="italic text-slate-400">
+                              {tr('imehaririwa', 'edited')}
+                            </span>
+                          )}
                           <span className="tabular-nums">
                             {formatClockTime(msg.createdAt) || tr('sasa', 'now')}
                           </span>
-                          {isOwn && !msg.isDeleted && (
-                            pendingIdSet.has(msg.id) ? (
-                              <Check className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
-                            ) : (
-                              <CheckCheck className="h-3.5 w-3.5 text-[#53BDEB]" aria-hidden="true" />
-                            )
-                          )}
+                          {isOwn && !msg.isDeleted && (() => {
+                            const msgMs = msg.createdAt ? msg.createdAt.toMillis() : 0;
+                            if (pendingIdSet.has(msg.id) || msgMs === 0) {
+                              return (
+                                <Check
+                                  aria-label={tr('Inatuma', 'Sending')}
+                                  className="h-3.5 w-3.5 text-slate-400"
+                                />
+                              );
+                            }
+                            const wasRead = partnerLastReadMs >= msgMs;
+                            return (
+                              <CheckCheck
+                                aria-label={wasRead ? tr('Imesomwa', 'Read') : tr('Imefika', 'Delivered')}
+                                className={`h-3.5 w-3.5 ${wasRead ? 'text-[#53BDEB]' : 'text-slate-400'}`}
+                              />
+                            );
+                          })()}
                         </div>
                       </div>
                     </div>
@@ -1717,325 +2145,445 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
           </div>
         ) : (
           <form onSubmit={handleSend} className="flex items-end gap-1.5 sm:gap-2">
-            <div className="relative" ref={emojiRef}>
-              <button
-                type="button"
-                onClick={() => {
-                  setEmojiOpen((prev) => !prev);
-                  setAttachMenuOpen(false);
-                }}
-                aria-label={tr('Chagua emoji', 'Pick emoji')}
-                className="flex h-11 w-10 shrink-0 items-center justify-center rounded-full text-slate-600 transition-colors hover:bg-slate-200/70 hover:text-[#075E54]"
-              >
-                <Smile className="h-5 w-5" aria-hidden="true" />
-              </button>
-
-              {emojiOpen && (
-                <div className="absolute bottom-13 left-0 z-30 grid w-60 grid-cols-4 gap-1 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
-                  {QUICK_EMOJIS.map((emoji) => (
-                    <button
-                      key={emoji}
-                      type="button"
-                      onClick={() => {
-                        setDraft((prev) => prev + emoji);
-                        inputRef.current?.focus();
-                      }}
-                      className="flex h-10 items-center justify-center rounded-xl text-xl hover:bg-slate-100"
-                    >
-                      {emoji}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="relative" ref={attachMenuRef}>
-              <button
-                type="button"
-                disabled={uploading}
-                onClick={() => {
-                  setAttachMenuOpen((prev) => !prev);
-                  setEmojiOpen(false);
-                }}
-                aria-label={tr('Ambatanisha picha au nyaraka', 'Attach photo or document')}
-                className="flex h-11 w-10 shrink-0 items-center justify-center rounded-full text-slate-600 transition-colors hover:bg-slate-200/70 hover:text-[#075E54] disabled:opacity-50"
-              >
-                <Paperclip className="h-5 w-5" aria-hidden="true" />
-              </button>
-
-              {attachMenuOpen && (
-                <div className="absolute bottom-13 left-0 z-30 w-60 overflow-hidden rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl">
+            {!recordingVoice && (
+              <>
+                <div className="relative" ref={emojiRef}>
                   <button
                     type="button"
                     onClick={() => {
-                      autoViewOnceRef.current = false;
-                      imageInputRef.current?.click();
+                      setEmojiOpen((prev) => !prev);
+                      setAttachMenuOpen(false);
                     }}
-                    className="flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-xs font-semibold text-slate-800 hover:bg-emerald-50"
+                    aria-label={tr('Chagua emoji', 'Pick emoji')}
+                    className="flex h-11 w-10 shrink-0 items-center justify-center rounded-full text-slate-600 transition-colors hover:bg-slate-200/70 hover:text-[#075E54]"
                   >
-                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-purple-100 text-purple-700">
-                      <ImageIcon className="h-4 w-4" aria-hidden="true" />
-                    </span>
-                    <div>
-                      <p>{tr('Picha (Photo)', 'Photo / Image')}</p>
-                      <p className="text-[10px] font-normal text-slate-500">JPG, PNG, WEBP</p>
-                    </div>
+                    <Smile className="h-5 w-5" aria-hidden="true" />
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      autoViewOnceRef.current = true;
-                      imageInputRef.current?.click();
-                    }}
-                    className="flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-xs font-semibold text-[#064E46] hover:bg-emerald-50"
-                  >
-                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-[#075E54]">
-                      <EyeOff className="h-4 w-4" aria-hidden="true" />
-                    </span>
-                    <div>
-                      <p>{tr('Picha ya Mara Moja (1x)', 'View-Once Photo (1x)')}</p>
-                      <p className="text-[10px] font-normal text-emerald-700">
-                        {tr('Inajifunga baada ya kutazamwa', 'Locks after viewing once')}
-                      </p>
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => docInputRef.current?.click()}
-                    className="flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-xs font-semibold text-slate-800 hover:bg-emerald-50"
-                  >
-                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-sky-100 text-[#1D4E89]">
-                      <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />
-                    </span>
-                    <div>
-                      <p>{tr('Nyaraka (Document)', 'Document / File')}</p>
-                      <p className="text-[10px] font-normal text-slate-500">PDF, Word, Excel, ZIP</p>
-                    </div>
-                  </button>
-                </div>
-              )}
-            </div>
 
-            <div className="flex-1 rounded-2xl bg-white px-3.5 py-2 shadow-xs ring-1 ring-slate-200/80 focus-within:ring-[#075E54]">
-              <textarea
-                ref={inputRef}
-                rows={1}
-                maxLength={2000}
-                value={draft}
-                onChange={(e) => {
-                  const nextVal = e.target.value;
-                  setDraft(nextVal);
-                  if (typingIdleTimerRef.current !== null) {
-                    window.clearTimeout(typingIdleTimerRef.current);
-                    typingIdleTimerRef.current = null;
-                  }
-                  if (nextVal.trim().length > 0) {
-                    setMchartTyping(true, replyTo?.senderName || '', thread.chatId);
-                    typingIdleTimerRef.current = window.setTimeout(() => {
-                      setMchartTyping(false, '', thread.chatId);
-                      typingIdleTimerRef.current = null;
-                    }, 4200);
-                  } else {
-                    setMchartTyping(false, '', thread.chatId);
-                  }
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey && window.innerWidth >= 768) {
-                    e.preventDefault();
-                    void handleSend();
-                  }
-                }}
-                placeholder={tr(`Andika ujumbe wa siri kwa ${partner.name}...`, `Message ${partner.name}...`)}
-                className="max-h-24 w-full resize-none bg-transparent text-[15px] leading-snug text-slate-900 placeholder-slate-400 outline-none sm:text-sm"
+                  {emojiOpen && (
+                    <div className="absolute bottom-13 left-0 z-30 grid w-60 grid-cols-4 gap-1 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                      {QUICK_EMOJIS.map((emoji) => (
+                        <button
+                          key={emoji}
+                          type="button"
+                          onClick={() => {
+                            setDraft((prev) => prev + emoji);
+                            inputRef.current?.focus();
+                          }}
+                          className="flex h-10 items-center justify-center rounded-xl text-xl hover:bg-slate-100"
+                        >
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="relative" ref={attachMenuRef}>
+                  <button
+                    type="button"
+                    disabled={uploading}
+                    onClick={() => {
+                      setAttachMenuOpen((prev) => !prev);
+                      setEmojiOpen(false);
+                    }}
+                    aria-label={tr('Ambatanisha picha au nyaraka', 'Attach photo or document')}
+                    className="flex h-11 w-10 shrink-0 items-center justify-center rounded-full text-slate-600 transition-colors hover:bg-slate-200/70 hover:text-[#075E54] disabled:opacity-50"
+                  >
+                    <Paperclip className="h-5 w-5" aria-hidden="true" />
+                  </button>
+
+                  {attachMenuOpen && (
+                    <div className="absolute bottom-13 left-0 z-30 w-60 overflow-hidden rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          autoViewOnceRef.current = false;
+                          imageInputRef.current?.click();
+                        }}
+                        className="flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-xs font-semibold text-slate-800 hover:bg-emerald-50"
+                      >
+                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-purple-100 text-purple-700">
+                          <ImageIcon className="h-4 w-4" aria-hidden="true" />
+                        </span>
+                        <div>
+                          <p>{tr('Picha (Photo)', 'Photo / Image')}</p>
+                          <p className="text-[10px] font-normal text-slate-500">JPG, PNG, WEBP</p>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          autoViewOnceRef.current = true;
+                          imageInputRef.current?.click();
+                        }}
+                        className="flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-xs font-semibold text-[#064E46] hover:bg-emerald-50"
+                      >
+                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-[#075E54]">
+                          <EyeOff className="h-4 w-4" aria-hidden="true" />
+                        </span>
+                        <div>
+                          <p>{tr('Picha ya Mara Moja (1x)', 'View-Once Photo (1x)')}</p>
+                          <p className="text-[10px] font-normal text-emerald-700">
+                            {tr('Inajifunga baada ya kutazamwa', 'Locks after viewing once')}
+                          </p>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => docInputRef.current?.click()}
+                        className="flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-xs font-semibold text-slate-800 hover:bg-emerald-50"
+                      >
+                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-sky-100 text-[#1D4E89]">
+                          <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />
+                        </span>
+                        <div>
+                          <p>{tr('Nyaraka (Document)', 'Document / File')}</p>
+                          <p className="text-[10px] font-normal text-slate-500">PDF, Word, Excel, ZIP</p>
+                        </div>
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex-1 rounded-2xl bg-white px-3.5 py-2 shadow-xs ring-1 ring-slate-200/80 focus-within:ring-[#075E54]">
+                  <textarea
+                    ref={inputRef}
+                    rows={1}
+                    maxLength={2000}
+                    value={draft}
+                    onChange={(e) => {
+                      const nextVal = e.target.value;
+                      setDraft(nextVal);
+                      if (typingIdleTimerRef.current !== null) {
+                        window.clearTimeout(typingIdleTimerRef.current);
+                        typingIdleTimerRef.current = null;
+                      }
+                      if (nextVal.trim().length > 0) {
+                        setMchartTyping(true, replyTo?.senderName || '', thread.chatId);
+                        typingIdleTimerRef.current = window.setTimeout(() => {
+                          setMchartTyping(false, '', thread.chatId);
+                          typingIdleTimerRef.current = null;
+                        }, 4200);
+                      } else {
+                        setMchartTyping(false, '', thread.chatId);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey && window.innerWidth >= 768) {
+                        e.preventDefault();
+                        void handleSend();
+                      }
+                    }}
+                    placeholder={tr(`Andika ujumbe wa siri kwa ${partner.name}...`, `Message ${partner.name}...`)}
+                    className="max-h-24 w-full resize-none bg-transparent text-[15px] leading-snug text-slate-900 placeholder-slate-400 outline-none sm:text-sm"
+                  />
+                </div>
+              </>
+            )}
+
+            {!draft.trim() && !pendingAttachment && !uploading ? (
+              <VoiceRecorderBar
+                disabled={isSuspended}
+                onRecordingStateChange={setRecordingVoice}
+                onVoiceReady={(voice) => void handleSendVoiceNote(voice)}
+                onError={(msg) => onToast(msg, 'error')}
               />
-            </div>
-
-            <button
-              type="submit"
-              disabled={uploading || (!draft.trim() && !pendingAttachment)}
-              aria-label={tr('Tuma ujumbe', 'Send message')}
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#00A884] text-white shadow-sm transition-colors hover:bg-[#008F6F] disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              <Send className="h-5 w-5 translate-x-[1px]" aria-hidden="true" />
-            </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={uploading || (!draft.trim() && !pendingAttachment)}
+                aria-label={tr('Tuma ujumbe', 'Send message')}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#00A884] text-white shadow-sm transition-colors hover:bg-[#008F6F] disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                <Send className="h-5 w-5 translate-x-[1px]" aria-hidden="true" />
+              </button>
+            )}
           </form>
         )}
-      </footer>
-
-      {/* Protected View-Once Fullscreen Modal (No Download, Locked Immediately) */}
-      {viewOnceModal &&
-        typeof document !== 'undefined' &&
-        createPortal(
-          <div
-            role="dialog"
-            aria-modal="true"
-            onContextMenu={(e) => e.preventDefault()}
-            className="fixed inset-0 z-[90] flex flex-col items-center justify-between bg-black p-4 pb-[max(1rem,env(safe-area-inset-bottom))] text-white select-none"
-          >
-            <div className="flex w-full max-w-3xl items-center justify-between gap-3 pt-1">
-              <div className="flex items-center gap-2 rounded-full bg-amber-500/20 px-3 py-1.5 text-xs font-bold text-amber-200">
-                <EyeOff className="h-4 w-4 shrink-0 text-amber-300" aria-hidden="true" />
-                <span>
-                  {tr(
-                    'Picha ya Mara Moja (1x) — Ukifunga haitafunguliwa tena',
-                    'View-Once Photo (1x) — Locks permanently when closed'
-                  )}
-                </span>
+        {pendingDeleteMsg && (
+          <div className="mb-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 shadow-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-bold text-red-900">
+                  {tr('Futa ujumbe huu kwenu nyote?', 'Delete this message for both of you?')}
+                </p>
+                <p className="truncate text-[11px] text-red-700">
+                  {pendingDeleteMsg.text.trim() ||
+                    pendingDeleteMsg.attachmentName ||
+                    tr('Kiambatisho', 'Attachment')}
+                </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setViewOnceModal(null)}
-                aria-label={tr('Funga picha', 'Close view-once photo')}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <div className="flex min-h-0 w-full max-w-3xl flex-1 items-center justify-center py-4">
-              <img
-                src={viewOnceModal.url}
-                alt={viewOnceModal.name}
-                draggable={false}
-                onContextMenu={(e) => e.preventDefault()}
-                className="pointer-events-none max-h-[78vh] max-w-full rounded-xl object-contain select-none"
-                referrerPolicy="no-referrer"
-              />
-            </div>
-
-            {viewOnceModal.text && (
-              <p className="mb-2 max-w-xl rounded-xl bg-white/10 px-4 py-2 text-center text-sm text-white">
-                {viewOnceModal.text}
-              </p>
-            )}
-          </div>,
-          document.body
-        )}
-
-      {/* Image Lightbox */}
-      {lightboxImage &&
-        typeof document !== 'undefined' &&
-        createPortal(
-          <div
-            role="dialog"
-            aria-modal="true"
-            onClick={() => setLightboxImage(null)}
-            className="fixed inset-0 z-[90] flex flex-col items-center justify-center bg-black/90 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
-          >
-            <div
-              onClick={(e) => e.stopPropagation()}
-              className="flex w-full max-w-4xl items-center justify-between pb-3 text-white"
-            >
-              <p className="truncate text-sm font-semibold">{lightboxImage.name}</p>
-              <div className="flex items-center gap-2">
-                <a
-                  href={lightboxImage.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  download={lightboxImage.name}
-                  className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-white/15 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/25"
-                >
-                  <ExternalLink className="h-4 w-4" />
-                  <span>{tr('Pakua', 'Download')}</span>
-                </a>
+              <div className="flex shrink-0 items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setLightboxImage(null)}
-                  aria-label={tr('Funga picha', 'Close image')}
-                  className="flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25"
+                  disabled={deletingMsg}
+                  onClick={() => setPendingDeleteMsg(null)}
+                  className="min-h-[34px] rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                 >
-                  <X className="h-5 w-5" />
+                  {tr('Ghairi', 'Cancel')}
+                </button>
+                <button
+                  type="button"
+                  disabled={deletingMsg}
+                  onClick={async () => {
+                    setDeletingMsg(true);
+                    try {
+                      await softDeleteDirectMessage(thread.chatId, pendingDeleteMsg.id);
+                      setPendingDeleteMsg(null);
+                      onToast(tr('Ujumbe umefutwa.', 'Message deleted.'));
+                    } catch (err) {
+                      onToast(
+                        err instanceof Error ? err.message : tr('Imeshindwa kufuta.', 'Failed to delete.'),
+                        'error'
+                      );
+                    } finally {
+                      setDeletingMsg(false);
+                    }
+                  }}
+                  className="min-h-[34px] rounded-xl bg-red-600 px-3 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-60"
+                >
+                  {deletingMsg ? '...' : tr('Futa Ujumbe', 'Delete')}
                 </button>
               </div>
             </div>
+          </div>
+        )}
+      </footer>
+      </div>
+
+      {/* Inline View-Once Photo Page */}
+      {viewOnceModal && (
+        <div
+          onContextMenu={(e) => e.preventDefault()}
+          className="flex h-full min-h-0 flex-1 flex-col items-center justify-between bg-black p-4 text-white select-none"
+        >
+          <div className="flex w-full items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => setViewOnceModal(null)}
+              aria-label={tr('Rudi', 'Back')}
+              className="inline-flex min-h-[38px] items-center gap-1.5 rounded-full bg-white/15 px-3 text-xs font-bold text-white hover:bg-white/25"
+            >
+              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+              <span>{tr('Rudi', 'Back')}</span>
+            </button>
+            <div className="flex items-center gap-2 rounded-full bg-amber-500/20 px-3 py-1.5 text-xs font-bold text-amber-200">
+              <EyeOff className="h-4 w-4 shrink-0 text-amber-300" aria-hidden="true" />
+              <span className="truncate">
+                {tr(
+                  'Picha ya Mara Moja (1x) — Ukifunga imefungwa',
+                  'View-Once Photo (1x) — Locks on close'
+                )}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex min-h-0 w-full flex-1 items-center justify-center py-4">
+            <img
+              src={viewOnceModal.url}
+              alt={viewOnceModal.name}
+              draggable={false}
+              onContextMenu={(e) => e.preventDefault()}
+              className="pointer-events-none max-h-full max-w-full rounded-xl object-contain select-none"
+              referrerPolicy="no-referrer"
+            />
+          </div>
+
+          {viewOnceModal.text ? (
+            <p className="max-w-xl rounded-xl bg-white/10 px-4 py-2 text-center text-sm text-white">
+              {viewOnceModal.text}
+            </p>
+          ) : (
+            <div />
+          )}
+        </div>
+      )}
+
+      {/* Inline Image Viewer Page */}
+      {!viewOnceModal && lightboxImage && (
+        <div className="flex h-full min-h-0 flex-1 flex-col bg-slate-950 text-white">
+          <div className="flex shrink-0 items-center justify-between gap-2 bg-[#075E54] px-3 py-2.5 text-white">
+            <div className="flex min-w-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setLightboxImage(null)}
+                aria-label={tr('Rudi kwenye mazungumzo', 'Back to chat')}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25"
+              >
+                <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+              </button>
+              <p className="truncate text-xs font-bold sm:text-sm">{lightboxImage.name}</p>
+            </div>
+            <a
+              href={lightboxImage.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              download={lightboxImage.name}
+              className="inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-xl bg-[#25D366] px-3 py-1.5 text-xs font-extrabold text-[#064E46] hover:brightness-105"
+            >
+              <ExternalLink className="h-4 w-4" aria-hidden="true" />
+              <span>{tr('Pakua', 'Download')}</span>
+            </a>
+          </div>
+          <div className="flex min-h-0 flex-1 items-center justify-center p-4">
             <img
               src={lightboxImage.url}
               alt={lightboxImage.name}
-              onClick={(e) => e.stopPropagation()}
-              className="max-h-[82vh] max-w-full rounded-xl object-contain"
+              className="max-h-full max-w-full rounded-xl object-contain"
             />
-          </div>,
-          document.body
-        )}
+          </div>
+        </div>
+      )}
 
-      {/* In-App PDF Viewer + Download Modal */}
-      {activePdfDoc &&
-        typeof document !== 'undefined' &&
-        createPortal(
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label={activePdfDoc.name}
-            onClick={() => setActivePdfDoc(null)}
-            className="fixed inset-0 z-[90] flex items-end justify-center bg-black/75 p-0 backdrop-blur-xs md:items-center md:p-4"
-          >
-            <div
-              onClick={(e) => e.stopPropagation()}
-              className="flex h-[90dvh] w-full max-w-3xl flex-col overflow-hidden rounded-t-3xl bg-[#F4F7FA] text-slate-900 shadow-2xl pb-[max(0.5rem,env(safe-area-inset-bottom))] md:pb-0 md:h-[86dvh] md:rounded-2xl"
-            >
-              <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-[#075E54] px-4 py-3 text-white">
-                <div className="flex min-w-0 items-center gap-2.5">
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-red-600 text-[10px] font-extrabold text-white">
-                    PDF
-                  </span>
-                  <p className="truncate text-xs font-bold sm:text-sm">{activePdfDoc.name}</p>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void downloadChatAttachmentFile(
-                        activePdfDoc.url,
-                        activePdfDoc.name,
-                        'application/pdf'
-                      ).then(() =>
-                        onToast(tr('PDF imepakuliwa kwenye simu yako!', 'PDF saved to your device!'))
-                      );
-                    }}
-                    className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl bg-[#25D366] px-3 text-xs font-extrabold text-[#064E46] hover:brightness-105"
-                  >
-                    <Download className="h-4 w-4" aria-hidden="true" />
-                    <span>{tr('Pakua Simu', 'Save PDF')}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActivePdfDoc(null)}
-                    aria-label={tr('Funga PDF', 'Close PDF')}
-                    className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25"
-                  >
-                    <X className="h-5 w-5" aria-hidden="true" />
-                  </button>
-                </div>
-              </div>
-              <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6 sm:px-5">
-                <MobilePdfNoteReader
-                  pdfUrl={activePdfDoc.url}
-                  fileName={activePdfDoc.name}
-                  onDownload={() => {
-                    void downloadChatAttachmentFile(
-                      activePdfDoc.url,
-                      activePdfDoc.name,
-                      'application/pdf'
-                    ).then(() =>
-                      onToast(tr('PDF imepakuliwa kwenye simu yako!', 'PDF saved to your device!'))
-                    );
-                  }}
-                />
-              </div>
+      {/* Inline PDF Reader Page */}
+      {!viewOnceModal && !lightboxImage && activePdfDoc && (
+        <div className="flex h-full min-h-0 flex-1 flex-col bg-[#F4F7FA] text-slate-900">
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-[#075E54] px-3 py-2.5 text-white sm:px-4">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => setActivePdfDoc(null)}
+                aria-label={tr('Rudi kwenye mazungumzo', 'Back to chat')}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25"
+              >
+                <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+              </button>
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-red-600 text-[10px] font-extrabold text-white">
+                PDF
+              </span>
+              <p className="truncate text-xs font-bold sm:text-sm">{activePdfDoc.name}</p>
             </div>
-          </div>,
-          document.body
+            <button
+              type="button"
+              onClick={() => {
+                void downloadChatAttachmentFile(
+                  activePdfDoc.url,
+                  activePdfDoc.name,
+                  'application/pdf'
+                ).then(() =>
+                  onToast(tr('PDF imepakuliwa kwenye simu yako!', 'PDF saved to your device!'))
+                );
+              }}
+              className="inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-xl bg-[#25D366] px-3 text-xs font-extrabold text-[#064E46] hover:brightness-105"
+            >
+              <Download className="h-4 w-4" aria-hidden="true" />
+              <span>{tr('Pakua Simu', 'Save PDF')}</span>
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6 sm:px-5">
+            <MobilePdfNoteReader
+              pdfUrl={activePdfDoc.url}
+              fileName={activePdfDoc.name}
+              onDownload={() => {
+                void downloadChatAttachmentFile(
+                  activePdfDoc.url,
+                  activePdfDoc.name,
+                  'application/pdf'
+                ).then(() =>
+                  onToast(tr('PDF imepakuliwa kwenye simu yako!', 'PDF saved to your device!'))
+                );
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Inline Image Crop / Resize Page */}
+      {!viewOnceModal && !lightboxImage && !activePdfDoc && pendingCropImage && (
+        <ImageResizeModal
+          inline
+          file={pendingCropImage}
+          defaultPreset="free"
+          onCancel={() => setPendingCropImage(null)}
+          onConfirm={(resizedFile) => {
+            setPendingCropImage(null);
+            void uploadResolvedFile(resizedFile);
+          }}
+        />
+      )}
+
+      {/* Inline Forward Page */}
+      {!viewOnceModal && !lightboxImage && !activePdfDoc && !pendingCropImage && forwardingMsg && (
+        <ForwardMessageModal
+          isOpen
+          onClose={() => setForwardingMsg(null)}
+          previewText={
+            forwardingMsg.text.trim() ||
+            forwardingMsg.attachmentName ||
+            tr('Ujumbe uliosambazwa', 'Forwarded message')
+          }
+          groupSettings={groupSettings}
+          memberCandidates={memberCandidates}
+          selfUid={user.uid}
+          canSendToGroup={canSendToGroup}
+          onForwardToGroup={async () => {
+            await sendChatMessage(user, userDisplayName, {
+              text: forwardingMsg.text,
+              attachmentType: forwardingMsg.attachmentType,
+              attachmentUrl: forwardingMsg.attachmentUrl,
+              attachmentName: forwardingMsg.attachmentName,
+              attachmentSize: forwardingMsg.attachmentSize,
+              attachmentMime: forwardingMsg.attachmentMime,
+              audioDurationSec: forwardingMsg.audioDurationSec,
+              forwardedFromName: forwardingMsg.senderName,
+            });
+            onToast(tr('Ujumbe umesambazwa kwenye kundi!', 'Forwarded to group!'));
+          }}
+          onForwardToMember={async (member) => {
+            const targetThread = await ensureDirectChatThread(user, userDisplayName, userPhoto, member);
+            await sendDirectMessage(user, userDisplayName, userPhoto, targetThread, {
+              text: forwardingMsg.text,
+              attachmentType: forwardingMsg.attachmentType,
+              attachmentUrl: forwardingMsg.attachmentUrl,
+              attachmentName: forwardingMsg.attachmentName,
+              attachmentSize: forwardingMsg.attachmentSize,
+              attachmentMime: forwardingMsg.attachmentMime,
+              audioDurationSec: forwardingMsg.audioDurationSec,
+              forwardedFromName: forwardingMsg.senderName,
+            });
+            onToast(tr(`Umesambazwa kwa ${member.displayName}!`, `Forwarded to ${member.displayName}!`));
+          }}
+        />
+      )}
+
+      {/* Inline Message Info Page */}
+      {!viewOnceModal &&
+        !lightboxImage &&
+        !activePdfDoc &&
+        !pendingCropImage &&
+        !forwardingMsg &&
+        infoMsg && (
+          <MessageInfoModal
+            isOpen
+            onClose={() => setInfoMsg(null)}
+            messageText={infoMsg.text || infoMsg.attachmentName || ''}
+            sentAt={infoMsg.createdAt || null}
+            mode="direct"
+            partnerName={partner.name}
+            partnerPhoto={partner.photo}
+            partnerReadAt={partnerLastReadAt || null}
+          />
         )}
 
-      <ImageResizeModal
-        file={pendingCropImage}
-        defaultPreset="free"
-        onCancel={() => setPendingCropImage(null)}
-        onConfirm={(resizedFile) => {
-          setPendingCropImage(null);
-          void uploadResolvedFile(resizedFile);
-        }}
-      />
+      {/* Inline Edit Message Page */}
+      {!viewOnceModal &&
+        !lightboxImage &&
+        !activePdfDoc &&
+        !pendingCropImage &&
+        !forwardingMsg &&
+        !infoMsg &&
+        editingMsg && (
+          <EditMessageModal
+            isOpen
+            initialText={editingMsg.text || ''}
+            onClose={() => setEditingMsg(null)}
+            onSave={async (nextText) => {
+              await editDirectMessage(thread.chatId, editingMsg.id, nextText);
+              onToast(tr('Ujumbe umehaririwa!', 'Message updated!'));
+            }}
+          />
+        )}
     </div>
   );
 };

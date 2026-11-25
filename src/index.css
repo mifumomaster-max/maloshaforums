@@ -277,6 +277,21 @@
   animation: malosha-globe-orbit 56s linear infinite;
 }
 
+@keyframes malosha-logo-fade {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.62;
+    transform: scale(1.045);
+  }
+}
+
+.animate-malosha-logo-fade {
+  animation: malosha-logo-fade 3.2s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-malosha-spin,
   .animate-malosha-spin-rev,
@@ -296,7 +311,8 @@
   .animate-malosha-float-b,
   .animate-malosha-beam,
   .animate-malosha-globe-spin,
-  .animate-malosha-globe-orbit {
+  .animate-malosha-globe-orbit,
+  .animate-malosha-logo-fade {
     animation: none;
   }
 }

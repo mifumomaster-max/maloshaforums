@@ -41,6 +41,11 @@ import {
   loadStudioDraft,
   saveStudioDraft,
 } from '../utils/studioDraftStorage';
+import {
+  buildStudioMakalaBody,
+  saveStudioMakalaSnapshot,
+  setPendingStudioMakalaImportId,
+} from '../utils/studioMakalaBridge';
 
 type PosterLayoutId =
   | 'bbc_classic'
@@ -877,12 +882,15 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
 
   // Publish State
   const [publishBoard, setPublishBoard] = useState<PrimaryBoard>('Kijiweni');
-  const [publishMode, setPublishMode] = useState<PublishMode>('image_only');
+  const [publishMode, setPublishMode] = useState<PublishMode>('with_text');
   const [postTitle, setPostTitle] = useState('');
   const [postBody, setPostBody] = useState('');
+  const [hasCustomPostTitle, setHasCustomPostTitle] = useState(false);
+  const [hasCustomPostBody, setHasCustomPostBody] = useState(false);
   const [postTagsRaw, setPostTagsRaw] = useState('habari, malosha');
   const [publishing, setPublishing] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [sendingToMakala, setSendingToMakala] = useState(false);
   const [copiedCaption, setCopiedCaption] = useState(false);
   const [publishedResult, setPublishedResult] = useState<{
     topicId: string;
@@ -1067,8 +1075,15 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
         setPositionsLocked(Boolean(draft.positionsLocked));
         if (draft.publishBoard) setPublishBoard(draft.publishBoard);
         if (draft.publishMode) setPublishMode(draft.publishMode);
-        if (typeof draft.postTitle === 'string') setPostTitle(draft.postTitle);
-        if (typeof draft.postBody === 'string') setPostBody(draft.postBody);
+        if (typeof draft.postTitle === 'string' && draft.postTitle.trim()) {
+          setPostTitle(draft.postTitle);
+          const draftHeadline = (typeof draft.headline === 'string' ? draft.headline : '').trim().slice(0, 140);
+          setHasCustomPostTitle(draft.postTitle.trim() !== draftHeadline);
+        }
+        if (typeof draft.postBody === 'string' && draft.postBody.trim()) {
+          setPostBody(draft.postBody);
+          setHasCustomPostBody(true);
+        }
         if (typeof draft.postTagsRaw === 'string') setPostTagsRaw(draft.postTagsRaw);
 
         if (draft.mainPhotoBlob) {
@@ -1176,6 +1191,8 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
     applyPalettePreset(PALETTE_PRESETS[0]);
     setHeadline('Taarifa Muhimu: Fursa Mpya za Kidijitali na Elimu kwa Vijana Zazinduliwa Rasmi');
     setSubheadline('Fuata uchambuzi kamili na majadiliano ya wadau moja kwa moja ndani ya jukwaa.');
+    setHasCustomPostTitle(false);
+    setHasCustomPostBody(false);
     setPostTitle('');
     setPostBody('');
     setDraftSavedAt(null);
@@ -2455,6 +2472,115 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
     return `malosha-${slug || 'poster'}.png`;
   };
 
+  const buildAutoTopTitle = useCallback(
+    () => headline.trim().slice(0, 140),
+    [headline]
+  );
+
+  const buildAutoTopBody = useCallback(
+    (forMakala: boolean) => {
+      if (forMakala) {
+        return buildStudioMakalaBody({
+          headline,
+          subheadline,
+          xCardEnabled: xCard.enabled,
+          xCardBody: xCard.body,
+          xCardAuthor: xCard.displayName,
+          ribbonText: showRibbon ? ribbonText : '',
+          locationTag,
+        });
+      }
+      const parts = [
+        subheadline.trim(),
+        xCard.enabled && xCard.body.trim()
+          ? `${xCard.body.trim()} — ${xCard.displayName}`
+          : '',
+      ].filter(Boolean);
+      return parts.join('\n\n') || headline.trim();
+    },
+    [headline, subheadline, xCard.enabled, xCard.body, xCard.displayName, showRibbon, ribbonText, locationTag]
+  );
+
+  // Auto-sync top Studio headline/subheadline/X-card text into Publish fields so owner never retypes
+  useEffect(() => {
+    if (!hasCustomPostTitle) {
+      setPostTitle(buildAutoTopTitle());
+    }
+  }, [hasCustomPostTitle, buildAutoTopTitle]);
+
+  useEffect(() => {
+    if (!hasCustomPostBody) {
+      setPostBody(buildAutoTopBody(publishBoard === 'Makala'));
+    }
+  }, [hasCustomPostBody, buildAutoTopBody, publishBoard]);
+
+  // Background Studio -> Makala Bridge Sync (keeps latest Poster artwork + text ready in Makala)
+  useEffect(() => {
+    if (!draftHydratedRef.current) return;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const blob = await exportPosterBlob();
+          const finalTitle = (postTitle.trim() || buildAutoTopTitle()).slice(0, 140);
+          const makalaBody = hasCustomPostBody && postBody.trim()
+            ? postBody.trim()
+            : buildAutoTopBody(true);
+          await saveStudioMakalaSnapshot({
+            id: 'latest_poster',
+            source: 'poster',
+            title: finalTitle,
+            subheadline: subheadline.trim(),
+            bodyDraft: makalaBody,
+            ribbonText: showRibbon ? ribbonText.trim() : '',
+            locationTag: locationTag.trim(),
+            tags: parseTagsInput(postTagsRaw),
+            imageBlob: blob,
+            updatedAt: Date.now(),
+          });
+        } catch {
+          // Ignore background sync failures
+        }
+      })();
+    }, 1100);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    headline,
+    subheadline,
+    ribbonText,
+    showRibbon,
+    locationTag,
+    xCard.enabled,
+    xCard.body,
+    xCard.displayName,
+    postTitle,
+    postBody,
+    hasCustomPostBody,
+    postTagsRaw,
+    layoutId,
+    aspect,
+    paletteId,
+    colors,
+    loadedPhoto,
+    circlePhotos,
+    footerLink,
+    showResultsBanner,
+    resultsPromoText,
+  ]);
+
+  const handleResetToTopStudioText = () => {
+    setHasCustomPostTitle(false);
+    setHasCustomPostBody(false);
+    setPostTitle(buildAutoTopTitle());
+    setPostBody(buildAutoTopBody(publishBoard === 'Makala'));
+    onToast(
+      tr(
+        'Maneno ya kichwa na maelezo yamesawazishwa moja kwa moja na uliyoandika hapo juu!',
+        'Post title & body synced directly from your top Studio text!'
+      )
+    );
+  };
+
   const handleDownloadPoster = async () => {
     try {
       const blob = await exportPosterBlob();
@@ -2466,6 +2592,21 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
       a.click();
       document.body.removeChild(a);
       window.setTimeout(() => URL.revokeObjectURL(url), 4000);
+      await saveStudioMakalaSnapshot(
+        {
+          id: 'latest_poster',
+          source: 'poster',
+          title: (postTitle.trim() || buildAutoTopTitle()).slice(0, 140),
+          subheadline: subheadline.trim(),
+          bodyDraft: hasCustomPostBody && postBody.trim() ? postBody.trim() : buildAutoTopBody(true),
+          ribbonText: showRibbon ? ribbonText.trim() : '',
+          locationTag: locationTag.trim(),
+          tags: parseTagsInput(postTagsRaw),
+          imageBlob: blob,
+          updatedAt: Date.now(),
+        },
+        { saveHistory: true }
+      );
       onToast(tr('Poster imepakuliwa kwenye kifaa chako!', 'Poster saved to your device!'));
     } catch (err) {
       onToast(
@@ -2476,9 +2617,13 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
   };
 
   const buildSocialShareCaption = (): string => {
+    const chosenTitle = postTitle.trim() || headline.trim();
+    const chosenBody = postBody.trim() || buildAutoTopBody(false);
+    const prefix = showRibbon ? `${ribbonText.trim().toUpperCase() || 'BREAKING NEWS'}: ` : '';
+    const headlineLine = `${prefix}${chosenTitle}`.trim();
     const parts = [
-      `${showRibbon ? `${ribbonText.trim().toUpperCase() || 'BREAKING NEWS'}: ` : ''}${headline.trim()}`,
-      subheadline.trim(),
+      headlineLine,
+      chosenBody && chosenBody !== chosenTitle ? chosenBody : '',
       footerLink.trim() || 'https://maloshaforums.web.app',
     ].filter(Boolean);
     return parts.join('\n\n');
@@ -2495,6 +2640,27 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
     }
   };
 
+  const handleShareToPlatformIntent = async (platform: 'whatsapp' | 'x' | 'facebook') => {
+    const caption = buildSocialShareCaption();
+    const linkUrl = footerLink.trim() || 'https://maloshaforums.web.app';
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(caption).catch(() => {});
+    }
+    const targetUrl =
+      platform === 'whatsapp'
+        ? `https://wa.me/?text=${encodeURIComponent(caption)}`
+        : platform === 'x'
+          ? `https://twitter.com/intent/tweet?text=${encodeURIComponent(caption.slice(0, 260))}`
+          : `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(linkUrl)}&quote=${encodeURIComponent(caption)}`;
+    window.open(targetUrl, '_blank', 'noopener,noreferrer');
+    onToast(
+      tr(
+        'Maelezo yamenakiliwa — pakia poster au tuma moja kwa moja!',
+        'Caption ready — share directly!'
+      )
+    );
+  };
+
   const handleShareToSocial = async () => {
     setSharing(true);
     try {
@@ -2503,6 +2669,22 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
       const posterFile = new File([blob], fileName, { type: 'image/png' });
       const caption = buildSocialShareCaption();
 
+      await saveStudioMakalaSnapshot(
+        {
+          id: 'latest_poster',
+          source: 'poster',
+          title: (postTitle.trim() || buildAutoTopTitle()).slice(0, 140),
+          subheadline: subheadline.trim(),
+          bodyDraft: hasCustomPostBody && postBody.trim() ? postBody.trim() : buildAutoTopBody(true),
+          ribbonText: showRibbon ? ribbonText.trim() : '',
+          locationTag: locationTag.trim(),
+          tags: parseTagsInput(postTagsRaw),
+          imageBlob: blob,
+          updatedAt: Date.now(),
+        },
+        { saveHistory: true }
+      );
+
       if (
         typeof navigator !== 'undefined' &&
         typeof navigator.share === 'function' &&
@@ -2510,7 +2692,7 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
       ) {
         await navigator.share({
           files: [posterFile],
-          title: headline.trim() || 'Malosha Forums',
+          title: postTitle.trim() || headline.trim() || 'Malosha Forums',
           text: caption,
         });
         onToast(tr('Poster imeshirikiwa kikamilifu!', 'Poster shared successfully!'));
@@ -2547,18 +2729,71 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
     }
   };
 
+  const handleSendToMakalaEditor = async () => {
+    if (sendingToMakala) return;
+    setSendingToMakala(true);
+    try {
+      const blob = await exportPosterBlob();
+      const finalTitle = (postTitle.trim() || buildAutoTopTitle()).slice(0, 140);
+      const makalaBody = hasCustomPostBody && postBody.trim()
+        ? postBody.trim()
+        : buildAutoTopBody(true);
+
+      await saveStudioMakalaSnapshot(
+        {
+          id: 'latest_poster',
+          source: 'poster',
+          title: finalTitle,
+          subheadline: subheadline.trim(),
+          bodyDraft: makalaBody,
+          ribbonText: showRibbon ? ribbonText.trim() : '',
+          locationTag: locationTag.trim(),
+          tags: parseTagsInput(postTagsRaw),
+          imageBlob: blob,
+          updatedAt: Date.now(),
+        },
+        { saveHistory: true }
+      );
+      setPendingStudioMakalaImportId('latest_poster');
+      onToast(
+        tr(
+          'Inafungua Makala — picha, kichwa na maelezo ya Studio yatajijaza kiotomatiki!',
+          'Opening Makala — Studio headline, cover & notes will auto-fill!'
+        )
+      );
+      onNavigateBoard('Makala');
+    } catch (err) {
+      onToast(
+        err instanceof Error
+          ? err.message
+          : tr('Imeshindwa kutuma taarifa kwenda Makala.', 'Failed to send Studio draft to Makala.'),
+        'error'
+      );
+    } finally {
+      setSendingToMakala(false);
+    }
+  };
+
   const handlePublishPosterToForum = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanTitle = postTitle.trim();
-    const cleanBody = postBody.trim();
+    const cleanTitle = (postTitle.trim() || buildAutoTopTitle()).slice(0, 140);
+    const cleanBody =
+      postBody.trim() || buildAutoTopBody(publishBoard === 'Makala');
 
     if (publishBoard === 'Makala') {
       if (cleanTitle.length < 5 || cleanBody.length < 10) {
         onToast(
           tr(
-            'Kwa Makala, weka kichwa (angalau herufi 5) na maelezo (angalau herufi 10).',
-            'For Makala articles, enter a title (min 5 chars) and body (min 10 chars).'
+            'Kwa Makala, weka headline (angalau herufi 5) na maelezo (angalau herufi 10) hapo juu.',
+            'For Makala articles, enter a headline (min 5 chars) and details (min 10 chars) above.'
           ),
+          'error'
+        );
+        return;
+      }
+      if (cleanBody.length > 16000) {
+        onToast(
+          tr('Matini ya Makala yasizidi herufi 16000.', 'Makala body cannot exceed 16000 characters.'),
           'error'
         );
         return;
@@ -2571,8 +2806,8 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
       if (!cleanTitle && !cleanBody) {
         onToast(
           tr(
-            'Andika kichwa au maelezo ya chapisho, au chagua "Post Kama Picha Pekee".',
-            'Enter a title or caption, or select "Post as Image Only".'
+            'Andika headline au maelezo hapo juu, au chagua "Post Kama Picha Pekee".',
+            'Enter a headline or description above, or select "Post as Image Only".'
           ),
           'error'
         );
@@ -2587,12 +2822,12 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
       const posterFile = new File([blob], makeSafeFileName(), { type: 'image/png' });
       const uploadedUrl = await uploadImageToCloudinary(posterFile);
 
-      const finalTitle =
-        publishMode === 'image_only' && publishBoard === 'Kijiweni'
-          ? ''
-          : cleanTitle || headline.trim().slice(0, 140);
-      const finalBody =
-        publishMode === 'image_only' && publishBoard === 'Kijiweni' ? '' : cleanBody;
+      const isKijiweniImageOnly =
+        publishMode === 'image_only' && publishBoard === 'Kijiweni';
+      const finalTitle = isKijiweniImageOnly
+        ? ''
+        : cleanTitle || headline.trim().slice(0, 140);
+      const finalBody = isKijiweniImageOnly ? '' : cleanBody;
 
       const createdId = await onPublishToPlatform({
         title: finalTitle,
@@ -2602,11 +2837,30 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
         coverImage: uploadedUrl,
       });
 
+      await saveStudioMakalaSnapshot(
+        {
+          id: 'latest_poster',
+          source: 'poster',
+          title: cleanTitle || headline.trim().slice(0, 140),
+          subheadline: subheadline.trim(),
+          bodyDraft: buildAutoTopBody(true),
+          ribbonText: showRibbon ? ribbonText.trim() : '',
+          locationTag: locationTag.trim(),
+          tags: parseTagsInput(postTagsRaw),
+          imageBlob: blob,
+          uploadedImageUrl: uploadedUrl,
+          updatedAt: Date.now(),
+        },
+        { saveHistory: true }
+      );
+
       setPublishedResult({ topicId: createdId, board: publishBoard });
       onToast(
         publishBoard === 'Kijiweni'
           ? tr('Poster imechapishwa moja kwa moja Kijiweni!', 'Poster published straight to Kijiweni!')
-          : tr('Poster imechapishwa kwenye Makala!', 'Poster published to Makala!')
+          : publishBoard === 'Fursa'
+            ? tr('Poster imechapishwa kwenye Fursa!', 'Poster published to Fursa!')
+            : tr('Poster imechapishwa kwenye Makala!', 'Poster published to Makala!')
       );
     } catch (err) {
       onToast(
@@ -2795,24 +3049,65 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
                     : tr('Shiriki Mitandaoni (Picha)', 'Share Poster Image')}
                 </span>
               </button>
-            </div>
-
-            <div className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs">
-              <span className="truncate text-slate-600">
-                {tr('Nakili maelezo + linki ya https://maloshaforums.web.app', 'Copy caption + web link')}
-              </span>
               <button
                 type="button"
-                onClick={() => void handleCopyShareCaption()}
-                className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-100"
+                disabled={sendingToMakala}
+                onClick={() => void handleSendToMakalaEditor()}
+                className="inline-flex min-h-[42px] w-full items-center justify-center gap-2 rounded-xl border border-[#B80000]/30 bg-red-50 px-4 py-2 text-xs font-bold text-[#B80000] transition-colors hover:bg-red-100 disabled:opacity-60 sm:col-span-2 sm:text-sm"
               >
-                {copiedCaption ? (
-                  <Check className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
+                {sendingToMakala ? (
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
                 ) : (
-                  <Copy className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
+                  <Newspaper className="h-4 w-4" aria-hidden="true" />
                 )}
-                <span>{copiedCaption ? tr('Imenakiliwa', 'Copied') : tr('Nakili', 'Copy')}</span>
+                <span>
+                  {tr(
+                    'Andika Makala na Taarifa Hizi (Jaza Automatic)',
+                    'Write Makala Article With This Poster (Auto-Fill)'
+                  )}
+                </span>
               </button>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs">
+              <span className="truncate text-slate-600">
+                {tr('Share moja kwa moja popote:', 'Quick share anywhere:')}
+              </span>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => void handleShareToPlatformIntent('whatsapp')}
+                  className="inline-flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-800 hover:bg-emerald-100"
+                >
+                  WhatsApp
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleShareToPlatformIntent('x')}
+                  className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-bold text-slate-800 hover:bg-slate-100"
+                >
+                  X
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleShareToPlatformIntent('facebook')}
+                  className="inline-flex items-center rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-bold text-blue-800 hover:bg-blue-100"
+                >
+                  Facebook
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleCopyShareCaption()}
+                  className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-100"
+                >
+                  {copiedCaption ? (
+                    <Check className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
+                  ) : (
+                    <Copy className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
+                  )}
+                  <span>{copiedCaption ? tr('Imenakiliwa', 'Copied') : tr('Nakili', 'Copy')}</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -4122,7 +4417,7 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
               </div>
             )}
 
-            {/* TAB 5: DIRECT PUBLISH TO KIJIWENI / MAKALA */}
+            {/* TAB 5: DIRECT PUBLISH TO ANY BOARD (KIJIWENI / MAKALA / FURSA) & SHARE POPOTE */}
             {activeTab === 'publish' && (
               <form
                 onSubmit={handlePublishPosterToForum}
@@ -4131,7 +4426,7 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h3 className="flex items-center gap-1.5 text-xs font-bold tracking-wide text-[#0E2640] uppercase">
                     <Sparkles className="h-4 w-4 text-[#D97706]" aria-hidden="true" />
-                    <span>{tr('Post Ndani ya Mfumo (Kijiweni / Makala)', 'Publish Inside Malosha Forums')}</span>
+                    <span>{tr('Post Popote Ndani ya Mfumo', 'Publish Anywhere in Malosha')}</span>
                   </h3>
                   <div
                     role="group"
@@ -4154,8 +4449,6 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
                       onClick={() => {
                         setPublishBoard('Makala');
                         setPublishMode('with_text');
-                        if (!postTitle.trim()) setPostTitle(headline.trim().slice(0, 140));
-                        if (!postBody.trim()) setPostBody(subheadline.trim() || headline.trim());
                       }}
                       className={`rounded-md px-2.5 py-1 transition-colors ${
                         publishBoard === 'Makala'
@@ -4164,6 +4457,20 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
                       }`}
                     >
                       Makala
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPublishBoard('Fursa');
+                        setPublishMode('with_text');
+                      }}
+                      className={`rounded-md px-2.5 py-1 transition-colors ${
+                        publishBoard === 'Fursa'
+                          ? 'bg-emerald-700 text-white'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Fursa
                     </button>
                   </div>
                 </div>
@@ -4185,10 +4492,7 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
 
                     <button
                       type="button"
-                      onClick={() => {
-                        setPublishMode('with_text');
-                        if (!postTitle.trim()) setPostTitle(headline.trim().slice(0, 140));
-                      }}
+                      onClick={() => setPublishMode('with_text')}
                       className={`flex items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-xs font-bold transition-all ${
                         publishMode === 'with_text'
                           ? 'border-[#1D4E89] bg-[#1D4E89] text-white shadow-sm'
@@ -4196,29 +4500,63 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
                       }`}
                     >
                       <Newspaper className="h-4 w-4 shrink-0" aria-hidden="true" />
-                      <span>{tr('Ongeza Maneno Kisha Post', 'Add Caption Text & Post')}</span>
+                      <span>{tr('Tumia Maneno ya Juu Kisha Post', 'Use Studio Text & Post')}</span>
                     </button>
                   </div>
                 )}
 
-                {(publishMode === 'with_text' || publishBoard === 'Makala') && (
+                {(publishMode === 'with_text' || publishBoard !== 'Kijiweni') && (
                   <div className="space-y-2.5 pt-1">
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50/80 px-3 py-1.5 text-[11px] text-emerald-900">
+                      <span className="font-semibold">
+                        {!hasCustomPostTitle && !hasCustomPostBody
+                          ? tr(
+                              'Inatumia Kichwa & Maelezo uliyoandika hapo juu kiotomatiki — huhitaji kuandika tena.',
+                              'Auto-using your top Headline & Notes — no re-typing needed.'
+                            )
+                          : tr(
+                              'Umehariri baadhi ya maneno hapa chini (au rudisha maneno ya juu).',
+                              'Custom text below (or re-sync from top).'
+                            )}
+                      </span>
+                      {(hasCustomPostTitle || hasCustomPostBody) && (
+                        <button
+                          type="button"
+                          onClick={handleResetToTopStudioText}
+                          className="inline-flex items-center gap-1 rounded border border-emerald-300 bg-white px-2 py-0.5 text-[10px] font-bold text-emerald-800 hover:bg-emerald-100"
+                        >
+                          <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                          <span>{tr('Vuta ya Juu', 'Sync Top')}</span>
+                        </button>
+                      )}
+                    </div>
+
                     <input
                       type="text"
                       maxLength={140}
                       value={postTitle}
-                      onChange={(e) => setPostTitle(e.target.value)}
-                      placeholder={tr('Kichwa cha chapisho...', 'Post title...')}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setPostTitle(val);
+                        setHasCustomPostTitle(val.trim().length > 0 && val.trim() !== buildAutoTopTitle());
+                      }}
+                      placeholder={tr('Kichwa cha chapisho (kinatoka juu kiotomatiki)...', 'Post title (auto-filled from above)...')}
                       className="min-h-[40px] w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-semibold text-slate-900 placeholder:font-normal focus:border-[#1D4E89] focus:outline-none"
                     />
                     <textarea
                       rows={3}
-                      maxLength={8000}
+                      maxLength={publishBoard === 'Makala' ? 16000 : 8000}
                       value={postBody}
-                      onChange={(e) => setPostBody(e.target.value)}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setPostBody(val);
+                        setHasCustomPostBody(
+                          val.trim().length > 0 && val.trim() !== buildAutoTopBody(publishBoard === 'Makala')
+                        );
+                      }}
                       placeholder={tr(
-                        'Andika maelezo au ujumbe wa nyongeza utakaoambatana na poster...',
-                        'Write additional caption or article details...'
+                        'Maelezo yanavutwa kutoka hapo juu kiotomatiki (ongeza ukitaka)...',
+                        'Details auto-filled from above (edit or add more if desired)...'
                       )}
                       className="w-full rounded-lg border border-slate-300 bg-white p-3 text-sm text-slate-900 focus:border-[#1D4E89] focus:outline-none"
                     />
@@ -4232,30 +4570,50 @@ export const BreakingNewsPosterStudio: React.FC<BreakingNewsPosterStudioProps> =
                   </div>
                 )}
 
-                <button
-                  type="submit"
-                  disabled={publishing}
-                  className={`flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-colors disabled:opacity-60 ${
-                    publishBoard === 'Makala'
-                      ? 'bg-[#B80000] hover:bg-[#990000]'
-                      : 'bg-[#1D4E89] hover:bg-[#163A5F]'
-                  }`}
-                >
-                  {publishing ? (
-                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                  ) : (
-                    <Send className="h-4 w-4" aria-hidden="true" />
-                  )}
-                  <span>
-                    {publishing
-                      ? tr('Inapakia na Kuchapisha...', 'Uploading & Publishing...')
-                      : publishBoard === 'Kijiweni'
-                        ? publishMode === 'image_only'
-                          ? tr('Post Poster Kama Picha Kijiweni', 'Post Poster Image to Kijiweni')
-                          : tr('Post Poster na Maneno Kijiweni', 'Post Poster & Caption to Kijiweni')
-                        : tr('Chapisha Makala yenye Poster', 'Publish Article with Poster')}
-                  </span>
-                </button>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <button
+                    type="submit"
+                    disabled={publishing}
+                    className={`flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold text-white shadow-sm transition-colors disabled:opacity-60 sm:text-sm ${
+                      publishBoard === 'Makala'
+                        ? 'bg-[#B80000] hover:bg-[#990000]'
+                        : publishBoard === 'Fursa'
+                          ? 'bg-emerald-700 hover:bg-emerald-800'
+                          : 'bg-[#1D4E89] hover:bg-[#163A5F]'
+                    }`}
+                  >
+                    {publishing ? (
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Send className="h-4 w-4" aria-hidden="true" />
+                    )}
+                    <span>
+                      {publishing
+                        ? tr('Inapakia na Kuchapisha...', 'Uploading & Publishing...')
+                        : publishBoard === 'Kijiweni'
+                          ? publishMode === 'image_only'
+                            ? tr('Post Picha Kijiweni', 'Post Image to Kijiweni')
+                            : tr('Post Kijiweni Sasa', 'Post to Kijiweni Now')
+                          : publishBoard === 'Fursa'
+                            ? tr('Post Kwenye Fursa Sasa', 'Post to Fursa Now')
+                            : tr('Chapisha Makala Sasa', 'Publish Makala Now')}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={sendingToMakala}
+                    onClick={() => void handleSendToMakalaEditor()}
+                    className="flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl border border-[#B80000] bg-white px-4 py-2.5 text-xs font-bold text-[#B80000] transition-colors hover:bg-red-50 disabled:opacity-60 sm:text-sm"
+                  >
+                    {sendingToMakala ? (
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Newspaper className="h-4 w-4" aria-hidden="true" />
+                    )}
+                    <span>{tr('Andalia Makala & Ongeza Vitu', 'Open in Makala & Edit')}</span>
+                  </button>
+                </div>
 
                 {publishedResult && (
                   <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-xs text-emerald-900">

@@ -3,16 +3,20 @@ import {
   Archive,
   ArchiveRestore,
   ArrowLeft,
-  AtSign,
-  BookOpen,
   Check,
   Clock,
+  Code2,
   Copy,
   Download,
+  Edit3,
   Eye,
+  FileCode2,
+  FileDown,
   FileText,
   FileUp,
   FolderArchive,
+  FolderOpen,
+  Image as ImageIcon,
   Loader2,
   Lock,
   LockOpen,
@@ -50,15 +54,32 @@ import {
   normalizeVerificationBadge,
   UserProfile,
 } from '../types';
-import { downloadNoteAsPdf, downloadUploadedPdfFile } from '../utils/notePdfGenerator';
+import {
+  applyMakalaFormatAction,
+  MakalaFormatAction,
+  restoreTextareaSelectionAndScroll,
+} from '../utils/makalaSelectionFormatter';
+import {
+  downloadNoteAsPdf,
+  downloadNoteAsTextFile,
+  downloadUploadedPdfFile,
+} from '../utils/notePdfGenerator';
 import {
   InlineMediaInsertModal,
   InsertedInlineMedia,
   computeTextAfterInlineMediaInsert,
 } from './InlineMediaInsertModal';
+import { MakalaFormatToolbar } from './MakalaFormatToolbar';
 import { extractPlainTextFromPdfFile, MobilePdfNoteReader } from './MobilePdfNoteReader';
-import { NoteFormattedRenderer } from './NoteFormattedRenderer';
+import {
+  extractAllCodeBlocksFromNote,
+  NoteFormattedRenderer,
+} from './NoteFormattedRenderer';
 import { NoteLockManageModal } from './NoteLockManageModal';
+
+type NoteFileFilter = 'all' | 'pinned' | 'code' | 'pdf' | 'archived';
+
+const NOTE_DRAFT_STORAGE_KEY = 'malosha_mchart_note_draft_v1';
 
 interface MchartNotesViewProps {
   notes: MchartNote[];
@@ -70,7 +91,7 @@ interface MchartNotesViewProps {
   onMarkNoteRead?: (noteId: string) => void;
   onSignIn?: () => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
-  onRequestConfirm: (opts: {
+  onRequestConfirm?: (opts: {
     title: string;
     message: string;
     confirmLabel: string;
@@ -93,6 +114,20 @@ function formatPriceLabel(price?: number, currency = 'TZS'): string {
   return `${currency} ${safe.toLocaleString()}`;
 }
 
+function noteHasCodeBlock(note: MchartNote): boolean {
+  return /```|~~~/.test(note.body || '');
+}
+
+function noteHasInlineImage(note: MchartNote): boolean {
+  return /!\[[^\]]*\]\(https:\/\/[^\s)]+\)/i.test(note.body || '');
+}
+
+function countWords(text: string): number {
+  const trimmed = text.trim();
+  if (!trimmed) return 0;
+  return trimmed.split(/\s+/).filter(Boolean).length;
+}
+
 export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
   notes,
   loading,
@@ -103,10 +138,11 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
   onMarkNoteRead,
   onSignIn,
   onToast,
-  onRequestConfirm,
 }) => {
   const { tr, formatTime } = useLanguage();
   const [composerOpen, setComposerOpen] = useState(false);
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [loadingEditNoteId, setLoadingEditNoteId] = useState<string | null>(null);
   const [rawText, setRawText] = useState('');
   const [titleInput, setTitleInput] = useState('');
   const [subtitleInput, setSubtitleInput] = useState('');
@@ -115,6 +151,7 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
   const [publishing, setPublishing] = useState(false);
   const [uploadingPdf, setUploadingPdf] = useState(false);
   const [pendingPdf, setPendingPdf] = useState<NotePdfUploadResult | null>(null);
+  const [selectedWordCount, setSelectedWordCount] = useState(0);
 
   // Composer lock/payment options
   const [composerLockEnabled, setComposerLockEnabled] = useState(false);
@@ -127,10 +164,13 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
 
   const [selectedNote, setSelectedNote] = useState<MchartNote | null>(null);
   const [lockModalNote, setLockModalNote] = useState<MchartNote | null>(null);
+  const [pendingDeleteNote, setPendingDeleteNote] = useState<MchartNote | null>(null);
+  const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
   const [fontStep, setFontStep] = useState<'sm' | 'md' | 'lg'>('md');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [activeFilter, setActiveFilter] = useState<NoteFileFilter>('all');
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const noteBodyTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [inlineMediaPicker, setInlineMediaPicker] = useState<{
@@ -144,6 +184,41 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
   const [loadingProtectedContent, setLoadingProtectedContent] = useState(false);
   const [paymentRefInput, setPaymentRefInput] = useState('');
   const [submittingPaymentReq, setSubmittingPaymentReq] = useState(false);
+
+  // Restore draft for new note when admin opens composer
+  useEffect(() => {
+    if (!isAdmin || editingNoteId) return;
+    try {
+      const saved = window.localStorage.getItem(NOTE_DRAFT_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved) as { title?: string; subtitle?: string; rawText?: string };
+        if (!rawText && parsed.rawText) setRawText(parsed.rawText);
+        if (!titleInput && parsed.title) setTitleInput(parsed.title);
+        if (!subtitleInput && parsed.subtitle) setSubtitleInput(parsed.subtitle);
+      }
+    } catch {
+      // Ignore draft restore errors
+    }
+    // Only on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin]);
+
+  // Autosave draft for new notes
+  useEffect(() => {
+    if (!isAdmin || editingNoteId) return;
+    try {
+      if (!rawText.trim() && !titleInput.trim() && !subtitleInput.trim()) {
+        window.localStorage.removeItem(NOTE_DRAFT_STORAGE_KEY);
+      } else {
+        window.localStorage.setItem(
+          NOTE_DRAFT_STORAGE_KEY,
+          JSON.stringify({ title: titleInput, subtitle: subtitleInput, rawText })
+        );
+      }
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [isAdmin, editingNoteId, titleInput, subtitleInput, rawText]);
 
   // Keep selectedNote & lockModalNote synced with live Firestore updates
   const liveSelectedNote = useMemo(() => {
@@ -351,28 +426,134 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
       })
       .sort((a, b) => {
         if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
-        const am = a.createdAt ? a.createdAt.toMillis() : Date.now();
-        const bm = b.createdAt ? b.createdAt.toMillis() : Date.now();
+        const am = a.createdAt ? a.createdAt.toMillis() : Number.MAX_SAFE_INTEGER;
+        const bm = b.createdAt ? b.createdAt.toMillis() : Number.MAX_SAFE_INTEGER;
         return bm - am;
       });
   }, [notes, searchQuery]);
 
-  const { activeNotes, archiveNotes } = useMemo(() => {
-    const unarchived = sortedNotes.filter((n) => !n.isArchived);
-    const archivedExplicit = sortedNotes.filter((n) => n.isArchived);
-
-    const active = unarchived.slice(0, 4);
-    const olderUnarchived = unarchived.slice(4);
+  const filterCounts = useMemo(() => {
+    const nonArchived = sortedNotes.filter((n) => !n.isArchived);
+    const archived = sortedNotes.filter((n) => n.isArchived);
     return {
-      activeNotes: active,
-      archiveNotes: [...olderUnarchived, ...archivedExplicit],
+      all: nonArchived.length,
+      pinned: nonArchived.filter((n) => n.isPinned).length,
+      code: nonArchived.filter((n) => noteHasCodeBlock(n)).length,
+      pdf: nonArchived.filter((n) => Boolean(n.pdfUrl || n.pdfFileName)).length,
+      archived: archived.length,
     };
   }, [sortedNotes]);
+
+  const displayedFiles = useMemo(() => {
+    if (activeFilter === 'archived') {
+      return sortedNotes.filter((n) => n.isArchived);
+    }
+    const base = searchQuery.trim()
+      ? sortedNotes
+      : sortedNotes.filter((n) => !n.isArchived);
+    if (activeFilter === 'pinned') return base.filter((n) => n.isPinned);
+    if (activeFilter === 'code') return base.filter((n) => noteHasCodeBlock(n));
+    if (activeFilter === 'pdf') return base.filter((n) => Boolean(n.pdfUrl || n.pdfFileName));
+    return base;
+  }, [sortedNotes, activeFilter, searchQuery]);
 
   const previewFormatted = useMemo(() => {
     if (!rawText.trim()) return null;
     return formatRawTextAsStructuredNote(rawText, titleInput, subtitleInput);
   }, [rawText, titleInput, subtitleInput]);
+
+  const rawWordCount = useMemo(() => countWords(rawText), [rawText]);
+
+  const syncSelectionStats = (el: HTMLTextAreaElement | null) => {
+    if (!el) {
+      setSelectedWordCount(0);
+      return;
+    }
+    const start = el.selectionStart ?? 0;
+    const end = el.selectionEnd ?? 0;
+    if (end <= start) {
+      setSelectedWordCount(0);
+      return;
+    }
+    const slice = el.value.slice(start, end).trim();
+    if (!slice) {
+      setSelectedWordCount(0);
+      return;
+    }
+    setSelectedWordCount(slice.split(/\s+/).filter(Boolean).length);
+  };
+
+  const handleApplyFormat = (action: MakalaFormatAction, fallbackSample: string) => {
+    const el = noteBodyTextareaRef.current;
+    const { nextBody, nextSelStart, nextSelEnd, snapshot } = applyMakalaFormatAction(
+      rawText,
+      el,
+      action,
+      fallbackSample
+    );
+    setRawText(nextBody);
+    setShowPreview(false);
+    restoreTextareaSelectionAndScroll(el, nextSelStart, nextSelEnd, snapshot);
+    window.requestAnimationFrame(() => {
+      syncSelectionStats(noteBodyTextareaRef.current);
+    });
+  };
+
+  const handleAutoFormatNote = () => {
+    if (!rawText.trim()) return;
+    const formatted = formatRawTextAsStructuredNote(rawText, titleInput, subtitleInput);
+    if (!titleInput.trim() && formatted.title) {
+      setTitleInput(formatted.title);
+    }
+    if (!subtitleInput.trim() && formatted.subtitle) {
+      setSubtitleInput(formatted.subtitle);
+    }
+    setRawText(formatted.body);
+    onToast(
+      tr(
+        'Notes zimepangwa kisomi na code/amri zimehifadhiwa kwenye kisanduku cha kunakili!',
+        'Notes structured cleanly with code & commands isolated!'
+      )
+    );
+  };
+
+  const resetComposer = () => {
+    setEditingNoteId(null);
+    setRawText('');
+    setTitleInput('');
+    setSubtitleInput('');
+    setPinNote(false);
+    setPendingPdf(null);
+    setShowPreview(false);
+    setSelectedWordCount(0);
+    setComposerLockEnabled(false);
+    setComposerLockMode('all');
+    setSelectedLockedUids(new Set());
+    setInlineMediaPicker(null);
+    setComposerOpen(false);
+  };
+
+  const startEditNote = async (note: MchartNote) => {
+    if (!isAdmin || loadingEditNoteId) return;
+    setLoadingEditNoteId(note.id);
+    try {
+      const resolved = await resolveNoteWithContent(note);
+      setEditingNoteId(note.id);
+      setTitleInput(resolved.title);
+      setSubtitleInput(resolved.subtitle || '');
+      setRawText(resolved.body || '');
+      setPinNote(Boolean(resolved.isPinned));
+      setPendingPdf(null);
+      setShowPreview(false);
+      setComposerLockEnabled(Boolean(resolved.isLocked));
+      setSelectedNote(null);
+      setComposerOpen(true);
+    } catch {
+      onToast(tr('Imeshindwa kufungua faili kwa uhariri.', 'Failed to load file for editing.'), 'error');
+    } finally {
+      setLoadingEditNoteId(null);
+    }
+  };
 
   const handlePdfPicked = async (file: File | undefined) => {
     if (!file || !user || !isAdmin) return;
@@ -425,6 +606,42 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
       return;
     }
 
+    if (editingNoteId) {
+      setPublishing(true);
+      try {
+        const { updatedBody } = await updateMchartNote(editingNoteId, {
+          title: titleInput,
+          subtitle: subtitleInput,
+          rawText,
+          isPinned: pinNote,
+        });
+        if (updatedBody) {
+          setProtectedContentMap((prev) => {
+            if (!prev[editingNoteId]) return prev;
+            return {
+              ...prev,
+              [editingNoteId]: {
+                ...prev[editingNoteId],
+                body: updatedBody,
+              },
+            };
+          });
+        }
+        resetComposer();
+        onToast(tr('Mabadiliko ya faili la notes yamehifadhiwa!', 'Study file updated!'));
+      } catch (err) {
+        onToast(
+          err instanceof Error
+            ? err.message
+            : tr('Imeshindwa kuhifadhi mabadiliko.', 'Failed to update note.'),
+          'error'
+        );
+      } finally {
+        setPublishing(false);
+      }
+      return;
+    }
+
     const numericPrice = Math.max(
       0,
       Math.floor(Number(composerLockPrice.replace(/[^0-9]/g, '') || 0))
@@ -472,20 +689,16 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
         lockedUsers,
       });
 
-      setRawText('');
-      setTitleInput('');
-      setSubtitleInput('');
-      setPendingPdf(null);
-      setShowPreview(false);
-      setComposerLockEnabled(false);
-      setComposerLockMode('all');
-      setSelectedLockedUids(new Set());
-      setInlineMediaPicker(null);
-      setComposerOpen(false);
+      try {
+        window.localStorage.removeItem(NOTE_DRAFT_STORAGE_KEY);
+      } catch {
+        // Ignore storage error
+      }
+      resetComposer();
       onToast(
         tr(
-          'Note mpya imepangwa kitaalamu na kuchapishwa!',
-          'Note formatted and published!'
+          'Faili jipya la notes limepangwa kisomi na kuhifadhiwa!',
+          'Study file formatted and saved!'
         )
       );
     } catch (err) {
@@ -497,6 +710,22 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
       );
     } finally {
       setPublishing(false);
+    }
+  };
+
+  const handleCopyAllCode = async (bodyText: string) => {
+    const snippets = extractAllCodeBlocksFromNote(bodyText);
+    if (snippets.length === 0) return;
+    try {
+      await navigator.clipboard.writeText(snippets.join('\n\n'));
+      onToast(
+        tr(
+          `Code / amri ${snippets.length} zimenakiliwa tayari!`,
+          `Copied ${snippets.length} code/command block(s)!`
+        )
+      );
+    } catch {
+      onToast(tr('Imeshindwa kunakili code.', 'Failed to copy code.'), 'error');
     }
   };
 
@@ -631,21 +860,69 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
 
   const handleDeleteNote = (note: MchartNote) => {
     if (!isAdmin) return;
-    onRequestConfirm({
-      title: tr('Futa Note Hii?', 'Delete This Note?'),
-      message: tr(
-        'Note hii na faili lake vitafutwa kabisa kwa watumiaji wote.',
-        'This note and its archive file will be permanently deleted for all members.'
-      ),
-      confirmLabel: tr('Futa Kabisa', 'Delete Permanently'),
-      destructive: true,
-      action: async () => {
-        await deleteMchartNote(note.id);
-        if (selectedNote?.id === note.id) setSelectedNote(null);
-        onToast(tr('Note imefutwa.', 'Note deleted.'));
-      },
-    });
+    setPendingDeleteNote(note);
   };
+
+  const executeDeleteNote = async (note: MchartNote) => {
+    if (!isAdmin || deletingNoteId) return;
+    setDeletingNoteId(note.id);
+    try {
+      await deleteMchartNote(note.id);
+      if (selectedNote?.id === note.id) setSelectedNote(null);
+      setPendingDeleteNote(null);
+      onToast(tr('Note imefutwa.', 'Note deleted.'));
+    } catch (err) {
+      onToast(
+        err instanceof Error ? err.message : tr('Imeshindwa kufuta note.', 'Failed to delete note.'),
+        'error'
+      );
+    } finally {
+      setDeletingNoteId(null);
+    }
+  };
+
+  if (liveLockModalNote) {
+    return (
+      <NoteLockManageModal
+        inline
+        note={liveLockModalNote}
+        onClose={() => setLockModalNote(null)}
+        onToast={onToast}
+      />
+    );
+  }
+
+  if (inlineMediaPicker !== null) {
+    return (
+      <InlineMediaInsertModal
+        inline
+        isOpen
+        onClose={() => setInlineMediaPicker(null)}
+        onToast={onToast}
+        onInsert={(media: InsertedInlineMedia) => {
+          const picker = inlineMediaPicker ?? {
+            atIndex: noteBodyTextareaRef.current?.selectionStart ?? rawText.length,
+            replaceAt: false,
+          };
+          const { nextText, nextCursor } = computeTextAfterInlineMediaInsert(
+            rawText,
+            picker.atIndex,
+            picker.replaceAt,
+            media
+          );
+          setRawText(nextText);
+          setInlineMediaPicker(null);
+          setShowPreview(false);
+          window.requestAnimationFrame(() => {
+            const el = noteBodyTextareaRef.current;
+            if (!el) return;
+            el.focus();
+            el.setSelectionRange(nextCursor, nextCursor);
+          });
+        }}
+      />
+    );
+  }
 
   const fontSizeClass =
     fontStep === 'sm'
@@ -685,34 +962,68 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
           <button
             type="button"
             onClick={() => setSelectedNote(null)}
-            className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-[#0E2640] hover:bg-slate-100"
+            className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-[#0E2640] hover:bg-slate-100"
           >
             <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-            <span>{tr('Rudi Kwenye Notes', 'Back to Notes')}</span>
+            <span>{tr('Rudi Kwenye Mafaili', 'Back to Files')}</span>
           </button>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             {isAdmin && (
-              <button
-                type="button"
-                onClick={() => setLockModalNote(liveSelectedNote)}
-                className={`inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border px-3 text-xs font-bold transition-colors ${
-                  liveSelectedNote.isLocked
-                    ? 'border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100'
-                    : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                }`}
-              >
-                {liveSelectedNote.isLocked ? (
-                  <Lock className="h-3.5 w-3.5 text-amber-700" aria-hidden="true" />
-                ) : (
-                  <LockOpen className="h-3.5 w-3.5 text-[#075E54]" aria-hidden="true" />
-                )}
-                <span>
-                  {liveSelectedNote.isLocked
-                    ? tr('Dhibiti Kufuli & Malipo', 'Manage Lock & Pay')
-                    : tr('Funga Note', 'Lock Note')}
-                </span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => void handleTogglePin(liveSelectedNote)}
+                  title={
+                    liveSelectedNote.isPinned
+                      ? tr('Ondoa Pin juu', 'Unpin file')
+                      : tr('Bandika juu (Pin)', 'Pin file to top')
+                  }
+                  className={`inline-flex min-h-[38px] items-center gap-1 rounded-xl border px-2.5 text-xs font-bold transition-colors ${
+                    liveSelectedNote.isPinned
+                      ? 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <Pin className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span className="hidden md:inline">
+                    {liveSelectedNote.isPinned ? tr('Ime-Pin', 'Pinned') : tr('Pin', 'Pin')}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={loadingEditNoteId === liveSelectedNote.id}
+                  onClick={() => void startEditNote(liveSelectedNote)}
+                  className="inline-flex min-h-[38px] items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-bold text-[#0E2640] hover:bg-slate-50"
+                >
+                  {loadingEditNoteId === liveSelectedNote.id ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Edit3 className="h-3.5 w-3.5 text-[#075E54]" aria-hidden="true" />
+                  )}
+                  <span className="hidden sm:inline">{tr('Hariri', 'Edit')}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setLockModalNote(liveSelectedNote)}
+                  className={`inline-flex min-h-[38px] items-center gap-1 rounded-xl border px-2.5 text-xs font-bold transition-colors ${
+                    liveSelectedNote.isLocked
+                      ? 'border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100'
+                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  {liveSelectedNote.isLocked ? (
+                    <Lock className="h-3.5 w-3.5 text-amber-700" aria-hidden="true" />
+                  ) : (
+                    <LockOpen className="h-3.5 w-3.5 text-[#075E54]" aria-hidden="true" />
+                  )}
+                  <span className="hidden md:inline">
+                    {liveSelectedNote.isLocked ? tr('Kufuli', 'Lock') : tr('Funga', 'Lock')}
+                  </span>
+                </button>
+              </>
             )}
 
             {!lockedForViewer && !isPdfOnly && (
@@ -726,7 +1037,7 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                     key={sz}
                     type="button"
                     onClick={() => setFontStep(sz)}
-                    className={`min-h-[34px] rounded-lg px-2 text-xs font-bold transition-colors ${
+                    className={`min-h-[32px] rounded-lg px-2 text-xs font-bold transition-colors ${
                       fontStep === sz
                         ? 'bg-[#075E54] text-white'
                         : 'text-slate-600 hover:text-slate-900'
@@ -738,19 +1049,48 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
               </div>
             )}
 
+            {!lockedForViewer &&
+              !isPdfOnly &&
+              extractAllCodeBlocksFromNote(effectiveBody).length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => void handleCopyAllCode(effectiveBody)}
+                  title={tr('Nakili code au amri zote zilizo ndani ya faili hili', 'Copy all code/commands')}
+                  className="inline-flex min-h-[38px] items-center gap-1 rounded-xl border border-slate-700 bg-slate-900 px-2.5 text-xs font-bold text-[#25D366] hover:bg-slate-800"
+                >
+                  <Code2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span className="hidden sm:inline">{tr('Nakili Code', 'Copy Code')}</span>
+                </button>
+              )}
+
             {!lockedForViewer && !isPdfOnly && (
               <button
                 type="button"
                 onClick={() => void handleCopyNote(liveSelectedNote)}
                 aria-label={tr('Nakili note yote', 'Copy all text')}
-                className="inline-flex min-h-[40px] items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                className="inline-flex min-h-[38px] items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
               >
                 {copiedId === liveSelectedNote.id ? (
                   <Check className="h-4 w-4 text-emerald-600" aria-hidden="true" />
                 ) : (
                   <Copy className="h-4 w-4" aria-hidden="true" />
                 )}
-                <span className="hidden sm:inline">{tr('Nakili Yote', 'Copy All')}</span>
+                <span className="hidden sm:inline">{tr('Nakili', 'Copy')}</span>
+              </button>
+            )}
+
+            {!lockedForViewer && !isPdfOnly && (
+              <button
+                type="button"
+                onClick={() => {
+                  downloadNoteAsTextFile({ ...liveSelectedNote, body: effectiveBody });
+                  onToast(tr('Faili la .MD limepakuliwa.', 'Markdown file downloaded.'));
+                }}
+                title={tr('Pakua faili la maandishi (.md)', 'Export .md file')}
+                className="inline-flex min-h-[38px] items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <FileDown className="h-4 w-4 text-[#0E2640]" aria-hidden="true" />
+                <span className="hidden lg:inline">.MD</span>
               </button>
             )}
 
@@ -759,7 +1099,7 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                 type="button"
                 disabled={downloadingId === liveSelectedNote.id}
                 onClick={() => void handleDownloadPdf(liveSelectedNote)}
-                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-[#075E54] px-3 text-xs font-bold text-white hover:bg-[#064E46] disabled:opacity-60"
+                className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl bg-[#075E54] px-3 text-xs font-bold text-white hover:bg-[#064E46] disabled:opacity-60"
               >
                 {downloadingId === liveSelectedNote.id ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-[#25D366]" aria-hidden="true" />
@@ -776,16 +1116,25 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
         <div className="flex-1 overflow-y-auto px-3.5 py-5 sm:px-8 sm:py-7">
           <article className="mx-auto max-w-2xl">
             <div className="mb-2.5 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-              {liveSelectedNote.isLocked && (
-                <span className="inline-flex items-center gap-1 font-bold text-amber-800">
-                  <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>
-                    {priceLabel || tr('Note ya Kulipia', 'Paid Note')}
+              {liveSelectedNote.isPinned && (
+                <>
+                  <span className="inline-flex items-center gap-1 font-bold text-[#0E2640]">
+                    <Pin className="h-3.5 w-3.5 text-amber-600" aria-hidden="true" />
+                    <span>{tr('Faili Lililo-Pin', 'Pinned File')}</span>
                   </span>
-                </span>
+                  <span aria-hidden="true">·</span>
+                </>
               )}
-              {liveSelectedNote.isLocked && <span aria-hidden="true">·</span>}
-              <span>
+              {liveSelectedNote.isLocked && (
+                <>
+                  <span className="inline-flex items-center gap-1 font-bold text-amber-800">
+                    <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>{priceLabel || tr('Note ya Kulipia', 'Paid Note')}</span>
+                  </span>
+                  <span aria-hidden="true">·</span>
+                </>
+              )}
+              <span className="font-mono text-[11px] font-semibold text-slate-600">
                 {liveSelectedNote.pdfFileName
                   ? `PDF · ${liveSelectedNote.pdfFileName}`
                   : liveSelectedNote.fileName.replace(/\.txt$/i, '.pdf')}
@@ -817,7 +1166,7 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
               {tr('Imeandaliwa na', 'Prepared by')}{' '}
               <strong className="text-[#0E2640]">{liveSelectedNote.authorName}</strong>
               {!isPdfOnly &&
-                ` · ${tr(`Maneno ${liveSelectedNote.wordCount}`, `${liveSelectedNote.wordCount} words`)}`}
+                ` · ${tr(`Maneno ${liveSelectedNote.wordCount.toLocaleString()}`, `${liveSelectedNote.wordCount.toLocaleString()} words`)}`}
             </p>
 
             {/* Locked Note Gate (Strict Admin Lock OR Payment Wall) */}
@@ -881,10 +1230,7 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                 {!user ? (
                   <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50/70 p-4 text-center">
                     <p className="text-xs font-medium text-slate-700">
-                      {tr(
-                        'Ingia au fungua akaunti yako kwanza.',
-                        'Sign in or create an account first.'
-                      )}
+                      {tr('Ingia au fungua akaunti yako kwanza.', 'Sign in or create an account first.')}
                     </p>
                     <button
                       type="button"
@@ -1018,6 +1364,31 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
               <div className="mt-8 flex flex-wrap items-center gap-2 border-t border-slate-200 pt-4">
                 <button
                   type="button"
+                  onClick={() => void handleTogglePin(liveSelectedNote)}
+                  className={`inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-bold ${
+                    liveSelectedNote.isPinned
+                      ? 'border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100'
+                      : 'border-slate-300 bg-white text-slate-800 hover:bg-slate-50'
+                  }`}
+                >
+                  <Pin className="h-4 w-4 text-amber-600" aria-hidden="true" />
+                  <span>
+                    {liveSelectedNote.isPinned
+                      ? tr('Ondoa Pin', 'Unpin File')
+                      : tr('Bandika Juu (Pin)', 'Pin File')}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  disabled={loadingEditNoteId === liveSelectedNote.id}
+                  onClick={() => void startEditNote(liveSelectedNote)}
+                  className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-[#0E2640] hover:bg-slate-50"
+                >
+                  <Edit3 className="h-4 w-4 text-[#075E54]" aria-hidden="true" />
+                  <span>{tr('Hariri Faili Hili', 'Edit File')}</span>
+                </button>
+                <button
+                  type="button"
                   onClick={() => setLockModalNote(liveSelectedNote)}
                   className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-2 text-xs font-bold text-amber-900 hover:bg-amber-100"
                 >
@@ -1032,12 +1403,12 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                   {liveSelectedNote.isArchived ? (
                     <>
                       <ArchiveRestore className="h-4 w-4 text-[#075E54]" aria-hidden="true" />
-                      <span>{tr('Rejesha Notes za Sasa', 'Restore to Active')}</span>
+                      <span>{tr('Rejesha Mafaili ya Sasa', 'Restore to Active')}</span>
                     </>
                   ) : (
                     <>
                       <Archive className="h-4 w-4 text-amber-600" aria-hidden="true" />
-                      <span>{tr('Hifadhi Kwenye Mafaili', 'Move to Archive File')}</span>
+                      <span>{tr('Hifadhi Kwenye Kumbukumbu', 'Archive File')}</span>
                     </>
                   )}
                 </button>
@@ -1047,26 +1418,46 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                   className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2 text-xs font-bold text-red-700 hover:bg-red-100"
                 >
                   <Trash2 className="h-4 w-4" aria-hidden="true" />
-                  <span>{tr('Futa Note', 'Delete')}</span>
+                  <span>{tr('Futa Faili', 'Delete')}</span>
                 </button>
+              </div>
+            )}
+
+            {pendingDeleteNote?.id === liveSelectedNote.id && (
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-900">
+                <span className="font-bold">
+                  {tr('Futa faili hili kabisa?', 'Delete this file permanently?')}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={Boolean(deletingNoteId)}
+                    onClick={() => setPendingDeleteNote(null)}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-1 font-bold text-slate-700"
+                  >
+                    {tr('Ghairi', 'Cancel')}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={Boolean(deletingNoteId)}
+                    onClick={() => void executeDeleteNote(liveSelectedNote)}
+                    className="rounded-lg bg-red-600 px-3 py-1 font-bold text-white hover:bg-red-700 disabled:opacity-50"
+                  >
+                    {deletingNoteId ? '...' : tr('Futa Kabisa', 'Delete')}
+                  </button>
+                </div>
               </div>
             )}
           </article>
         </div>
-
-        <NoteLockManageModal
-          note={liveLockModalNote}
-          onClose={() => setLockModalNote(null)}
-          onToast={onToast}
-        />
       </div>
     );
   }
 
-  // Notes List & Archive Files Overview
+  // Notes Digital File Cabinet Overview
   return (
     <div className="flex h-full flex-col overflow-hidden bg-[#F5F7FA]">
-      {/* Toolbar */}
+      {/* Search, Filter Tabs & New File Action */}
       <div className="shrink-0 border-b border-slate-200 bg-white px-3.5 py-3 sm:px-5">
         <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
           <div className="relative flex-1">
@@ -1078,7 +1469,7 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
               type="search"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={tr('Tafuta notes au faili la PDF...', 'Search notes or PDF file...')}
+              placeholder={tr('Tafuta faili la notes, code, au PDF...', 'Search study files, code, or PDF...')}
               className="min-h-[42px] w-full rounded-xl border border-slate-200 bg-slate-50 py-1.5 pr-3 pl-9 text-xs text-slate-900 placeholder:text-slate-400 focus:border-[#075E54] focus:bg-white focus:outline-none sm:text-sm"
             />
           </div>
@@ -1086,7 +1477,14 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
           {isAdmin && (
             <button
               type="button"
-              onClick={() => setComposerOpen((prev) => !prev)}
+              onClick={() => {
+                if (composerOpen) {
+                  resetComposer();
+                } else {
+                  setEditingNoteId(null);
+                  setComposerOpen(true);
+                }
+              }}
               className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-1.5 rounded-xl bg-[#075E54] px-4 py-2 text-xs font-bold text-white shadow-xs transition-colors hover:bg-[#064E46]"
             >
               {composerOpen ? (
@@ -1097,33 +1495,110 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
               ) : (
                 <>
                   <Plus className="h-4 w-4 text-[#25D366]" aria-hidden="true" />
-                  <span>{tr('Weka Notes / Pakia PDF', 'New Note / Upload PDF')}</span>
+                  <span>{tr('Weka Notes / Pakia PDF', 'New Study File / PDF')}</span>
                 </>
               )}
             </button>
           )}
         </div>
+
+        {/* File Folder Filter Strip */}
+        <div className="mt-2.5 flex items-center gap-1.5 overflow-x-auto pb-0.5">
+          {(
+            [
+              { id: 'all', label: tr('Mafaili Yote', 'All Files'), count: filterCounts.all },
+              { id: 'pinned', label: tr('Yaliyo-Pin', 'Pinned'), count: filterCounts.pinned },
+              { id: 'code', label: tr('Code & Amri', 'Code & Cmd'), count: filterCounts.code },
+              { id: 'pdf', label: tr('PDF', 'PDFs'), count: filterCounts.pdf },
+              { id: 'archived', label: tr('Kumbukumbu', 'Archive'), count: filterCounts.archived },
+            ] as { id: NoteFileFilter; label: string; count: number }[]
+          ).map((tab) => {
+            const active = activeFilter === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveFilter(tab.id)}
+                className={`inline-flex min-h-[32px] shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-bold transition-colors ${
+                  active
+                    ? 'border-[#075E54] bg-[#075E54] text-white'
+                    : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <span>{tab.label}</span>
+                <span
+                  className={`rounded px-1 text-[10px] tabular-nums ${
+                    active ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'
+                  }`}
+                >
+                  {tab.count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      {/* Scrollable Notes & Archive Content */}
+      {/* Scrollable Notes File Cabinet & Composer */}
       <div className="flex-1 overflow-y-auto px-3.5 py-4 sm:px-5">
-        {/* Owner Smart Paste & PDF Upload Composer */}
+        {pendingDeleteNote && (
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-900">
+            <span className="font-bold">
+              {tr(`Futa "${pendingDeleteNote.title}" kabisa?`, `Delete "${pendingDeleteNote.title}" permanently?`)}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={Boolean(deletingNoteId)}
+                onClick={() => setPendingDeleteNote(null)}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1 font-bold text-slate-700"
+              >
+                {tr('Ghairi', 'Cancel')}
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(deletingNoteId)}
+                onClick={() => void executeDeleteNote(pendingDeleteNote)}
+                className="rounded-lg bg-red-600 px-3 py-1 font-bold text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {deletingNoteId ? '...' : tr('Futa Kabisa', 'Delete')}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Owner Scholarly Notes & PDF Publisher / Editor */}
         {isAdmin && composerOpen && (
           <form
             onSubmit={(e) => void handlePublishNote(e)}
             className="mb-5 rounded-2xl border border-emerald-200 bg-white p-4 shadow-sm sm:p-5"
           >
-            <div>
-              <h2 className="flex items-center gap-2 font-display text-base font-bold text-[#0E2640] sm:text-lg">
-                <Sparkles className="h-4 w-4 text-[#D97706]" aria-hidden="true" />
-                <span>{tr('Weka Notes Kitaalamu au Faili la PDF', 'Owner Notes & PDF Publisher')}</span>
-              </h2>
-              <p className="mt-0.5 text-xs text-slate-600">
-                {tr(
-                  'Mfumo unapanga Title, Subtitle, Bullets, Aya (Paragraphs), na Code (yenye kitufe cha Nakili Code pekee). Unaweza pia kufunga note kwa malipo.',
-                  'Automatically structures Title, Subtitle, Bullets, Paragraphs, and Copy-only Code blocks. You can also lock notes for payment.'
-                )}
-              </p>
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <h2 className="flex items-center gap-2 font-display text-base font-bold text-[#0E2640] sm:text-lg">
+                  <Sparkles className="h-4 w-4 text-[#D97706]" aria-hidden="true" />
+                  <span>
+                    {editingNoteId
+                      ? tr('Hariri Faili la Notes', 'Edit Study File')
+                      : tr('Weka Faili la Notes Kitaalamu au PDF', 'Create Study File or PDF')}
+                  </span>
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-600">
+                  {tr(
+                    'Bila kikomo cha maneno · Pamba kisomi (nukuu, angaza, rangi, orodha, herufi kubwa) na funga code/amri ndani ya kisanduku cha kunakili.',
+                    'Unlimited words · Full scholarly formatting (quotes, highlights, colors, lists, case) with isolated copyable code/command blocks.'
+                  )}
+                </p>
+              </div>
+              {editingNoteId && (
+                <button
+                  type="button"
+                  onClick={resetComposer}
+                  className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-100"
+                >
+                  {tr('Ghairi Uhariri', 'Cancel Edit')}
+                </button>
+              )}
             </div>
 
             <div className="mt-3.5 space-y-3">
@@ -1133,7 +1608,7 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                     htmlFor="mchart-note-title"
                     className="block text-xs font-semibold text-slate-700"
                   >
-                    {tr('Kichwa Kikuu / Title (Hiari)', 'Main Title (Optional)')}
+                    {tr('Kichwa Kikuu / Jina la Faili (Hiari)', 'Main Title / File Name (Optional)')}
                   </label>
                   <input
                     id="mchart-note-title"
@@ -1141,7 +1616,7 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                     maxLength={160}
                     value={titleInput}
                     onChange={(e) => setTitleInput(e.target.value)}
-                    placeholder={tr('Mfano: Mwongozo wa React & API', 'e.g. Modern Web API Guide')}
+                    placeholder={tr('Mfano: Mwongozo wa React & Server Commands', 'e.g. Modern Web API & CLI Guide')}
                     className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-[#075E54] focus:outline-none"
                   />
                 </div>
@@ -1159,97 +1634,107 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                     value={subtitleInput}
                     onChange={(e) => setSubtitleInput(e.target.value)}
                     placeholder={tr(
-                      'Mfano: Hatua za msingi na mifano ya code',
-                      'e.g. Step-by-step lessons with code snippets'
+                      'Mfano: Hatua za msingi, picha, na amri za terminal',
+                      'e.g. Step-by-step lessons with images and commands'
                     )}
                     className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-[#075E54] focus:outline-none"
                   />
                 </div>
               </div>
 
-              {/* PDF Upload Box */}
-              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/70 p-3">
-                <input
-                  ref={pdfInputRef}
-                  type="file"
-                  accept="application/pdf,.pdf"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    e.target.value = '';
-                    void handlePdfPicked(file);
-                  }}
-                />
-                {pendingPdf ? (
-                  <div className="flex items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-white px-3 py-2">
-                    <div className="flex min-w-0 items-center gap-2.5">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-red-100 text-red-700">
-                        <FileText className="h-4 w-4" aria-hidden="true" />
+              {/* PDF Upload Box (shown when creating new note) */}
+              {!editingNoteId && (
+                <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/70 p-3">
+                  <input
+                    ref={pdfInputRef}
+                    type="file"
+                    accept="application/pdf,.pdf"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      void handlePdfPicked(file);
+                    }}
+                  />
+                  {pendingPdf ? (
+                    <div className="flex items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-white px-3 py-2">
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-red-100 text-red-700">
+                          <FileText className="h-4 w-4" aria-hidden="true" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-bold text-slate-900">
+                            {pendingPdf.fileName}
+                          </p>
+                          <p className="text-[11px] text-emerald-700">
+                            {formatBytes(pendingPdf.fileSize)} ·{' '}
+                            {tr('PDF tayari kusomwa kwenye simu', 'PDF ready for mobile reader')}
+                          </p>
+                        </div>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => setPendingPdf(null)}
+                        aria-label={tr('Ondoa PDF', 'Remove PDF')}
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-500 hover:bg-slate-100"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="min-w-0">
-                        <p className="truncate text-xs font-bold text-slate-900">
-                          {pendingPdf.fileName}
+                        <p className="text-xs font-bold text-slate-800">
+                          {tr('Pakia Faili la PDF (Hiari)', 'Upload PDF Document (Optional)')}
                         </p>
-                        <p className="text-[11px] text-emerald-700">
-                          {formatBytes(pendingPdf.fileSize)} ·{' '}
-                          {tr('PDF tayari kusomwa kwenye simu', 'PDF ready for mobile reader')}
+                        <p className="text-[11px] text-slate-500">
+                          {tr(
+                            'Hadi MB 15 · Wasomaji watafungua na kusoma kwenye simu',
+                            'Up to 15 MB · Opens directly in mobile reader'
+                          )}
                         </p>
                       </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setPendingPdf(null)}
-                      aria-label={tr('Ondoa PDF', 'Remove PDF')}
-                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-500 hover:bg-slate-100"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-slate-800">
-                        {tr('Pakia Faili la PDF (Hiari)', 'Upload PDF Document (Optional)')}
-                      </p>
-                      <p className="text-[11px] text-slate-500">
-                        {tr(
-                          'Hadi MB 15 · Wasomaji watafungua na kusoma kwenye simu',
-                          'Up to 15 MB · Opens directly in mobile reader'
+                      <button
+                        type="button"
+                        disabled={uploadingPdf}
+                        onClick={() => pdfInputRef.current?.click()}
+                        className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-[#075E54] bg-white px-3.5 py-1.5 text-xs font-bold text-[#075E54] transition-colors hover:bg-emerald-50 disabled:opacity-50"
+                      >
+                        {uploadingPdf ? (
+                          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                        ) : (
+                          <FileUp className="h-4 w-4" aria-hidden="true" />
                         )}
-                      </p>
+                        <span>
+                          {uploadingPdf
+                            ? tr('Inapakia PDF...', 'Uploading PDF...')
+                            : tr('Chagua PDF', 'Select PDF')}
+                        </span>
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      disabled={uploadingPdf}
-                      onClick={() => pdfInputRef.current?.click()}
-                      className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-[#075E54] bg-white px-3.5 py-1.5 text-xs font-bold text-[#075E54] transition-colors hover:bg-emerald-50 disabled:opacity-50"
-                    >
-                      {uploadingPdf ? (
-                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                      ) : (
-                        <FileUp className="h-4 w-4" aria-hidden="true" />
-                      )}
-                      <span>
-                        {uploadingPdf
-                          ? tr('Inapakia PDF...', 'Uploading PDF...')
-                          : tr('Chagua PDF', 'Select PDF')}
-                      </span>
-                    </button>
-                  </div>
-                )}
-              </div>
+                  )}
+                </div>
+              )}
 
-              {/* Body Textarea + Live Structured Preview */}
+              {/* Body Textarea + Full Makala Scholarly Toolbar + Live Preview */}
               <div>
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <label
-                    htmlFor="mchart-note-body"
-                    className="block text-xs font-semibold text-slate-700"
-                  >
-                    {pendingPdf
-                      ? tr('Maelezo ya Ziada ya Notes (Hiari ukishaweka PDF)', 'Additional Notes Text (Optional with PDF)')
-                      : tr('Bandika Maandishi na Code Hapa', 'Paste Notes & Code Snippets Here')}
-                  </label>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label
+                      htmlFor="mchart-note-body"
+                      className="block text-xs font-semibold text-slate-700"
+                    >
+                      {pendingPdf
+                        ? tr('Maelezo ya Ziada ya Notes (Hiari ukishaweka PDF)', 'Additional Notes Text (Optional with PDF)')
+                        : tr('Andika au Bandika Notes & Code / Amri Hapa', 'Write or Paste Notes & Code / Commands Here')}
+                    </label>
+                    <span className="rounded bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-[#075E54] tabular-nums">
+                      {tr(
+                        `Maneno ${rawWordCount.toLocaleString()} · Herufi ${rawText.length.toLocaleString()} · Bila Kikomo`,
+                        `${rawWordCount.toLocaleString()} words · ${rawText.length.toLocaleString()} chars · Unlimited`
+                      )}
+                    </span>
+                  </div>
                   <button
                     type="button"
                     onClick={() => setShowPreview((p) => !p)}
@@ -1260,38 +1745,32 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                     <span>
                       {showPreview
                         ? tr('Hariri Maandishi', 'Edit Text')
-                        : tr('Hakiki Mpangilio wa Notes', 'Preview Formatted Note')}
+                        : tr('Hakiki Faili Kisomi', 'Preview Study File')}
                     </span>
                   </button>
                 </div>
 
-                <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 rounded-t-xl border border-b-0 border-slate-200 bg-slate-50 px-2.5 py-1.5">
-                  <button
-                    type="button"
-                    onClick={() => {
+                {!showPreview && (
+                  <MakalaFormatToolbar
+                    selectedWordCount={selectedWordCount}
+                    showCodeAction
+                    showDividerAction
+                    onApplyFormat={handleApplyFormat}
+                    onOpenInlineMedia={() => {
                       setShowPreview(false);
                       setInlineMediaPicker({
                         atIndex: noteBodyTextareaRef.current?.selectionStart ?? rawText.length,
                         replaceAt: false,
                       });
                     }}
-                    className="inline-flex min-h-[32px] items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-[#0E2640] hover:bg-amber-100"
-                  >
-                    <AtSign className="h-3.5 w-3.5 text-[#075E54]" aria-hidden="true" />
-                    <span>{tr('Pakia Picha / Video Hapa', 'Insert Photo / Video')}</span>
-                  </button>
-                  <span className="text-[11px] text-slate-500">
-                    {tr(
-                      'Andika @ popote kwenye notes kuweka picha au video',
-                      'Type @ anywhere in notes to insert a photo or video'
-                    )}
-                  </span>
-                </div>
+                    onAutoFormat={handleAutoFormatNote}
+                  />
+                )}
 
                 {showPreview && previewFormatted ? (
-                  <div className="max-h-80 overflow-y-auto rounded-b-xl border border-emerald-200 bg-[#FAF9F5] p-4">
-                    <p className="text-[11px] font-bold text-[#075E54]">
-                      {tr('Mwonekano Kitaalamu Kwa Wasomaji', 'Formatted Reader Preview')} ·{' '}
+                  <div className="mt-1.5 max-h-96 overflow-y-auto rounded-xl border border-emerald-200 bg-[#FAF9F5] p-4">
+                    <p className="font-mono text-[11px] font-bold text-[#075E54]">
+                      {tr('Mwonekano wa Faili Kisomi', 'Scholarly Study File Preview')} ·{' '}
                       {previewFormatted.fileName}
                     </p>
                     <h3 className="mt-1 font-display text-lg font-bold text-[#0E2640]">
@@ -1307,6 +1786,7 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                         body={previewFormatted.body}
                         fontSizeClass="text-[15px]"
                         onCopyCodeSuccess={(msg) => onToast(msg)}
+                        previewMode
                       />
                     </div>
                   </div>
@@ -1314,10 +1794,13 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                   <textarea
                     id="mchart-note-body"
                     ref={noteBodyTextareaRef}
-                    rows={7}
-                    maxLength={15000}
+                    rows={10}
                     required={!pendingPdf}
                     value={rawText}
+                    onSelect={(e) => syncSelectionStats(e.currentTarget)}
+                    onKeyUp={(e) => syncSelectionStats(e.currentTarget)}
+                    onMouseUp={(e) => syncSelectionStats(e.currentTarget)}
+                    onBlur={() => setSelectedWordCount(0)}
                     onChange={(e) => {
                       const nextVal = e.target.value;
                       const cursor = e.target.selectionStart ?? nextVal.length;
@@ -1332,167 +1815,169 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                       }
                     }}
                     placeholder={tr(
-                      'Bandika maandishi yako hapa... Andika @ popote kupakia picha au video katikati ya notes, au tumia ``` kuweka code, ## / ### kwa vichwa, na - / 1. kwa orodha.',
-                      'Paste your notes here... Type @ anywhere to insert a photo or video inline, or use ```code```, ## headings, and - / 1. lists.'
+                      'Andika au bandika notes ndefu bila kikomo... Highlight maneno kuweka Angaza, Rangi, Nukuu, Orodha, Herufi Kubwa au Code/Amri. Andika @ popote kupakia picha au video.',
+                      'Write or paste unlimited notes... Highlight words to format highlights, colors, quotes, lists, case, or Code/Commands. Type @ anywhere to insert media.'
                     )}
                     className="w-full rounded-b-xl border border-slate-300 bg-white p-3 text-sm leading-relaxed text-slate-900 focus:border-[#075E54] focus:outline-none"
                   />
                 )}
               </div>
 
-              {/* Lock / Paid Note Configuration inside Composer */}
-              <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5">
-                <label className="flex cursor-pointer items-center justify-between gap-3">
-                  <div className="flex items-center gap-2.5">
-                    <Lock className="h-4 w-4 shrink-0 text-[#D97706]" aria-hidden="true" />
-                    <div>
-                      <span className="block text-xs font-bold text-slate-900">
-                        {tr('Funga Note Hii Kwa Malipo (Paid Lock)', 'Lock This Note Behind Payment')}
-                      </span>
-                      <span className="block text-[11px] text-slate-500">
-                        {tr(
-                          'Watumiaji hawataweza kusoma mpaka walipie kiasi utakachoweka',
-                          'Users must pay the set fee before reading'
-                        )}
-                      </span>
-                    </div>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={composerLockEnabled}
-                    onChange={(e) => setComposerLockEnabled(e.target.checked)}
-                    className="h-5 w-5 rounded border-slate-300 text-[#075E54] focus:ring-[#075E54]"
-                  />
-                </label>
-
-                {composerLockEnabled && (
-                  <div className="mt-3.5 space-y-3 border-t border-slate-200 pt-3.5">
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      <button
-                        type="button"
-                        onClick={() => setComposerLockMode('all')}
-                        className={`flex min-h-[42px] items-center gap-2 rounded-xl border px-3 py-2 text-left text-xs font-bold ${
-                          composerLockMode === 'all'
-                            ? 'border-[#0E2640] bg-white text-[#0E2640]'
-                            : 'border-slate-200 bg-transparent text-slate-600'
-                        }`}
-                      >
-                        <Lock className="h-3.5 w-3.5 text-[#D97706]" aria-hidden="true" />
-                        <span>{tr('Funga kwa Wote Hadi Walipie', 'Lock for All Until Paid')}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setComposerLockMode('selected')}
-                        className={`flex min-h-[42px] items-center gap-2 rounded-xl border px-3 py-2 text-left text-xs font-bold ${
-                          composerLockMode === 'selected'
-                            ? 'border-[#0E2640] bg-white text-[#0E2640]'
-                            : 'border-slate-200 bg-transparent text-slate-600'
-                        }`}
-                      >
-                        <Users className="h-3.5 w-3.5 text-[#075E54]" aria-hidden="true" />
-                        <span>{tr('Funga Watumiaji Maalumu Tu', 'Lock Specific Users Only')}</span>
-                      </button>
-                    </div>
-
-                    {composerLockMode === 'selected' && (
-                      <div className="rounded-xl border border-slate-200 bg-white p-2.5">
-                        <p className="mb-1.5 text-[11px] font-bold text-slate-700">
+              {/* Lock / Paid Note Configuration inside Composer (for new files) */}
+              {!editingNoteId && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5">
+                  <label className="flex cursor-pointer items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5">
+                      <Lock className="h-4 w-4 shrink-0 text-[#D97706]" aria-hidden="true" />
+                      <div>
+                        <span className="block text-xs font-bold text-slate-900">
+                          {tr('Funga Note Hii Kwa Malipo (Paid Lock)', 'Lock This Note Behind Payment')}
+                        </span>
+                        <span className="block text-[11px] text-slate-500">
                           {tr(
-                            `Chagua Wanachama wa Kufungia (${selectedLockedUids.size} wamechaguliwa):`,
-                            `Select Members to Lock (${selectedLockedUids.size} selected):`
+                            'Watumiaji hawataweza kusoma mpaka walipie kiasi utakachoweka',
+                            'Users must pay the set fee before reading'
                           )}
-                        </p>
-                        <div className="max-h-36 space-y-1 overflow-y-auto">
-                          {composerMembers.map((m) => {
-                            const checked = selectedLockedUids.has(m.uid);
-                            return (
-                              <label
-                                key={m.uid}
-                                className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-slate-50"
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() => {
-                                    setSelectedLockedUids((prev) => {
-                                      const next = new Set(prev);
-                                      if (next.has(m.uid)) next.delete(m.uid);
-                                      else next.add(m.uid);
-                                      return next;
-                                    });
-                                  }}
-                                  className="h-4 w-4 rounded border-slate-300 text-[#075E54]"
-                                />
-                                <span className="truncate font-medium text-slate-800">
-                                  {m.displayName}
-                                </span>
-                              </label>
-                            );
-                          })}
+                        </span>
+                      </div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={composerLockEnabled}
+                      onChange={(e) => setComposerLockEnabled(e.target.checked)}
+                      className="h-5 w-5 rounded border-slate-300 text-[#075E54] focus:ring-[#075E54]"
+                    />
+                  </label>
+
+                  {composerLockEnabled && (
+                    <div className="mt-3.5 space-y-3 border-t border-slate-200 pt-3.5">
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        <button
+                          type="button"
+                          onClick={() => setComposerLockMode('all')}
+                          className={`flex min-h-[42px] items-center gap-2 rounded-xl border px-3 py-2 text-left text-xs font-bold ${
+                            composerLockMode === 'all'
+                              ? 'border-[#0E2640] bg-white text-[#0E2640]'
+                              : 'border-slate-200 bg-transparent text-slate-600'
+                          }`}
+                        >
+                          <Lock className="h-3.5 w-3.5 text-[#D97706]" aria-hidden="true" />
+                          <span>{tr('Funga kwa Wote Hadi Walipie', 'Lock for All Until Paid')}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setComposerLockMode('selected')}
+                          className={`flex min-h-[42px] items-center gap-2 rounded-xl border px-3 py-2 text-left text-xs font-bold ${
+                            composerLockMode === 'selected'
+                              ? 'border-[#0E2640] bg-white text-[#0E2640]'
+                              : 'border-slate-200 bg-transparent text-slate-600'
+                          }`}
+                        >
+                          <Users className="h-3.5 w-3.5 text-[#075E54]" aria-hidden="true" />
+                          <span>{tr('Funga Watumiaji Maalumu Tu', 'Lock Specific Users Only')}</span>
+                        </button>
+                      </div>
+
+                      {composerLockMode === 'selected' && (
+                        <div className="rounded-xl border border-slate-200 bg-white p-2.5">
+                          <p className="mb-1.5 text-[11px] font-bold text-slate-700">
+                            {tr(
+                              `Chagua Wanachama wa Kufungia (${selectedLockedUids.size} wamechaguliwa):`,
+                              `Select Members to Lock (${selectedLockedUids.size} selected):`
+                            )}
+                          </p>
+                          <div className="max-h-36 space-y-1 overflow-y-auto">
+                            {composerMembers.map((m) => {
+                              const checked = selectedLockedUids.has(m.uid);
+                              return (
+                                <label
+                                  key={m.uid}
+                                  className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-slate-50"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => {
+                                      setSelectedLockedUids((prev) => {
+                                        const next = new Set(prev);
+                                        if (next.has(m.uid)) next.delete(m.uid);
+                                        else next.add(m.uid);
+                                        return next;
+                                      });
+                                    }}
+                                    className="h-4 w-4 rounded border-slate-300 text-[#075E54]"
+                                  />
+                                  <span className="truncate font-medium text-slate-800">
+                                    {m.displayName}
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="col-span-2">
+                          <label
+                            htmlFor="composer-lock-price"
+                            className="block text-[11px] font-semibold text-slate-700"
+                          >
+                            {tr('Kiasi cha Kulipia (0 = Funga kabisa bila malipo)', 'Price Amount (0 = Strict admin lock)')}
+                          </label>
+                          <input
+                            id="composer-lock-price"
+                            type="number"
+                            min={0}
+                            value={composerLockPrice}
+                            onChange={(e) => setComposerLockPrice(e.target.value)}
+                            className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 bg-white px-3 text-sm font-bold text-slate-900 tabular-nums focus:border-[#075E54] focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label
+                            htmlFor="composer-lock-currency"
+                            className="block text-[11px] font-semibold text-slate-700"
+                          >
+                            {tr('Sarafu', 'Currency')}
+                          </label>
+                          <select
+                            id="composer-lock-currency"
+                            value={composerLockCurrency}
+                            onChange={(e) => setComposerLockCurrency(e.target.value)}
+                            className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 bg-white px-2 text-sm font-bold text-slate-900 focus:border-[#075E54] focus:outline-none"
+                          >
+                            <option value="TZS">TZS</option>
+                            <option value="KES">KES</option>
+                            <option value="USD">USD</option>
+                          </select>
                         </div>
                       </div>
-                    )}
 
-                    <div className="grid grid-cols-3 gap-2">
-                      <div className="col-span-2">
-                        <label
-                          htmlFor="composer-lock-price"
-                          className="block text-[11px] font-semibold text-slate-700"
-                        >
-                          {tr('Kiasi cha Kulipia (0 = Funga kabisa bila malipo)', 'Price Amount (0 = Strict admin lock)')}
-                        </label>
-                        <input
-                          id="composer-lock-price"
-                          type="number"
-                          min={0}
-                          value={composerLockPrice}
-                          onChange={(e) => setComposerLockPrice(e.target.value)}
-                          className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 bg-white px-3 text-sm font-bold text-slate-900 tabular-nums focus:border-[#075E54] focus:outline-none"
-                        />
-                      </div>
                       <div>
                         <label
-                          htmlFor="composer-lock-currency"
+                          htmlFor="composer-pay-msg"
                           className="block text-[11px] font-semibold text-slate-700"
                         >
-                          {tr('Sarafu', 'Currency')}
+                          {tr('Ujumbe wa Kulipia (Namba ya Malipo / Maelekezo)', 'Payment Message / Instructions')}
                         </label>
-                        <select
-                          id="composer-lock-currency"
-                          value={composerLockCurrency}
-                          onChange={(e) => setComposerLockCurrency(e.target.value)}
-                          className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 bg-white px-2 text-sm font-bold text-slate-900 focus:border-[#075E54] focus:outline-none"
-                        >
-                          <option value="TZS">TZS</option>
-                          <option value="KES">KES</option>
-                          <option value="USD">USD</option>
-                        </select>
+                        <textarea
+                          id="composer-pay-msg"
+                          rows={2}
+                          maxLength={500}
+                          value={composerPayInstructions}
+                          onChange={(e) => setComposerPayInstructions(e.target.value)}
+                          placeholder={tr(
+                            'Mfano: Lipia M-Pesa 07XX XXX XXX (Jina: Malosha) kisha tuma muamala hapa chini kufunguliwa.',
+                            'e.g. Pay via M-Pesa 07XX XXX XXX and submit reference below to unlock.'
+                          )}
+                          className="mt-1 w-full rounded-xl border border-slate-300 bg-white p-2.5 text-xs text-slate-900 focus:border-[#075E54] focus:outline-none"
+                        />
                       </div>
                     </div>
-
-                    <div>
-                      <label
-                        htmlFor="composer-pay-msg"
-                        className="block text-[11px] font-semibold text-slate-700"
-                      >
-                        {tr('Ujumbe wa Kulipia (Namba ya Malipo / Maelekezo)', 'Payment Message / Instructions')}
-                      </label>
-                      <textarea
-                        id="composer-pay-msg"
-                        rows={2}
-                        maxLength={500}
-                        value={composerPayInstructions}
-                        onChange={(e) => setComposerPayInstructions(e.target.value)}
-                        placeholder={tr(
-                          'Mfano: Lipia M-Pesa 07XX XXX XXX (Jina: Malosha) kisha tuma muamala hapa chini kufunguliwa.',
-                          'e.g. Pay via M-Pesa 07XX XXX XXX and submit reference below to unlock.'
-                        )}
-                        className="mt-1 w-full rounded-xl border border-slate-300 bg-white p-2.5 text-xs text-slate-900 focus:border-[#075E54] focus:outline-none"
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
+                  )}
+                </div>
+              )}
 
               <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                 <label className="inline-flex min-h-[40px] cursor-pointer items-center gap-2 text-xs font-semibold text-slate-700">
@@ -1502,7 +1987,7 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                     onChange={(e) => setPinNote(e.target.checked)}
                     className="h-4 w-4 rounded border-slate-300 text-[#075E54] focus:ring-[#075E54]"
                   />
-                  <span>{tr('Bandika juu kabisa (Pin)', 'Pin to top')}</span>
+                  <span>{tr('Bandika juu kabisa (Pin File)', 'Pin file to top')}</span>
                 </label>
 
                 <button
@@ -1510,11 +1995,13 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                   disabled={publishing || uploadingPdf || (rawText.trim().length < 5 && !pendingPdf)}
                   className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-[#075E54] px-5 py-2 text-xs font-bold text-white shadow-xs transition-colors hover:bg-[#064E46] disabled:opacity-50"
                 >
-                  <BookOpen className="h-4 w-4 text-[#25D366]" aria-hidden="true" />
+                  <FileText className="h-4 w-4 text-[#25D366]" aria-hidden="true" />
                   <span>
                     {publishing
-                      ? tr('Inapanga & Kuchapisha...', 'Formatting & Publishing...')
-                      : tr('Panga & Chapisha Notes', 'Format & Publish Note')}
+                      ? tr('Inahifadhi Faili...', 'Saving File...')
+                      : editingNoteId
+                        ? tr('Hifadhi Mabadiliko ya Faili', 'Save File Changes')
+                        : tr('Panga & Hifadhi Faili', 'Format & Save Study File')}
                   </span>
                 </button>
               </div>
@@ -1522,421 +2009,338 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
           </form>
         )}
 
+        {/* Unified Digital Study Files Explorer (Pinned first -> Newest on Top -> Oldest at Bottom) */}
         {loading ? (
           <div className="space-y-3 py-4">
-            <div className="h-28 animate-pulse rounded-2xl bg-white" />
-            <div className="h-24 animate-pulse rounded-2xl bg-white" />
+            <div className="h-20 animate-pulse rounded-2xl bg-white" />
+            <div className="h-20 animate-pulse rounded-2xl bg-white" />
+            <div className="h-20 animate-pulse rounded-2xl bg-white" />
           </div>
-        ) : sortedNotes.length === 0 ? (
+        ) : displayedFiles.length === 0 ? (
           <div className="mx-auto my-8 max-w-md rounded-2xl border border-slate-200 bg-white px-5 py-8 text-center">
-            <BookOpen className="mx-auto h-9 w-9 text-[#075E54]" aria-hidden="true" />
+            <FolderArchive className="mx-auto h-9 w-9 text-[#075E54]" aria-hidden="true" />
             <h3 className="mt-3 font-display text-lg font-bold text-slate-900">
               {searchQuery.trim()
-                ? tr('Hakuna notes zilizolingana na utafutaji', 'No matching notes found')
-                : tr('Bado Hakuna Notes Zilizowekwa', 'No Notes Published Yet')}
+                ? tr('Hakuna faili lililolingana na utafutaji', 'No matching study files found')
+                : activeFilter === 'archived'
+                  ? tr('Hakuna Mafaili Kwenye Kumbukumbu', 'No Archived Files')
+                  : activeFilter === 'pinned'
+                    ? tr('Hakuna Mafaili Yaliyo-Pin Bado', 'No Pinned Files Yet')
+                    : tr('Bado Hakuna Mafaili ya Notes', 'No Study Files Yet')}
             </h3>
             <p className="mt-1.5 text-xs leading-relaxed text-slate-600">
               {isAdmin
                 ? tr(
-                    'Bonyeza "Weka Notes / Pakia PDF" hapo juu ili kuchapisha notes zilizopangika au PDF kwa wanachama wako.',
-                    'Click "New Note / Upload PDF" above to publish structured notes or PDFs for members.'
+                    'Bonyeza "Weka Notes / Pakia PDF" hapo juu ili kuunda faili jipya la kusoma.',
+                    'Click "New Study File / PDF" above to create a study file.'
                   )
                 : tr(
-                    'Mmiliki wa jukwaa akiweka notes mpya utapokea notification na zitaonekana hapa kusoma kwenye simu.',
-                    'When the owner publishes new notes, you will receive a notification and can read them here.'
+                    'Mmiliki akiweka faili jipya la notes litaonekana hapa juu kabisa ili ulifungue na kusoma.',
+                    'When the owner adds a study file, it will appear at the top ready to open and read.'
                   )}
             </p>
           </div>
         ) : (
-          <div className="space-y-6">
-            {/* Section 1: Latest Active Notes */}
-            {activeNotes.length > 0 && (
-              <section aria-label={tr('Notes za Hivi Karibuni', 'Latest Notes')}>
-                <div className="mb-2.5 flex items-center justify-between">
-                  <h2 className="flex items-center gap-1.5 text-xs font-extrabold tracking-wide text-[#0E2640] uppercase">
-                    <BookOpen className="h-4 w-4 text-[#075E54]" aria-hidden="true" />
-                    <span>{tr('Notes za Hivi Karibuni', 'Latest Study Notes')}</span>
-                  </h2>
-                  <span className="text-[11px] font-semibold text-slate-500 tabular-nums">
-                    {activeNotes.length}
-                  </span>
-                </div>
+          <section aria-label={tr('Mafaili ya Notes', 'Study Files Cabinet')}>
+            <div className="mb-2.5 flex items-center justify-between">
+              <h2 className="flex items-center gap-1.5 text-xs font-extrabold tracking-wide text-[#0E2640] uppercase">
+                <FolderOpen className="h-4 w-4 text-[#075E54]" aria-hidden="true" />
+                <span>
+                  {activeFilter === 'archived'
+                    ? tr('Mafaili ya Kumbukumbu', 'Archived Study Files')
+                    : tr('Mafaili ya Notes (Mpya Juu)', 'Study Files (Newest First)')}
+                </span>
+              </h2>
+              <span className="text-[11px] font-semibold text-slate-500 tabular-nums">
+                {tr(`Mafaili ${displayedFiles.length}`, `${displayedFiles.length} file(s)`)}
+              </span>
+            </div>
 
-                <div className="space-y-3">
-                  {activeNotes.map((note) => {
-                    const readMins = Math.max(1, Math.ceil(note.wordCount / 180));
-                    const hasPdf = Boolean(note.pdfUrl || note.pdfFileName);
-                    const isUnreadItem =
-                      Boolean(readNoteIds) &&
-                      !readNoteIds?.has(note.id) &&
-                      note.authorId !== user?.uid;
-                    const lockedForViewer = isNoteLockedForViewer(note);
-                    const priceLabel = formatPriceLabel(
-                      note.lockPrice,
-                      note.lockCurrency || 'TZS'
-                    );
+            <div className="divide-y divide-slate-200 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+              {displayedFiles.map((fileNote) => {
+                const hasPdf = Boolean(fileNote.pdfUrl || fileNote.pdfFileName);
+                const hasCode = noteHasCodeBlock(fileNote);
+                const hasImg = noteHasInlineImage(fileNote);
+                const readMins = Math.max(1, Math.ceil((fileNote.wordCount || 1) / 180));
+                const isUnreadItem =
+                  Boolean(readNoteIds) &&
+                  !readNoteIds?.has(fileNote.id) &&
+                  fileNote.authorId !== user?.uid;
+                const lockedForViewer = isNoteLockedForViewer(fileNote);
+                const priceLabel = formatPriceLabel(
+                  fileNote.lockPrice,
+                  fileNote.lockCurrency || 'TZS'
+                );
+                const displayFileName = (fileNote.pdfFileName || fileNote.fileName).replace(
+                  /\.txt$/i,
+                  '.pdf'
+                );
 
-                    return (
-                      <article
-                        key={note.id}
-                        className={`rounded-2xl border bg-white p-4 shadow-xs transition-colors hover:border-[#075E54]/50 ${
-                          isUnreadItem
-                            ? 'border-emerald-300 ring-1 ring-emerald-200/70'
-                            : 'border-slate-200'
+                return (
+                  <div
+                    key={fileNote.id}
+                    className={`flex flex-col justify-between gap-3 p-3.5 transition-colors hover:bg-slate-50/80 sm:flex-row sm:items-center sm:px-4 ${
+                      isUnreadItem ? 'bg-emerald-50/35' : ''
+                    } ${fileNote.isPinned ? 'border-l-4 border-l-amber-500' : ''}`}
+                  >
+                    {/* Clickable File Identity & Info */}
+                    <button
+                      type="button"
+                      onClick={() => openNoteReader(fileNote)}
+                      className="group flex min-w-0 flex-1 items-start gap-3 text-left"
+                    >
+                      <div
+                        className={`relative flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl border ${
+                          lockedForViewer
+                            ? 'border-amber-200 bg-amber-50 text-amber-800'
+                            : hasPdf
+                              ? 'border-red-200 bg-red-50 text-red-700'
+                              : hasCode
+                                ? 'border-slate-700 bg-slate-900 text-[#25D366]'
+                                : 'border-emerald-200 bg-emerald-50 text-[#075E54]'
                         }`}
                       >
-                        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-                          <div className="flex flex-wrap items-center gap-2">
-                            {isUnreadItem && (
-                              <span className="font-extrabold text-[#075E54]">
-                                {tr('MPYA', 'NEW')}
-                              </span>
-                            )}
-                            {isUnreadItem && <span aria-hidden="true">·</span>}
-                            {note.isLocked && (
-                              <>
-                                <span
-                                  className={`inline-flex items-center gap-1 font-bold ${
-                                    lockedForViewer ? 'text-amber-800' : 'text-[#075E54]'
-                                  }`}
-                                >
-                                  {lockedForViewer ? (
-                                    <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-                                  ) : (
-                                    <LockOpen className="h-3.5 w-3.5" aria-hidden="true" />
-                                  )}
-                                  <span>
-                                    {lockedForViewer
-                                      ? priceLabel || tr('Imefungwa', 'Locked')
-                                      : tr('Imefunguliwa', 'Unlocked')}
-                                  </span>
-                                </span>
-                                <span aria-hidden="true">·</span>
-                              </>
-                            )}
-                            {note.isPinned && (
-                              <>
-                                <span className="inline-flex items-center gap-1 font-bold text-[#0E2640]">
-                                  <Pin className="h-3 w-3" aria-hidden="true" />
-                                  <span>{tr('Maalum', 'Pinned')}</span>
-                                </span>
-                                <span aria-hidden="true">·</span>
-                              </>
-                            )}
-                            {hasPdf && (
-                              <>
-                                <span className="font-bold text-red-700">
-                                  PDF{note.pdfSize ? ` ${formatBytes(note.pdfSize)}` : ''}
-                                </span>
-                                <span aria-hidden="true">·</span>
-                              </>
-                            )}
-                            <span>
-                              {note.noteType === 'pdf'
-                                ? tr('Faili la Kusoma', 'PDF Reader')
-                                : tr(`Dakika ${readMins}`, `${readMins} min read`)}
+                        {lockedForViewer ? (
+                          <Lock className="h-5 w-5" aria-hidden="true" />
+                        ) : hasCode && !hasPdf ? (
+                          <FileCode2 className="h-5 w-5" aria-hidden="true" />
+                        ) : (
+                          <FileText className="h-5 w-5" aria-hidden="true" />
+                        )}
+                        <span className="mt-0.5 text-[8px] font-black tracking-wider uppercase">
+                          {lockedForViewer
+                            ? 'LOCK'
+                            : hasPdf
+                              ? 'PDF'
+                              : hasCode
+                                ? 'CODE'
+                                : 'NOTE'}
+                        </span>
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                          {isUnreadItem && (
+                            <span className="rounded bg-[#075E54] px-1.5 py-0.5 text-[10px] font-extrabold text-white">
+                              {tr('MPYA', 'NEW')}
                             </span>
-                            <span aria-hidden="true">·</span>
-                            <span>{formatTime(note.createdAt)}</span>
-                          </div>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => openNoteReader(note)}
-                          className="mt-2 block text-left font-display text-lg font-bold leading-snug text-[#0E2640] hover:text-[#075E54] [text-wrap:balance]"
-                        >
-                          {note.title}
-                        </button>
-
-                        {note.subtitle && (
-                          <p className="mt-1 text-xs font-semibold text-slate-600 sm:text-sm">
-                            {note.subtitle}
-                          </p>
-                        )}
-
-                        {note.summary && (
-                          <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-slate-600 sm:text-sm">
-                            {note.summary}
-                          </p>
-                        )}
-
-                        <div className="mt-3.5 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => openNoteReader(note)}
-                              className={`inline-flex min-h-[42px] items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold text-white ${
+                          )}
+                          {fileNote.isPinned && (
+                            <span className="inline-flex items-center gap-0.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-900">
+                              <Pin className="h-2.5 w-2.5" aria-hidden="true" />
+                              <span>{tr('Ime-Pin', 'Pinned')}</span>
+                            </span>
+                          )}
+                          {fileNote.isLocked && (
+                            <span
+                              className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-bold ${
                                 lockedForViewer
-                                  ? 'bg-[#0E2640] hover:bg-[#163A5F]'
-                                  : 'bg-[#075E54] hover:bg-[#064E46]'
+                                  ? 'bg-amber-50 text-amber-800'
+                                  : 'bg-emerald-50 text-[#075E54]'
                               }`}
                             >
                               {lockedForViewer ? (
-                                <Lock className="h-3.5 w-3.5 text-[#25D366]" aria-hidden="true" />
+                                <Lock className="h-2.5 w-2.5" aria-hidden="true" />
                               ) : (
-                                <BookOpen className="h-3.5 w-3.5 text-[#25D366]" aria-hidden="true" />
+                                <LockOpen className="h-2.5 w-2.5" aria-hidden="true" />
                               )}
                               <span>
                                 {lockedForViewer
-                                  ? tr(
-                                      `Fungua Note (${priceLabel || 'Malipo'})`,
-                                      `Unlock (${priceLabel || 'Paid'})`
-                                    )
-                                  : hasPdf
-                                    ? tr('Fungua PDF Usome', 'Open & Read PDF')
-                                    : tr('Fungua Usome', 'Read Note')}
+                                  ? priceLabel || tr('Imefungwa', 'Locked')
+                                  : tr('Imefunguliwa', 'Unlocked')}
                               </span>
-                            </button>
-
-                            {!lockedForViewer && (
-                              <button
-                                type="button"
-                                disabled={downloadingId === note.id}
-                                onClick={() => void handleDownloadPdf(note)}
-                                className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-60"
-                              >
-                                {downloadingId === note.id ? (
-                                  <Loader2
-                                    className="h-3.5 w-3.5 animate-spin text-[#075E54]"
-                                    aria-hidden="true"
-                                  />
-                                ) : (
-                                  <Download
-                                    className="h-3.5 w-3.5 text-[#075E54]"
-                                    aria-hidden="true"
-                                  />
-                                )}
-                                <span>{tr('Pakua PDF', 'Save PDF')}</span>
-                              </button>
-                            )}
-                          </div>
-
-                          {isAdmin && (
-                            <div className="flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => setLockModalNote(note)}
-                                title={tr('Funga / Dhibiti Malipo', 'Lock / Manage Access')}
-                                className={`flex h-10 w-10 items-center justify-center rounded-lg border ${
-                                  note.isLocked
-                                    ? 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
-                                    : 'border-slate-200 text-slate-600 hover:bg-slate-100'
-                                }`}
-                              >
-                                {note.isLocked ? (
-                                  <Lock className="h-4 w-4" aria-hidden="true" />
-                                ) : (
-                                  <LockOpen className="h-4 w-4" aria-hidden="true" />
-                                )}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => void handleTogglePin(note)}
-                                title={
-                                  note.isPinned ? tr('Ondoa bandiko', 'Unpin') : tr('Bandika juu', 'Pin')
-                                }
-                                className="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100"
-                              >
-                                <Pin
-                                  className={`h-4 w-4 ${note.isPinned ? 'text-amber-600' : ''}`}
-                                  aria-hidden="true"
-                                />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => void handleToggleArchive(note)}
-                                title={tr('Hifadhi Kwenye Mafaili', 'Archive to Files')}
-                                className="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100"
-                              >
-                                <Archive className="h-4 w-4" aria-hidden="true" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteNote(note)}
-                                title={tr('Futa note', 'Delete note')}
-                                className="flex h-10 w-10 items-center justify-center rounded-lg border border-red-200 text-red-600 hover:bg-red-50"
-                              >
-                                <Trash2 className="h-4 w-4" aria-hidden="true" />
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </article>
-                    );
-                  })}
-                </div>
-              </section>
-            )}
-
-            {/* Section 2: Previous Notes Stored as Openable & Downloadable PDF Files */}
-            {archiveNotes.length > 0 && (
-              <section aria-label={tr('Mafaili ya Notes za Nyuma', 'Previous Notes Archive Files')}>
-                <div className="mb-2.5 flex items-center justify-between">
-                  <h2 className="flex items-center gap-1.5 text-xs font-extrabold tracking-wide text-[#0E2640] uppercase">
-                    <FolderArchive className="h-4 w-4 text-[#D97706]" aria-hidden="true" />
-                    <span>
-                      {tr('Mafaili ya Notes za Nyuma (PDF)', 'Previous Notes Files (PDF)')}
-                    </span>
-                  </h2>
-                  <span className="text-[11px] font-semibold text-slate-500 tabular-nums">
-                    {archiveNotes.length}
-                  </span>
-                </div>
-
-                <div className="divide-y divide-slate-200 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
-                  {archiveNotes.map((fileNote) => {
-                    const hasPdf = Boolean(fileNote.pdfUrl || fileNote.pdfFileName);
-                    const lockedForViewer = isNoteLockedForViewer(fileNote);
-                    const priceLabel = formatPriceLabel(
-                      fileNote.lockPrice,
-                      fileNote.lockCurrency || 'TZS'
-                    );
-                    return (
-                      <div
-                        key={fileNote.id}
-                        className="flex flex-col justify-between gap-3 p-3.5 sm:flex-row sm:items-center sm:px-4"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => openNoteReader(fileNote)}
-                          className="group flex min-w-0 flex-1 items-start gap-3 text-left"
-                        >
-                          <div
-                            className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${
-                              lockedForViewer
-                                ? 'bg-amber-100 text-amber-800'
-                                : hasPdf
-                                  ? 'bg-red-100 text-red-700'
-                                  : 'bg-emerald-100 text-[#075E54]'
-                            }`}
-                          >
-                            {lockedForViewer ? (
-                              <Lock className="h-5 w-5" aria-hidden="true" />
-                            ) : (
-                              <FileText className="h-5 w-5" aria-hidden="true" />
-                            )}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-bold text-slate-900 group-hover:text-[#075E54]">
-                              {fileNote.title}
-                            </p>
-                            {fileNote.subtitle && (
-                              <p className="truncate text-xs text-slate-600">{fileNote.subtitle}</p>
-                            )}
-                            <p className="mt-0.5 truncate text-[11px] text-slate-500">
-                              {lockedForViewer && `${priceLabel || tr('Imefungwa', 'Locked')} · `}
-                              {(fileNote.pdfFileName || fileNote.fileName).replace(/\.txt$/i, '.pdf')}{' '}
-                              · {formatTime(fileNote.createdAt)}
-                            </p>
-                          </div>
-                        </button>
-
-                        <div className="flex shrink-0 items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => openNoteReader(fileNote)}
-                            className="inline-flex min-h-[42px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-[#0E2640] px-3.5 py-1.5 text-xs font-bold text-white hover:bg-[#163A5F] sm:flex-none"
-                          >
-                            {lockedForViewer ? (
-                              <Lock className="h-3.5 w-3.5 text-[#25D366]" aria-hidden="true" />
-                            ) : (
-                              <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
-                            )}
-                            <span>
-                              {lockedForViewer
-                                ? tr(`Fungua (${priceLabel || 'Lipia'})`, 'Unlock')
-                                : tr('Soma PDF', 'Open & Read')}
                             </span>
-                          </button>
-                          {!lockedForViewer && (
-                            <button
-                              type="button"
-                              disabled={downloadingId === fileNote.id}
-                              onClick={() => void handleDownloadPdf(fileNote)}
-                              aria-label={tr(
-                                `Pakua PDF ${fileNote.title}`,
-                                `Download PDF ${fileNote.title}`
-                              )}
-                              className="inline-flex min-h-[42px] items-center justify-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-60"
-                            >
-                              {downloadingId === fileNote.id ? (
-                                <Loader2
-                                  className="h-3.5 w-3.5 animate-spin text-[#075E54]"
-                                  aria-hidden="true"
-                                />
-                              ) : (
-                                <Download
-                                  className="h-3.5 w-3.5 text-[#075E54]"
-                                  aria-hidden="true"
-                                />
-                              )}
-                              <span className="hidden sm:inline">PDF</span>
-                            </button>
                           )}
-                          {isAdmin && (
+                          <span className="truncate font-mono text-[11px] font-semibold text-slate-500">
+                            {displayFileName}
+                          </span>
+                        </div>
+
+                        <p className="mt-1 truncate font-display text-[15px] font-bold text-[#0E2640] group-hover:text-[#075E54] sm:text-base">
+                          {fileNote.title}
+                        </p>
+
+                        {fileNote.subtitle && (
+                          <p className="mt-0.5 truncate text-xs font-medium text-slate-600">
+                            {fileNote.subtitle}
+                          </p>
+                        )}
+
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                          {fileNote.noteType !== 'pdf' && (
+                            <span className="tabular-nums">
+                              {tr(
+                                `Maneno ${fileNote.wordCount.toLocaleString()} · Dakika ${readMins}`,
+                                `${fileNote.wordCount.toLocaleString()} words · ${readMins} min`
+                              )}
+                            </span>
+                          )}
+                          {hasCode && (
                             <>
-                              <button
-                                type="button"
-                                onClick={() => setLockModalNote(fileNote)}
-                                aria-label={tr('Dhibiti kufuli', 'Manage lock')}
-                                className="flex h-10 w-10 items-center justify-center rounded-xl border border-amber-200 text-amber-800 hover:bg-amber-50"
-                              >
-                                <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteNote(fileNote)}
-                                aria-label={tr('Futa faili', 'Delete file')}
-                                className="flex h-10 w-10 items-center justify-center rounded-xl border border-red-200 text-red-600 hover:bg-red-50"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                              </button>
+                              <span aria-hidden="true">·</span>
+                              <span className="inline-flex items-center gap-0.5 font-semibold text-slate-700">
+                                <Code2 className="h-3 w-3 text-[#075E54]" aria-hidden="true" />
+                                <span>{tr('Code/Amri', 'Code/Cmd')}</span>
+                              </span>
                             </>
                           )}
+                          {hasImg && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="inline-flex items-center gap-0.5 font-semibold text-slate-700">
+                                <ImageIcon className="h-3 w-3 text-[#075E54]" aria-hidden="true" />
+                                <span>{tr('Picha', 'Photos')}</span>
+                              </span>
+                            </>
+                          )}
+                          {hasPdf && fileNote.pdfSize ? (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="font-semibold text-red-700">
+                                {formatBytes(fileNote.pdfSize)}
+                              </span>
+                            </>
+                          ) : null}
+                          <span aria-hidden="true">·</span>
+                          <span>{formatTime(fileNote.createdAt)}</span>
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
-              </section>
-            )}
-          </div>
+                    </button>
+
+                    {/* File Actions */}
+                    <div className="flex flex-wrap items-center justify-end gap-1.5 sm:shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => openNoteReader(fileNote)}
+                        className={`inline-flex min-h-[38px] items-center justify-center gap-1.5 rounded-xl px-3.5 py-1.5 text-xs font-bold text-white ${
+                          lockedForViewer
+                            ? 'bg-[#0E2640] hover:bg-[#163A5F]'
+                            : 'bg-[#075E54] hover:bg-[#064E46]'
+                        }`}
+                      >
+                        {lockedForViewer ? (
+                          <Lock className="h-3.5 w-3.5 text-[#25D366]" aria-hidden="true" />
+                        ) : (
+                          <FolderOpen className="h-3.5 w-3.5 text-[#25D366]" aria-hidden="true" />
+                        )}
+                        <span>
+                          {lockedForViewer
+                            ? tr(`Fungua (${priceLabel || 'Lipia'})`, 'Unlock')
+                            : tr('Fungua File', 'Open File')}
+                        </span>
+                      </button>
+
+                      {!lockedForViewer && (
+                        <button
+                          type="button"
+                          disabled={downloadingId === fileNote.id}
+                          onClick={() => void handleDownloadPdf(fileNote)}
+                          aria-label={tr(
+                            `Pakua PDF ${fileNote.title}`,
+                            `Download PDF ${fileNote.title}`
+                          )}
+                          className="inline-flex min-h-[38px] items-center justify-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-60"
+                        >
+                          {downloadingId === fileNote.id ? (
+                            <Loader2
+                              className="h-3.5 w-3.5 animate-spin text-[#075E54]"
+                              aria-hidden="true"
+                            />
+                          ) : (
+                            <Download
+                              className="h-3.5 w-3.5 text-[#075E54]"
+                              aria-hidden="true"
+                            />
+                          )}
+                          <span>PDF</span>
+                        </button>
+                      )}
+
+                      {isAdmin && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => void handleTogglePin(fileNote)}
+                            title={
+                              fileNote.isPinned
+                                ? tr('Ondoa Pin', 'Unpin file')
+                                : tr('Bandika juu (Pin)', 'Pin file to top')
+                            }
+                            className={`flex h-9 w-9 items-center justify-center rounded-xl border ${
+                              fileNote.isPinned
+                                ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                : 'border-slate-200 text-slate-600 hover:bg-slate-100'
+                            }`}
+                          >
+                            <Pin className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={loadingEditNoteId === fileNote.id}
+                            onClick={() => void startEditNote(fileNote)}
+                            title={tr('Hariri Faili', 'Edit File')}
+                            className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-[#0E2640] hover:bg-slate-100"
+                          >
+                            {loadingEditNoteId === fileNote.id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                            ) : (
+                              <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
+                            )}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setLockModalNote(fileNote)}
+                            title={tr('Dhibiti Kufuli / Malipo', 'Manage Lock / Payment')}
+                            className={`flex h-9 w-9 items-center justify-center rounded-xl border ${
+                              fileNote.isLocked
+                                ? 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                                : 'border-slate-200 text-slate-600 hover:bg-slate-100'
+                            }`}
+                          >
+                            {fileNote.isLocked ? (
+                              <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+                            ) : (
+                              <LockOpen className="h-3.5 w-3.5" aria-hidden="true" />
+                            )}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => void handleToggleArchive(fileNote)}
+                            title={
+                              fileNote.isArchived
+                                ? tr('Rejesha Kwenye Mafaili', 'Restore to Files')
+                                : tr('Hifadhi Kwenye Kumbukumbu', 'Archive File')
+                            }
+                            className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100"
+                          >
+                            {fileNote.isArchived ? (
+                              <ArchiveRestore className="h-3.5 w-3.5 text-[#075E54]" aria-hidden="true" />
+                            ) : (
+                              <Archive className="h-3.5 w-3.5" aria-hidden="true" />
+                            )}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteNote(fileNote)}
+                            title={tr('Futa Faili', 'Delete file')}
+                            className="flex h-9 w-9 items-center justify-center rounded-xl border border-red-200 text-red-600 hover:bg-red-50"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
         )}
       </div>
-
-      <NoteLockManageModal
-        note={liveLockModalNote}
-        onClose={() => setLockModalNote(null)}
-        onToast={onToast}
-      />
-
-      <InlineMediaInsertModal
-        isOpen={inlineMediaPicker !== null}
-        onClose={() => setInlineMediaPicker(null)}
-        onToast={onToast}
-        onInsert={(media: InsertedInlineMedia) => {
-          const picker = inlineMediaPicker ?? {
-            atIndex: noteBodyTextareaRef.current?.selectionStart ?? rawText.length,
-            replaceAt: false,
-          };
-          const { nextText, nextCursor } = computeTextAfterInlineMediaInsert(
-            rawText,
-            picker.atIndex,
-            picker.replaceAt,
-            media
-          );
-          setRawText(nextText);
-          setInlineMediaPicker(null);
-          setShowPreview(false);
-          window.requestAnimationFrame(() => {
-            const el = noteBodyTextareaRef.current;
-            if (!el) return;
-            el.focus();
-            el.setSelectionRange(nextCursor, nextCursor);
-          });
-        }}
-      />
     </div>
   );
 };

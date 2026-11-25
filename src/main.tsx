@@ -3,6 +3,21 @@ import { registerSW } from 'virtual:pwa-register';
 import App from './App.tsx';
 import './index.css';
 
+if (typeof window !== 'undefined') {
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason = event.reason;
+    const message =
+      reason instanceof Error
+        ? reason.message
+        : typeof reason === 'string'
+          ? reason
+          : String((reason as { message?: unknown } | null)?.message || '');
+    if (message.includes('Pending promise was never set')) {
+      event.preventDefault();
+    }
+  });
+}
+
 if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
   registerSW({
     immediate: true,

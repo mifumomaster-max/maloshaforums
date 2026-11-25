@@ -710,7 +710,7 @@ export interface Report {
   createdAt: Timestamp | null;
 }
 
-export type ChatAttachmentType = 'none' | 'image' | 'document';
+export type ChatAttachmentType = 'none' | 'image' | 'document' | 'audio';
 
 export interface ChatMessage {
   id: string;
@@ -723,12 +723,35 @@ export interface ChatMessage {
   attachmentName: string;
   attachmentSize: number;
   attachmentMime: string;
+  audioDurationSec?: number;
   replyToId: string;
   replyToSenderName: string;
   replyToPreview: string;
+  reactions?: Record<string, string[]>;
+  isEdited?: boolean;
+  forwardedFromName?: string;
   isDeleted: boolean;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
+}
+
+export interface MchartGroupSettings {
+  groupName: string;
+  groupPhotoUrl: string;
+  description: string;
+  isLocked: boolean;
+  disappearAfterSeconds: number;
+  kickedUids: string[];
+  inviteCode: string;
+  updatedBy: string;
+  updatedAt: Timestamp | null;
+}
+
+export interface MchartGroupReadCursor {
+  uid: string;
+  displayName: string;
+  photoURL: string;
+  lastReadAt: Timestamp | null;
 }
 
 export type NoteLockTargetMode = 'all' | 'selected';
@@ -859,9 +882,13 @@ export interface DirectChatMessage {
   attachmentName: string;
   attachmentSize: number;
   attachmentMime: string;
+  audioDurationSec?: number;
   replyToId: string;
   replyToSenderName: string;
   replyToPreview: string;
+  reactions?: Record<string, string[]>;
+  isEdited?: boolean;
+  forwardedFromName?: string;
   isDeleted: boolean;
   viewOnce?: boolean;
   viewOnceConsumed?: boolean;

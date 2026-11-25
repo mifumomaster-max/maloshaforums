@@ -48,6 +48,7 @@ interface InlineMediaInsertModalProps {
   onClose: () => void;
   onInsert: (media: InsertedInlineMedia) => void;
   onToast?: (message: string, kind?: 'success' | 'error') => void;
+  inline?: boolean;
 }
 
 export const InlineMediaInsertModal: React.FC<InlineMediaInsertModalProps> = ({
@@ -55,6 +56,7 @@ export const InlineMediaInsertModal: React.FC<InlineMediaInsertModalProps> = ({
   onClose,
   onInsert,
   onToast,
+  inline = false,
 }) => {
   const { tr } = useLanguage();
   const [caption, setCaption] = useState('');
@@ -152,17 +154,8 @@ export const InlineMediaInsertModal: React.FC<InlineMediaInsertModalProps> = ({
     }
   };
 
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={tr('Ambatanisha Picha au Video', 'Insert Photo or Video')}
-      className="fixed inset-0 z-[70] flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-[1px] sm:items-center sm:p-4"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) resetAndClose();
-      }}
-    >
-      <div className="w-full max-w-md overflow-hidden rounded-t-2xl border border-slate-200 bg-white shadow-2xl sm:rounded-2xl">
+  const cardNode = (
+      <div className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="flex items-center justify-between bg-[#0E2640] px-4 py-3 text-white">
           <div className="flex items-center gap-2">
             <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-400 text-[#0E2640]">
@@ -308,6 +301,27 @@ export const InlineMediaInsertModal: React.FC<InlineMediaInsertModalProps> = ({
           </div>
         </div>
       </div>
+  );
+
+  if (inline) {
+    return (
+      <div className="flex h-full min-h-0 w-full flex-col items-center justify-center overflow-y-auto bg-[#F4F7FA] p-3 sm:p-5">
+        {cardNode}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={tr('Ambatanisha Picha au Video', 'Insert Photo or Video')}
+      className="fixed inset-0 z-[70] flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-[1px] sm:items-center sm:p-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) resetAndClose();
+      }}
+    >
+      {cardNode}
     </div>
   );
 };

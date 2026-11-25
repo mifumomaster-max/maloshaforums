@@ -1,5 +1,6 @@
 import { Timestamp } from 'firebase/firestore';
 import { Topic } from '../types';
+import { buildMakalaSocialPayload, fetchShareImageFile } from './makalaSocialShare';
 
 export function formatRelativeSwahili(ts: Timestamp | null | undefined): string {
   if (!ts) return 'Sasa hivi';
@@ -67,31 +68,52 @@ export async function shareTopic(
   onResult: (message: string) => void,
   lang: 'sw' | 'en' = 'sw'
 ): Promise<void> {
-  const url = new URL(`${window.location.origin}${window.location.pathname}`);
-  url.searchParams.set('mada', topic.id);
-  const shareUrl = url.toString();
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const payload = buildMakalaSocialPayload(topic, origin, lang);
 
-  const safeTitle =
-    topic.title.trim() ||
-    (lang === 'en' ? 'Photo post on Malosha Forums' : 'Chapisho la picha kwenye Malosha Forums');
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(payload.fullCaption).catch(() => {});
+  }
 
   if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
     try {
+      if (payload.hasArticleImage) {
+        const imgFile = await fetchShareImageFile(payload.imageUrl, payload.title);
+        if (
+          imgFile &&
+          typeof navigator.canShare === 'function' &&
+          navigator.canShare({ files: [imgFile] })
+        ) {
+          await navigator.share({
+            files: [imgFile],
+            title: payload.title,
+            text: payload.fullCaption,
+            url: payload.shareUrl,
+          });
+          onResult(lang === 'en' ? 'Shared with photo!' : 'Umeshiriki pamoja na picha!');
+          return;
+        }
+      }
+
       await navigator.share({
-        title: safeTitle,
-        text: `${safeTitle} — Malosha Forums`,
-        url: shareUrl,
+        title: payload.title,
+        text: payload.fullCaption,
+        url: payload.shareUrl,
       });
-      onResult(lang === 'en' ? 'Shared successfully!' : 'Umeshiriki tangazo hili!');
+      onResult(lang === 'en' ? 'Shared successfully!' : 'Umeshiriki chapisho hili!');
       return;
-    } catch {
-      // User dismissed native share or browser blocked; fall through to clipboard
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
     }
   }
 
   try {
-    await navigator.clipboard.writeText(`${safeTitle}\n${shareUrl}`);
-    onResult(lang === 'en' ? 'Share link copied!' : 'Kiungo cha kushiriki kimenakiliwa!');
+    await navigator.clipboard.writeText(payload.fullCaption);
+    onResult(
+      lang === 'en'
+        ? 'Complete post & link copied!'
+        : 'Chapisho kamili na kiungo vimenakiliwa!'
+    );
   } catch {
     onResult(
       lang === 'en'

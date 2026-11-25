@@ -1,9 +1,23 @@
 import { jsPDF } from 'jspdf';
-import { downloadChatAttachmentFile } from '../services/cloudinaryService';
+import {
+  downloadChatAttachmentFile,
+  optimizeCloudinaryPhotoUrl,
+} from '../services/cloudinaryService';
 import { MchartNote } from '../types';
 
-function normalizePdfText(input: string): string {
+function stripInlineMarkupForPdf(input: string): string {
   return input
+    .replace(/\[(?:color|bg)=#[0-9a-fA-F]{3,6}\]/gi, '')
+    .replace(/\[\/(?:color|bg|u)\]/gi, '')
+    .replace(/\[u\]/gi, '')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi, '$1 ($2)')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1');
+}
+
+function normalizePdfText(input: string): string {
+  return stripInlineMarkupForPdf(input)
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u201C\u201D]/g, '"')
     .replace(/[\u2013\u2014]/g, '-')
@@ -21,11 +35,110 @@ function normalizeCodeLineForPdf(input: string): string {
     .replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}]/gu, '');
 }
 
+interface LoadedPdfImage {
+  dataUrl: string;
+  width: number;
+  height: number;
+}
+
+async function blobOrUrlToJpegDataUrl(url: string): Promise<LoadedPdfImage | null> {
+  const candidateUrls = Array.from(
+    new Set([optimizeCloudinaryPhotoUrl(url), url].filter((u) => Boolean(u && u.startsWith('http'))))
+  );
+
+  for (const targetUrl of candidateUrls) {
+    try {
+      const response = await fetch(targetUrl, { mode: 'cors' });
+      if (response.ok) {
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        try {
+          const loaded = await loadHtmlImage(objectUrl, false);
+          if (loaded) return loaded;
+        } finally {
+          URL.revokeObjectURL(objectUrl);
+        }
+      }
+    } catch {
+      // Fallback to direct crossOrigin Image below
+    }
+
+    try {
+      const loaded = await loadHtmlImage(targetUrl, true);
+      if (loaded) return loaded;
+    } catch {
+      // Try next URL candidate
+    }
+  }
+  return null;
+}
+
+function loadHtmlImage(src: string, useCors: boolean): Promise<LoadedPdfImage | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    if (useCors) {
+      img.crossOrigin = 'anonymous';
+    }
+    img.referrerPolicy = 'no-referrer';
+    img.onload = () => {
+      try {
+        const natW = img.naturalWidth || img.width;
+        const natH = img.naturalHeight || img.height;
+        if (!natW || !natH) {
+          resolve(null);
+          return;
+        }
+        // Cap pixel dimensions for crisp quality & reasonable PDF size
+        const maxPx = 1400;
+        const scale = Math.min(1, maxPx / Math.max(natW, natH));
+        const w = Math.max(1, Math.round(natW * scale));
+        const h = Math.max(1, Math.round(natH * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(null);
+          return;
+        }
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+        resolve({ dataUrl, width: w, height: h });
+      } catch {
+        resolve(null);
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+
 export async function downloadUploadedPdfFile(
   pdfUrl: string,
   fileName = 'malosha-notes.pdf'
 ): Promise<void> {
   await downloadChatAttachmentFile(pdfUrl, fileName, 'application/pdf');
+}
+
+export function downloadNoteAsTextFile(note: MchartNote): void {
+  const header = note.subtitle ? `# ${note.title}\n## ${note.subtitle}` : `# ${note.title}`;
+  const cleanBody = note.body
+    .replace(/\[(?:color|bg)=#[0-9a-fA-F]{3,6}\]/gi, '')
+    .replace(/\[\/(?:color|bg|u)\]/gi, '')
+    .replace(/\[u\]/gi, '');
+  const content = `${header}\n\n${cleanBody}\n`;
+  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const baseName = (note.fileName || 'malosha-note').replace(/\.[^.]+$/, '');
+  a.href = url;
+  a.download = `${baseName}.md`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export async function downloadNoteAsPdf(note: MchartNote): Promise<void> {
@@ -35,6 +148,25 @@ export async function downloadNoteAsPdf(note: MchartNote): Promise<void> {
       note.pdfFileName || note.fileName || 'malosha-notes.pdf'
     );
     return;
+  }
+
+  // Preload all embedded images concurrently before building the PDF
+  const rawLines = note.body.split('\n');
+  const imageUrls = Array.from(
+    new Set(
+      rawLines
+        .map((line) => line.trim().match(/^!\[[^\]]*\]\((https:\/\/[^\s)]+)\)$/i)?.[1])
+        .filter((u): u is string => Boolean(u))
+    )
+  );
+  const imageCache = new Map<string, LoadedPdfImage | null>();
+  if (imageUrls.length > 0) {
+    await Promise.all(
+      imageUrls.map(async (u) => {
+        const loaded = await blobOrUrlToJpegDataUrl(u);
+        imageCache.set(u, loaded);
+      })
+    );
   }
 
   const doc = new jsPDF({
@@ -177,11 +309,10 @@ export async function downloadNoteAsPdf(note: MchartNote): Promise<void> {
   doc.text(metaText, centerX, y + 1, { align: 'center' });
   y += 11;
 
-  // Render structured body lines including fenced code blocks
-  const lines = note.body.split('\n');
+  // Render structured body lines including fenced code/command blocks, images, quotes & dividers
   let i = 0;
-  while (i < lines.length) {
-    const rawLine = lines[i];
+  while (i < rawLines.length) {
+    const rawLine = rawLines[i];
     const trimmed = rawLine.trim();
 
     if (!trimmed) {
@@ -190,17 +321,21 @@ export async function downloadNoteAsPdf(note: MchartNote): Promise<void> {
       continue;
     }
 
-    // Fenced code block
-    const fenceMatch = trimmed.match(/^```([a-zA-Z0-9_+-]*)/);
+    // Fenced code or command block
+    const fenceMatch = trimmed.match(/^(?:```|~~~)([a-zA-Z0-9_+-]*)/);
     if (fenceMatch) {
-      const codeLang = (fenceMatch[1] || 'code').toUpperCase();
+      const codeLangRaw = (fenceMatch[1] || 'code').toLowerCase();
+      const isCmdBlock = ['bash', 'sh', 'shell', 'zsh', 'terminal', 'cmd'].includes(codeLangRaw);
+      const codeHeaderLabel = isCmdBlock
+        ? `AMRI / TERMINAL  ·  ${codeLangRaw.toUpperCase()}`
+        : `CODE  ·  ${codeLangRaw.toUpperCase()}`;
       const codeLines: string[] = [];
       i++;
-      while (i < lines.length && !lines[i].trim().startsWith('```')) {
-        codeLines.push(lines[i]);
+      while (i < rawLines.length && !rawLines[i].trim().startsWith('```') && !rawLines[i].trim().startsWith('~~~')) {
+        codeLines.push(rawLines[i]);
         i++;
       }
-      if (i < lines.length) i++;
+      if (i < rawLines.length) i++;
 
       doc.setFont('courier', 'normal');
       doc.setFontSize(9.2);
@@ -217,13 +352,12 @@ export async function downloadNoteAsPdf(note: MchartNote): Promise<void> {
 
       if (wrappedCodeLines.length > 0) {
         ensureSpace(16);
-        // Header strip for code block
         doc.setFillColor(15, 23, 42);
         doc.rect(marginX, y, maxContentWidth, 6.5, 'F');
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(8);
-        doc.setTextColor(148, 163, 184);
-        doc.text(`CODE · ${codeLang}`, marginX + 3.5, y + 4.4);
+        doc.setTextColor(isCmdBlock ? 74 : 148, isCmdBlock ? 222 : 163, isCmdBlock ? 128 : 184);
+        doc.text(codeHeaderLabel, marginX + 3.5, y + 4.4);
         y += 6.5;
 
         doc.setFont('courier', 'normal');
@@ -246,15 +380,67 @@ export async function downloadNoteAsPdf(note: MchartNote): Promise<void> {
       continue;
     }
 
-    // Standalone inline image or video media token
+    // Standalone inline image (embedded visually as actual image!) or video link
     const imgTokenMatch = trimmed.match(/^!\[([^\]]*)\]\((https:\/\/[^\s)]+)\)$/i);
+    if (imgTokenMatch) {
+      const cap = normalizePdfText(imgTokenMatch[1] || '');
+      const imgUrl = imgTokenMatch[2].trim();
+      const loadedImg = imageCache.get(imgUrl) || null;
+      const showCap = Boolean(cap && !/^(picha|image|photo|picha ya note)$/i.test(cap));
+
+      if (loadedImg) {
+        const maxImgWidthMm = maxContentWidth - 8;
+        const maxImgHeightMm = 118;
+        const ratio = Math.min(maxImgWidthMm / loadedImg.width, maxImgHeightMm / loadedImg.height);
+        const drawW = Math.max(24, loadedImg.width * ratio);
+        const drawH = Math.max(18, loadedImg.height * ratio);
+        const capLines = showCap
+          ? (doc.splitTextToSize(cap, maxContentWidth - 8) as string[])
+          : [];
+        const totalBlockH = drawH + (capLines.length > 0 ? capLines.length * 4.8 + 4 : 2);
+
+        ensureSpace(totalBlockH + 4);
+        const imgX = marginX + (maxContentWidth - drawW) / 2;
+        doc.setDrawColor(203, 213, 225);
+        doc.setLineWidth(0.3);
+        doc.rect(imgX - 0.8, y - 0.8, drawW + 1.6, drawH + 1.6, 'S');
+        doc.addImage(loadedImg.dataUrl, 'JPEG', imgX, y, drawW, drawH);
+        y += drawH + 3.5;
+
+        if (capLines.length > 0) {
+          doc.setFont('helvetica', 'italic');
+          doc.setFontSize(8.8);
+          doc.setTextColor(71, 85, 105);
+          for (const cl of capLines) {
+            ensureSpace(5);
+            doc.text(cl, centerX, y, { align: 'center' });
+            y += 4.6;
+          }
+        }
+        y += 2.5;
+      } else {
+        const fallbackLabel = `[Picha${showCap ? `: ${cap}` : ''}] ${imgUrl}`;
+        ensureSpace(8);
+        doc.setFont('helvetica', 'italic');
+        doc.setFontSize(9.2);
+        doc.setTextColor(7, 94, 84);
+        const mLines = doc.splitTextToSize(normalizePdfText(fallbackLabel), maxContentWidth) as string[];
+        for (const ml of mLines) {
+          ensureSpace(5.2);
+          doc.text(ml, marginX, y);
+          y += 5;
+        }
+        y += 2;
+      }
+      i++;
+      continue;
+    }
+
     const vidTokenMatch = trimmed.match(/^@\[video(?:\|([^\]]*))?\]\((https:\/\/[^\s)]+)\)$/i);
-    if (imgTokenMatch || vidTokenMatch) {
-      const cap = normalizePdfText((imgTokenMatch ? imgTokenMatch[1] : vidTokenMatch?.[1]) || '');
-      const mediaUrl = (imgTokenMatch ? imgTokenMatch[2] : vidTokenMatch?.[2]) || '';
-      const label = vidTokenMatch
-        ? `[Video Iliyoambatanishwa${cap && cap.toLowerCase() !== 'picha' ? `: ${cap}` : ''}] ${mediaUrl}`
-        : `[Picha Iliyoambatanishwa${cap && cap.toLowerCase() !== 'picha' ? `: ${cap}` : ''}]`;
+    if (vidTokenMatch) {
+      const cap = normalizePdfText(vidTokenMatch[1] || '');
+      const mediaUrl = vidTokenMatch[2] || '';
+      const label = `[Video Iliyoambatanishwa${cap ? `: ${cap}` : ''}] ${mediaUrl}`;
       ensureSpace(10);
       doc.setFont('helvetica', 'italic');
       doc.setFontSize(9.5);
@@ -267,6 +453,49 @@ export async function downloadNoteAsPdf(note: MchartNote): Promise<void> {
       }
       y += 2;
       i++;
+      continue;
+    }
+
+    // Horizontal divider
+    if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      ensureSpace(8);
+      y += 2;
+      doc.setDrawColor(203, 213, 225);
+      doc.setLineWidth(0.4);
+      doc.line(marginX + 20, y, pageWidth - marginX - 20, y);
+      y += 5;
+      i++;
+      continue;
+    }
+
+    // Editorial Blockquote (> ...)
+    if (trimmed.startsWith('>')) {
+      const quoteLinesCollected: string[] = [];
+      while (i < rawLines.length && rawLines[i].trim().startsWith('>')) {
+        const qt = normalizePdfText(rawLines[i].trim().replace(/^>\s*/, ''));
+        if (qt) quoteLinesCollected.push(qt);
+        i++;
+      }
+      if (quoteLinesCollected.length > 0) {
+        doc.setFont('helvetica', 'italic');
+        doc.setFontSize(10.5);
+        const wrappedQ = quoteLinesCollected.flatMap(
+          (ql) => doc.splitTextToSize(ql, maxContentWidth - 14) as string[]
+        );
+        const qHeight = wrappedQ.length * 5.4 + 6;
+        ensureSpace(qHeight + 2);
+        doc.setFillColor(248, 250, 252);
+        doc.rect(marginX, y - 2, maxContentWidth, qHeight, 'F');
+        doc.setFillColor(7, 94, 84);
+        doc.rect(marginX, y - 2, 1.5, qHeight, 'F');
+        doc.setTextColor(30, 41, 59);
+        y += 2.5;
+        for (const ql of wrappedQ) {
+          doc.text(ql, marginX + 6, y);
+          y += 5.4;
+        }
+        y += 3;
+      }
       continue;
     }
 
@@ -316,8 +545,8 @@ export async function downloadNoteAsPdf(note: MchartNote): Promise<void> {
     }
 
     // Bullet point
-    if (trimmed.startsWith('- ')) {
-      const itemText = normalizePdfText(trimmed.slice(2));
+    if (/^(?:[-*•▪‣]|–(?=\s))\s+/.test(trimmed)) {
+      const itemText = normalizePdfText(trimmed.replace(/^(?:[-*•▪‣]|–(?=\s))\s+/, ''));
       if (itemText) {
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(10.5);

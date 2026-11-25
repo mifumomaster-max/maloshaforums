@@ -34,6 +34,7 @@ import { KijiweniInlineComposer } from './KijiweniInlineComposer';
 import { MakalaNewsroom } from './MakalaNewsroom';
 import { NavIconSection, NavSectionIcon } from './NavIcons';
 import { AuthorVerificationBadge } from './VerificationBadge';
+import { hasPendingStudioMakalaImport } from '../utils/studioMakalaBridge';
 
 interface TopicListProps {
   topics: Topic[];
@@ -216,7 +217,12 @@ export const TopicList: React.FC<TopicListProps> = ({
       setInlineComposerOpen(false);
     }
     setFursaInlineOpen(false);
-    setMakalaInlineOpen(false);
+    if (effectiveCategory === 'Makala' && hasPendingStudioMakalaImport()) {
+      setMakalaInlineOpen(true);
+      setMakalaExpandTrigger((n) => n + 1);
+    } else {
+      setMakalaInlineOpen(false);
+    }
   }, [effectiveCategory, sharedKijiweniPayload]);
 
   useEffect(() => {

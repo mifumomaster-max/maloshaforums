@@ -1,15 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  AtSign,
   Eye,
-  Heading2,
-  Heading3,
   ImagePlus,
-  List,
-  ListOrdered,
   Loader2,
-  Quote,
-  Sparkles,
   X,
 } from 'lucide-react';
 import {
@@ -26,6 +19,12 @@ import {
 import { uploadImageToCloudinary } from '../services/cloudinaryService';
 import { autoFormatScholarlyText } from '../utils/editorialFormatter';
 import { parseTagsInput } from '../utils/formatters';
+import {
+  MakalaFormatAction,
+  applyMakalaFormatAction,
+  captureTextareaScrollSnapshot,
+  restoreTextareaSelectionAndScroll,
+} from '../utils/makalaSelectionFormatter';
 import { useLanguage } from '../context/LanguageContext';
 import { ImageResizeModal } from './ImageResizeModal';
 import {
@@ -34,6 +33,8 @@ import {
   computeTextAfterInlineMediaInsert,
 } from './InlineMediaInsertModal';
 import { MakalaArticleRenderer } from './MakalaArticleRenderer';
+import { MakalaFormatToolbar } from './MakalaFormatToolbar';
+import { StudioMakalaPickerBar } from './StudioMakalaPickerBar';
 
 interface TopicComposerModalProps {
   isOpen: boolean;
@@ -96,6 +97,7 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
   } | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [selectedWordCount, setSelectedWordCount] = useState(0);
 
   useEffect(() => {
     if (editingTopic) {
@@ -138,6 +140,7 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
     }
     setMakalaPreview(false);
     setInlineMediaPicker(null);
+    setSelectedWordCount(0);
     setError('');
   }, [editingTopic, defaultCategory, isOpen]);
 
@@ -161,25 +164,39 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
   const isFursa = category === 'Fursa';
   const isMakala = category === 'Makala';
   const isKijiweni = category === 'Kijiweni';
+  const maxBodyLength = isMakala ? 16000 : 8000;
 
-  const insertMakalaSyntax = (prefix: string, sample: string) => {
+  const syncSelectionCount = () => {
     const el = bodyTextareaRef.current;
     if (!el) {
-      setBody((prev) => `${prev}${prev && !prev.endsWith('\n') ? '\n' : ''}${prefix}${sample}`);
+      setSelectedWordCount(0);
       return;
     }
-    const start = el.selectionStart ?? body.length;
-    const end = el.selectionEnd ?? body.length;
-    const selected = body.slice(start, end) || sample;
-    const leading = start > 0 && body[start - 1] !== '\n' ? '\n' : '';
-    const insertion = `${leading}${prefix}${selected}`;
-    setBody(body.slice(0, start) + insertion + body.slice(end));
+    const start = el.selectionStart ?? 0;
+    const end = el.selectionEnd ?? 0;
+    if (end <= start) {
+      setSelectedWordCount(0);
+      return;
+    }
+    const words = body.slice(start, end).trim().split(/\s+/).filter(Boolean).length;
+    setSelectedWordCount(words);
+  };
+
+  const handleApplyMakalaFormat = (action: MakalaFormatAction, sample: string) => {
+    const el = bodyTextareaRef.current;
+    const { nextBody, nextSelStart, nextSelEnd, snapshot } = applyMakalaFormatAction(
+      body,
+      el,
+      action,
+      sample
+    );
+    setBody(nextBody);
     setMakalaPreview(false);
-    window.requestAnimationFrame(() => {
-      el.focus();
-      const pos = start + insertion.length;
-      el.setSelectionRange(pos, pos);
-    });
+    restoreTextareaSelectionAndScroll(el, nextSelStart, nextSelEnd, snapshot);
+    window.setTimeout(() => {
+      const words = nextBody.slice(nextSelStart, nextSelEnd).trim().split(/\s+/).filter(Boolean).length;
+      setSelectedWordCount(nextSelEnd > nextSelStart ? words : 0);
+    }, 0);
   };
 
   const handleBodyChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -193,14 +210,17 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
       nextVal[cursor - 1] === '@';
 
     setBody(nextVal);
+    setSelectedWordCount(0);
     if (wasAtTyped) {
       setInlineMediaPicker({ atIndex: cursor - 1, replaceAt: true });
     }
   };
 
   const handleInsertInlineMedia = (media: InsertedInlineMedia) => {
+    const el = bodyTextareaRef.current;
+    const snapshot = captureTextareaScrollSnapshot(el);
     const picker = inlineMediaPicker ?? {
-      atIndex: bodyTextareaRef.current?.selectionStart ?? body.length,
+      atIndex: el?.selectionStart ?? body.length,
       replaceAt: false,
     };
     const { nextText, nextCursor } = computeTextAfterInlineMediaInsert(
@@ -212,12 +232,18 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
     setBody(nextText);
     setInlineMediaPicker(null);
     setMakalaPreview(false);
-    window.requestAnimationFrame(() => {
-      const el = bodyTextareaRef.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(nextCursor, nextCursor);
-    });
+    restoreTextareaSelectionAndScroll(el, nextCursor, nextCursor, snapshot);
+  };
+
+  const handleAutoFormatBody = () => {
+    if (!body.trim()) return;
+    const el = bodyTextareaRef.current;
+    const snapshot = captureTextareaScrollSnapshot(el);
+    const prevCursor = el?.selectionStart ?? 0;
+    const nextFormatted = autoFormatScholarlyText(body);
+    setBody(nextFormatted);
+    const clampedPos = Math.min(prevCursor, nextFormatted.length);
+    restoreTextareaSelectionAndScroll(el, clampedPos, clampedPos, snapshot);
   };
 
   const handleKijiweniFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -281,20 +307,20 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
         );
         return;
       }
-      if (cleanBody.length < 10 || cleanBody.length > 8000) {
+      if (cleanBody.length < 10 || cleanBody.length > maxBodyLength) {
         setError(
           tr(
-            'Maelezo lazima yawe na herufi kati ya 10 na 8000.',
-            'Content must be between 10 and 8000 characters.'
+            `Maelezo lazima yawe na herufi kati ya 10 na ${maxBodyLength}.`,
+            `Content must be between 10 and ${maxBodyLength} characters.`
           )
         );
         return;
       }
-    } else if (cleanTitle.length > 140 || cleanBody.length > 8000) {
+    } else if (cleanTitle.length > 140 || cleanBody.length > maxBodyLength) {
       setError(
         tr(
-          'Kichwa kisizidi herufi 140 na maelezo yasizidi herufi 8000.',
-          'Title max 140 chars and body max 8000 chars.'
+          `Kichwa kisizidi herufi 140 na maelezo yasizidi herufi ${maxBodyLength}.`,
+          `Title max 140 chars and body max ${maxBodyLength} chars.`
         )
       );
       return;
@@ -375,7 +401,56 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4 p-6">
+        <form noValidate onSubmit={handleSubmit} className="space-y-4 p-6">
+          {isMakala && (
+            <StudioMakalaPickerBar
+              hasExistingBody={body.trim().length > 0}
+              onApplyFullItem={({ title: sTitle, bodyDraft, tags, coverUrl, mode }) => {
+                if (sTitle.trim() && (mode === 'replace' || !title.trim())) {
+                  setTitle(sTitle.trim().slice(0, 140));
+                }
+                if (coverUrl) {
+                  setCoverImage(coverUrl);
+                }
+                if (bodyDraft.trim()) {
+                  if (mode === 'append' && body.trim()) {
+                    setBody((prev) => `${prev.trim()}\n\n${bodyDraft.trim()}`.slice(0, maxBodyLength));
+                  } else {
+                    setBody(bodyDraft.trim().slice(0, maxBodyLength));
+                  }
+                  setMakalaPreview(false);
+                }
+                if (Array.isArray(tags) && tags.length > 0 && !tagsRaw.trim()) {
+                  const lowerSections = new Set(MAKALA_SECTIONS.map((s) => s.toLowerCase()));
+                  const cleanedTags = tags.filter((t) => !lowerSections.has(t.toLowerCase()));
+                  if (cleanedTags.length > 0) {
+                    setTagsRaw(cleanedTags.join(', '));
+                  }
+                }
+              }}
+              onApplyCoverOnly={(coverUrl) => {
+                setCoverImage(coverUrl);
+              }}
+              onInsertImageInline={(coverUrl, caption) => {
+                const el = bodyTextareaRef.current;
+                const snapshot = captureTextareaScrollSnapshot(el);
+                const atIndex = el?.selectionStart ?? body.length;
+                const { nextText, nextCursor } = computeTextAfterInlineMediaInsert(
+                  body,
+                  atIndex,
+                  false,
+                  { type: 'image', url: coverUrl, caption: caption || '' }
+                );
+                setBody(nextText.slice(0, maxBodyLength));
+                setMakalaPreview(false);
+                restoreTextareaSelectionAndScroll(el, nextCursor, nextCursor, snapshot);
+              }}
+              onToast={(msg, kind) => {
+                if (kind === 'error') setError(msg);
+              }}
+            />
+          )}
+
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label
@@ -751,75 +826,17 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
             </div>
 
             {isMakala && (
-              <div className="mt-1.5 flex flex-wrap items-center gap-1 rounded-t-lg border border-b-0 border-slate-300 bg-slate-50 px-2 py-1.5">
-                <button
-                  type="button"
-                  onClick={() => insertMakalaSyntax('## ', tr('Kichwa cha Sehemu', 'Section Title'))}
-                  className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000]"
-                >
-                  <Heading2 className="h-3 w-3" aria-hidden="true" />
-                  <span>{tr('Kichwa', 'H2')}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => insertMakalaSyntax('### ', tr('Kichwa Kidogo', 'Subtitle'))}
-                  className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000]"
-                >
-                  <Heading3 className="h-3 w-3" aria-hidden="true" />
-                  <span>{tr('Kichwa Kidogo', 'H3')}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => insertMakalaSyntax('- ', tr('Hoja muhimu', 'Bullet item'))}
-                  className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000]"
-                >
-                  <List className="h-3 w-3" aria-hidden="true" />
-                  <span>{tr('Orodha', 'Bullets')}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => insertMakalaSyntax('1. ', tr('Hatua ya kwanza', 'First point'))}
-                  className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000]"
-                >
-                  <ListOrdered className="h-3 w-3" aria-hidden="true" />
-                  <span>{tr('Namba', 'List')}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => insertMakalaSyntax('> ', tr('Nukuu...', 'Quote...'))}
-                  className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 hover:border-[#B80000]"
-                >
-                  <Quote className="h-3 w-3" aria-hidden="true" />
-                  <span>{tr('Nukuu', 'Quote')}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setInlineMediaPicker({
-                      atIndex: bodyTextareaRef.current?.selectionStart ?? body.length,
-                      replaceAt: false,
-                    })
-                  }
-                  title={tr(
-                    'Weka picha au video mahali hapa (au andika @)',
-                    'Insert photo or video at cursor (or type @)'
-                  )}
-                  className="inline-flex items-center gap-1 rounded border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-bold text-[#0E2640] hover:border-[#B80000] hover:bg-amber-100"
-                >
-                  <AtSign className="h-3 w-3 text-[#B80000]" aria-hidden="true" />
-                  <span>{tr('Picha / Video', 'Photo / Video')}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (body.trim()) setBody((p) => autoFormatScholarlyText(p));
-                  }}
-                  className="ml-auto inline-flex items-center gap-1 rounded bg-[#0E2640] px-2.5 py-1 text-[11px] font-bold text-white hover:bg-[#163A5F]"
-                >
-                  <Sparkles className="h-3 w-3 text-amber-300" aria-hidden="true" />
-                  <span>{tr('Panga Kisomi', 'Auto-Format')}</span>
-                </button>
-              </div>
+              <MakalaFormatToolbar
+                selectedWordCount={selectedWordCount}
+                onApplyFormat={handleApplyMakalaFormat}
+                onOpenInlineMedia={() =>
+                  setInlineMediaPicker({
+                    atIndex: bodyTextareaRef.current?.selectionStart ?? body.length,
+                    replaceAt: false,
+                  })
+                }
+                onAutoFormat={handleAutoFormatBody}
+              />
             )}
 
             {isMakala && makalaPreview ? (
@@ -830,12 +847,13 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
               <textarea
                 id="topic-body"
                 ref={bodyTextareaRef}
-                required={!(isKijiweni && kijiweniImage.trim().length >= 10)}
                 rows={7}
-                minLength={isKijiweni && kijiweniImage.trim().length >= 10 ? 0 : 10}
-                maxLength={8000}
+                maxLength={maxBodyLength}
                 value={body}
                 onChange={handleBodyChange}
+                onSelect={isMakala ? syncSelectionCount : undefined}
+                onKeyUp={isMakala ? syncSelectionCount : undefined}
+                onMouseUp={isMakala ? syncSelectionCount : undefined}
                 placeholder={
                   isFursa
                     ? tr(
@@ -844,8 +862,8 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
                       )
                     : isMakala
                       ? tr(
-                          'Andika uchambuzi, na andika @ popote kupakia picha au video katikati ya makala...',
-                          'Write your analysis, and type @ anywhere to insert a photo or video inline...'
+                          'Andika uchambuzi, chagua maneno kuyabadilisha nukuu/orodha/rangi, au andika @ kuweka picha/video...',
+                          'Write your analysis, select text to format quotes/bullets/colors, or type @ to insert media...'
                         )
                       : tr('Shiriki mawazo yako na jamii...', 'Share your thoughts with the community...')
                 }
@@ -855,7 +873,7 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
               />
             )}
             <div className="mt-1 flex justify-end font-mono text-[11px] text-slate-500 tabular-nums">
-              {body.length}/8000
+              {body.length}/{maxBodyLength}
             </div>
           </div>
 

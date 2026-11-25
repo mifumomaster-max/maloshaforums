@@ -16,6 +16,7 @@ interface ImageResizeModalProps {
   confirmLabelEn?: string;
   showCircleGuide?: boolean;
   showLivePreview?: boolean;
+  inline?: boolean;
   onCancel: () => void;
   onConfirm: (resizedFile: File) => void;
 }
@@ -70,6 +71,7 @@ export const ImageResizeModal: React.FC<ImageResizeModalProps> = ({
   confirmLabelEn,
   showCircleGuide = false,
   showLivePreview = false,
+  inline = false,
   onCancel,
   onConfirm,
 }) => {
@@ -402,17 +404,14 @@ export const ImageResizeModal: React.FC<ImageResizeModalProps> = ({
 
   const isGif = file.type === 'image/gif';
 
-  const modalNode = (
+  const innerCard = (
     <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={tr(
-        titleSw || 'Rekebisha Ukubwa wa Picha Kabla ya Kupakia',
-        titleEn || 'Resize & Frame Photo Before Upload'
-      )}
-      className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-950/85 p-2 backdrop-blur-[2px] sm:p-4"
+      className={
+        inline
+          ? 'flex h-full min-h-0 w-full flex-col overflow-hidden bg-[#0F172A] text-white'
+          : 'flex max-h-[92dvh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-700 bg-[#0F172A] text-white shadow-2xl'
+      }
     >
-      <div className="flex max-h-[92dvh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-700 bg-[#0F172A] text-white shadow-2xl">
         {/* Modal Header */}
         <div className="flex shrink-0 items-center justify-between border-b border-slate-800 px-4 py-3 sm:px-5">
           <div className="flex items-center gap-2">
@@ -708,6 +707,23 @@ export const ImageResizeModal: React.FC<ImageResizeModalProps> = ({
           </div>
         </div>
       </div>
+  );
+
+  if (inline) {
+    return innerCard;
+  }
+
+  const modalNode = (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={tr(
+        titleSw || 'Rekebisha Ukubwa wa Picha Kabla ya Kupakia',
+        titleEn || 'Resize & Frame Photo Before Upload'
+      )}
+      className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-950/85 p-2 backdrop-blur-[2px] sm:p-4"
+    >
+      {innerCard}
     </div>
   );
 

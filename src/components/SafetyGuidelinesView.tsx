@@ -3,7 +3,6 @@ import {
   EmailAuthProvider,
   linkWithCredential,
   reauthenticateWithCredential,
-  reauthenticateWithPopup,
   sendEmailVerification,
   sendPasswordResetEmail,
   updatePassword,
@@ -41,7 +40,7 @@ import {
   Video as VideoIcon,
 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
-import { ADMIN_EMAIL, auth, googleProvider } from '../firebase';
+import { ADMIN_EMAIL, auth, reauthenticateWithGooglePopup } from '../firebase';
 import { uploadImageToCloudinary } from '../services/cloudinaryService';
 import {
   PhoneNotificationPermission,
@@ -553,7 +552,7 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
               ? String((linkErr as { code?: unknown }).code || '')
               : '';
           if (linkCode === 'auth/requires-recent-login') {
-            await reauthenticateWithPopup(currentUser, googleProvider);
+            await reauthenticateWithGooglePopup(currentUser);
             await linkWithCredential(currentUser, cred);
           } else {
             throw linkErr;

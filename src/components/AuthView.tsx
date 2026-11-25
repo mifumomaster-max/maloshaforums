@@ -1,19 +1,18 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  browserLocalPersistence,
   createUserWithEmailAndPassword,
   sendEmailVerification,
   sendPasswordResetEmail,
-  setPersistence,
   signInWithEmailAndPassword,
-  signInWithPopup,
   updateProfile,
   User,
 } from 'firebase/auth';
 import {
   AlertCircle,
   ArrowLeft,
+  Camera,
   CheckCircle2,
+  Crop,
   Eye,
   EyeOff,
   KeyRound,
@@ -21,8 +20,10 @@ import {
   Mail,
   Phone,
   User as UserIcon,
+  X,
 } from 'lucide-react';
-import { auth, googleProvider } from '../firebase';
+import { auth, signInWithGooglePopup } from '../firebase';
+import { uploadImageToCloudinary } from '../services/cloudinaryService';
 import {
   clearPendingRegistrationMeta,
   setPendingRegistrationMeta,
@@ -30,12 +31,15 @@ import {
 } from '../services/forumService';
 import { useLanguage } from '../context/LanguageContext';
 import { AuthPromptReason } from '../types';
+import { ImageResizeModal } from './ImageResizeModal';
 
 interface AuthViewProps {
   promptReason?: AuthPromptReason | null;
   onBack: () => void;
   onSuccess: (user: User, isNewUser: boolean, phoneNumber?: string) => void | Promise<void>;
 }
+
+const BRAND_TITLE_FULL = 'Malosha Forums';
 
 const GoogleGIcon: React.FC = () => (
   <svg className="h-[18px] w-[18px] shrink-0" viewBox="0 0 24 24" aria-hidden="true">
@@ -93,7 +97,7 @@ async function storeBrowserPasswordCredential(
       await navigator.credentials.store(cred);
     }
   } catch {
-    // Browser credential storage optional / not supported in some webviews
+    // Browser credential storage optional
   }
 }
 
@@ -110,30 +114,108 @@ export const AuthView: React.FC<AuthViewProps> = ({
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
+  // Registration Profile Picture & Crop/Resize State
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const [rawSelectedPhoto, setRawSelectedPhoto] = useState<File | null>(null);
+  const [pendingCropPhoto, setPendingCropPhoto] = useState<File | null>(null);
+  const [profilePhotoFile, setProfilePhotoFile] = useState<File | null>(null);
+  const [profilePhotoPreviewUrl, setProfilePhotoPreviewUrl] = useState('');
+  const uploadedPhotoCacheRef = useRef<{ file: File | null; url: string }>({
+    file: null,
+    url: '',
+  });
+
+  // Letter-by-letter "Malosha Forums" Typewriter State
+  const [visibleChars, setVisibleChars] = useState<number>(() => {
+    if (
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    ) {
+      return BRAND_TITLE_FULL.length;
+    }
+    return 1;
+  });
+
   const [googleBusy, setGoogleBusy] = useState(false);
   const [formBusy, setFormBusy] = useState(false);
+  const [uploadStageLabel, setUploadStageLabel] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [infoMsg, setInfoMsg] = useState('');
+  const googlePopupLockRef = useRef(false);
 
   const currentHost = typeof window !== 'undefined' ? window.location.hostname : '';
 
-  // Fast, in-place Google popup sign-in (zero redirect bounce, background profile sync)
+  // Clean letter-by-letter reveal for "Malosha Forums" (loops gracefully after resting)
+  useEffect(() => {
+    if (
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    ) {
+      setVisibleChars(BRAND_TITLE_FULL.length);
+      return;
+    }
+
+    let timerId = 0;
+    if (visibleChars < BRAND_TITLE_FULL.length) {
+      timerId = window.setTimeout(() => {
+        setVisibleChars((prev) => prev + 1);
+      }, 115);
+    } else {
+      timerId = window.setTimeout(() => {
+        setVisibleChars(1);
+      }, 3400);
+    }
+
+    return () => window.clearTimeout(timerId);
+  }, [visibleChars]);
+
+  // Keep preview URL clean
+  useEffect(() => {
+    if (!profilePhotoFile) {
+      setProfilePhotoPreviewUrl('');
+      return;
+    }
+    const url = URL.createObjectURL(profilePhotoFile);
+    setProfilePhotoPreviewUrl(url);
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [profilePhotoFile]);
+
+  const handlePickProfilePhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setErrorMsg(tr('Chagua faili la picha (JPG, PNG, WEBP).', 'Please select an image file.'));
+      return;
+    }
+    setErrorMsg('');
+    setRawSelectedPhoto(file);
+    setPendingCropPhoto(file);
+  };
+
+  // Fast, in-place Google popup sign-in
   const handleGoogleSignIn = async () => {
-    if (googleBusy) return;
+    if (googlePopupLockRef.current || googleBusy) return;
+    googlePopupLockRef.current = true;
     setErrorMsg('');
     setInfoMsg('');
     setGoogleBusy(true);
 
     try {
-      await setPersistence(auth, browserLocalPersistence).catch(() => {});
-      const cred = await signInWithPopup(auth, googleProvider);
+      const cred = await signInWithGooglePopup();
       void syncUserProfile(cred.user).catch((syncErr) => {
         console.warn('Background Google profile sync:', syncErr);
       });
       await onSuccess(cred.user, false);
     } catch (err) {
-      const { code } = extractErrorDetails(err);
-      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+      const { code, message } = extractErrorDetails(err);
+      if (
+        code === 'auth/popup-closed-by-user' ||
+        code === 'auth/cancelled-popup-request' ||
+        message.includes('Pending promise was never set')
+      ) {
         setInfoMsg(
           tr(
             'Dirisha la Google lilifungwa. Gusa tena "Continue with Google" au ingia kwa barua pepe hapo juu.',
@@ -143,22 +225,22 @@ export const AuthView: React.FC<AuthViewProps> = ({
       } else if (code === 'auth/unauthorized-domain') {
         setErrorMsg(
           tr(
-            `Kikoa (${currentHost}) hakijaidhinishwa kwa Google. Ongeza kwenye Firebase Authorized Domains au tumia fomu ya juu.`,
-            `Domain (${currentHost}) is not authorized for Google Sign-In. Use email sign-in above or authorize it.`
+            `Kikoa (${currentHost}) hakijaidhinishwa kwa Google. Tumia fomu ya juu.`,
+            `Domain (${currentHost}) is not authorized for Google Sign-In. Use email sign-in above.`
           )
         );
       } else if (code === 'auth/popup-blocked') {
         setErrorMsg(
           tr(
-            'Kivinjari kimezuia dirisha la Google (Popup). Ruhusu popups au jisajili kwa barua pepe hapo juu.',
-            'Browser blocked the Google popup. Allow popups or sign up with email above.'
+            'Kivinjari kimezuia dirisha la Google (Popup). Ruhusu popups au jisajili kwa barua pepe.',
+            'Browser blocked Google popup. Allow popups or sign up with email above.'
           )
         );
       } else if (code === 'auth/operation-not-allowed') {
         setErrorMsg(
           tr(
-            'Huduma ya Google Sign-In bado haijawashwa kwenye Firebase Console. Tumia barua pepe na nenosiri hapo juu.',
-            'Google Sign-In is not enabled in Firebase Console. Please use email & password above.'
+            'Huduma ya Google Sign-In bado haijawashwa kwenye Firebase Console. Tumia barua pepe.',
+            'Google Sign-In is not enabled in Firebase Console. Please use email & password.'
           )
         );
       } else if (code === 'auth/network-request-failed') {
@@ -177,6 +259,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
         );
       }
     } finally {
+      googlePopupLockRef.current = false;
       setGoogleBusy(false);
     }
   };
@@ -224,19 +307,42 @@ export const AuthView: React.FC<AuthViewProps> = ({
       }
 
       setFormBusy(true);
-      setPendingRegistrationMeta(cleanEmail, {
-        displayName: cleanName,
-        phoneNumber: cleanPhone || undefined,
-      });
+      let uploadedPhotoUrl = '';
 
       try {
-        await setPersistence(auth, browserLocalPersistence).catch(() => {});
+        if (profilePhotoFile) {
+          if (
+            uploadedPhotoCacheRef.current.file === profilePhotoFile &&
+            uploadedPhotoCacheRef.current.url
+          ) {
+            uploadedPhotoUrl = uploadedPhotoCacheRef.current.url;
+          } else {
+            setUploadStageLabel(tr('Inapakia picha...', 'Uploading photo...'));
+            uploadedPhotoUrl = await uploadImageToCloudinary(profilePhotoFile);
+            uploadedPhotoCacheRef.current = {
+              file: profilePhotoFile,
+              url: uploadedPhotoUrl,
+            };
+          }
+        }
+
+        setUploadStageLabel(tr('Inatengeneza akaunti...', 'Creating account...'));
+        setPendingRegistrationMeta(cleanEmail, {
+          displayName: cleanName,
+          phoneNumber: cleanPhone || undefined,
+          photoURL: uploadedPhotoUrl || undefined,
+        });
+
         const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
         void storeBrowserPasswordCredential(cleanEmail, password, cleanName);
-        void updateProfile(cred.user, { displayName: cleanName }).catch(() => {});
+        void updateProfile(cred.user, {
+          displayName: cleanName,
+          ...(uploadedPhotoUrl ? { photoURL: uploadedPhotoUrl } : {}),
+        }).catch(() => {});
         void syncUserProfile(cred.user, {
           displayName: cleanName,
           phoneNumber: cleanPhone || undefined,
+          photoURL: uploadedPhotoUrl || undefined,
         }).catch((syncErr) => {
           console.warn('Background register profile sync:', syncErr);
         });
@@ -244,7 +350,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
         await onSuccess(cred.user, true, cleanPhone);
       } catch (err) {
         clearPendingRegistrationMeta(cleanEmail);
-        const { code } = extractErrorDetails(err);
+        const { code, message } = extractErrorDetails(err);
 
         if (code === 'auth/email-already-in-use') {
           setMode('login');
@@ -271,6 +377,8 @@ export const AuthView: React.FC<AuthViewProps> = ({
           setErrorMsg(
             tr('Tatizo la mtandao. Hakikisha una intaneti kisha jaribu tena.', 'Network error. Check connection and try again.')
           );
+        } else if (message.includes('Cloudinary') || message.includes('picha')) {
+          setErrorMsg(message);
         } else {
           setErrorMsg(
             tr('Imeshindwa kusajili akaunti. Tafadhali jaribu tena.', 'Could not create account. Please try again.')
@@ -278,6 +386,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
         }
       } finally {
         setFormBusy(false);
+        setUploadStageLabel('');
       }
       return;
     }
@@ -285,7 +394,6 @@ export const AuthView: React.FC<AuthViewProps> = ({
     // Login mode (Persistent auto-login until explicit sign out)
     setFormBusy(true);
     try {
-      await setPersistence(auth, browserLocalPersistence).catch(() => {});
       const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
       void storeBrowserPasswordCredential(
         cleanEmail,
@@ -395,453 +503,585 @@ export const AuthView: React.FC<AuthViewProps> = ({
             ? tr('Ingia au jisajili kuchapisha mada mpya.', 'Sign in or sign up to create a post.')
             : null;
 
+  const isTypingTitle = visibleChars < BRAND_TITLE_FULL.length;
+
   return (
-    <div className="fixed inset-0 sm:static h-[100dvh] w-full overflow-hidden overscroll-none bg-gradient-to-br from-[#EAF3FF] via-[#F4F8FF] to-[#E6F7F1] p-0 sm:px-5 sm:py-5 flex items-stretch sm:items-center justify-center">
-      <section className="relative w-full h-[100dvh] sm:h-auto sm:max-w-[440px] sm:max-h-[calc(100dvh-28px)] overflow-hidden overscroll-none rounded-none sm:rounded-3xl border-0 sm:border sm:border-sky-200/90 bg-white sm:shadow-[0_20px_50px_rgba(14,38,64,0.14)] flex flex-col justify-between">
-        {/* Multi-Colored Rotating World Globe Watermark Layer Behind Card Content */}
-        <div
-          aria-hidden="true"
-          className="pointer-events-none select-none absolute inset-0 z-0 flex items-center justify-center overflow-hidden pt-14 sm:pt-18"
-        >
-          <div className="relative w-[340px] h-[340px] sm:w-[380px] sm:h-[380px] opacity-[0.22] sm:opacity-[0.25]">
-            <svg
-              viewBox="0 0 240 240"
-              fill="none"
-              className="w-full h-full animate-malosha-globe-spin"
-            >
-              <defs>
-                <radialGradient id="maloshaOceanGrad" cx="38%" cy="34%" r="68%">
-                  <stop offset="0%" stopColor="#38BDF8" stopOpacity="0.48" />
-                  <stop offset="55%" stopColor="#0284C7" stopOpacity="0.28" />
-                  <stop offset="100%" stopColor="#1D4E89" stopOpacity="0.34" />
-                </radialGradient>
-              </defs>
-
-              {/* Earth Ocean Sphere */}
-              <circle
-                cx="120"
-                cy="120"
-                r="88"
-                fill="url(#maloshaOceanGrad)"
-                stroke="#0284C7"
-                strokeWidth="2.4"
-              />
-
-              {/* Stylized Earth Continents (Vibrant Emerald & Teal) */}
-              <path
-                d="M72 62C84 55 98 61 103 73C107 82 95 92 98 102C101 112 114 114 112 126C110 138 97 148 92 162C88 172 78 168 74 156C69 142 62 132 66 118C70 105 56 96 58 82C60 72 64 67 72 62Z"
-                fill="#10B981"
-                fillOpacity="0.58"
-                stroke="#059669"
-                strokeWidth="1.2"
-              />
-              <path
-                d="M126 56C145 52 167 64 176 80C184 95 174 114 164 122C156 128 159 144 151 156C142 168 128 162 126 146C124 132 132 122 126 112C118 98 115 80 120 66C122 61 124 58 126 56Z"
-                fill="#10B981"
-                fillOpacity="0.56"
-                stroke="#059669"
-                strokeWidth="1.2"
-              />
-              <path
-                d="M158 148C168 144 182 152 183 163C184 172 173 182 162 178C152 174 150 153 158 148Z"
-                fill="#34D399"
-                fillOpacity="0.62"
-                stroke="#059669"
-                strokeWidth="1.1"
-              />
-
-              {/* Latitude & Longitude Gridlines */}
-              <ellipse cx="120" cy="120" rx="88" ry="26" stroke="#0284C7" strokeWidth="1.5" />
-              <ellipse
-                cx="120"
-                cy="120"
-                rx="80"
-                ry="56"
-                stroke="#0EA5E9"
-                strokeWidth="1.35"
-                strokeDasharray="4 4"
-              />
-              <line x1="34" y1="86" x2="206" y2="86" stroke="#0284C7" strokeWidth="1.2" />
-              <line x1="34" y1="154" x2="206" y2="154" stroke="#0284C7" strokeWidth="1.2" />
-              <line x1="32" y1="120" x2="208" y2="120" stroke="#F59E0B" strokeWidth="1.9" />
-              <ellipse cx="120" cy="120" rx="28" ry="88" stroke="#0284C7" strokeWidth="1.5" />
-              <ellipse cx="120" cy="120" rx="58" ry="88" stroke="#0EA5E9" strokeWidth="1.4" />
-              <line x1="120" y1="32" x2="120" y2="208" stroke="#0284C7" strokeWidth="1.7" />
-
-              {/* Golden Orbital Ring & Multi-Color Cardinal Nodes */}
-              <ellipse
-                cx="120"
-                cy="120"
-                rx="106"
-                ry="34"
-                transform="rotate(-24 120 120)"
-                stroke="#F59E0B"
-                strokeWidth="1.8"
-                strokeDasharray="6 5"
-              />
-              <circle cx="120" cy="32" r="4" fill="#F59E0B" />
-              <circle cx="208" cy="120" r="4" fill="#10B981" />
-              <circle cx="120" cy="208" r="4" fill="#0EA5E9" />
-              <circle cx="32" cy="120" r="4" fill="#F43F5E" />
-            </svg>
-            <svg
-              viewBox="0 0 240 240"
-              fill="none"
-              className="absolute inset-0 w-full h-full animate-malosha-globe-orbit"
-            >
-              <circle
-                cx="120"
-                cy="120"
-                r="112"
-                stroke="#6366F1"
-                strokeWidth="1.4"
-                strokeDasharray="4 8"
-              />
-              <circle cx="120" cy="8" r="4.2" fill="#F59E0B" />
-              <circle cx="120" cy="232" r="3.8" fill="#10B981" />
-            </svg>
+    <div className="h-[100dvh] w-full overflow-y-auto overscroll-y-contain bg-gradient-to-br from-[#061527] via-[#0C2544] to-[#133863] px-3 py-4 sm:px-6 sm:py-6 flex flex-col items-center">
+      <section className="relative my-auto w-full max-w-[388px] sm:max-w-[432px] overflow-hidden rounded-3xl border border-sky-200/75 bg-gradient-to-b from-[#EAF3FF] via-[#F2F8FF] to-[#E8F7F2] shadow-[0_22px_55px_rgba(3,12,28,0.52)] flex flex-col">
+        {pendingCropPhoto ? (
+          <div className="min-h-[520px] max-h-[86dvh] flex flex-col">
+            <ImageResizeModal
+              inline
+              file={pendingCropPhoto}
+              defaultPreset="1:1"
+              showCircleGuide
+              showLivePreview
+              titleSw="Kata & Rekebisha Picha ya Wasifu"
+              titleEn="Crop & Resize Profile Photo"
+              subtitleSw="Vuta pembe au badilisha ukubwa ili picha yako ya wasifu ipendeze."
+              subtitleEn="Drag corners or adjust scale so your profile picture fits cleanly."
+              confirmLabelSw="Hifadhi Picha"
+              confirmLabelEn="Save Photo"
+              onCancel={() => setPendingCropPhoto(null)}
+              onConfirm={(resizedFile) => {
+                uploadedPhotoCacheRef.current = { file: null, url: '' };
+                setProfilePhotoFile(resizedFile);
+                setPendingCropPhoto(null);
+              }}
+            />
           </div>
-        </div>
-
-        {/* Clean Centered Brand Header (Top Back Button Removed as Requested) */}
-        <div className="relative z-10 shrink-0 overflow-hidden bg-gradient-to-br from-[#0A1F36] via-[#0E2640] to-[#1A4373] px-4 pt-3 pb-2.5 sm:px-5 sm:pt-4 sm:pb-3.5 text-center text-white">
-          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#D97706] via-[#F59E0B] to-[#38BDF8]" />
-
-          <div className="mx-auto flex flex-col items-center">
-            <div className="h-11 w-11 sm:h-14 sm:w-14 rounded-full p-0.5 sm:p-1 bg-gradient-to-br from-amber-300/80 via-white/35 to-sky-400/70 shadow-md">
-              <img
-                src="/icon.svg"
-                alt="Malosha Forums"
-                className="h-full w-full rounded-full object-cover bg-[#0B1F35]"
-              />
+        ) : (
+          <>
+            {/* Multi-Colored Rotating World Globe Watermark Layer */}
+            <div
+              aria-hidden="true"
+              className="pointer-events-none select-none absolute inset-0 z-0 flex items-center justify-center overflow-hidden pt-20"
+            >
+              <div className="relative h-[300px] w-[300px] sm:h-[340px] sm:w-[340px] opacity-[0.17]">
+                <svg
+                  viewBox="0 0 240 240"
+                  fill="none"
+                  className="h-full w-full animate-malosha-globe-spin"
+                >
+                  <defs>
+                    <radialGradient id="maloshaOceanGrad" cx="38%" cy="34%" r="68%">
+                      <stop offset="0%" stopColor="#38BDF8" stopOpacity="0.52" />
+                      <stop offset="55%" stopColor="#0284C7" stopOpacity="0.32" />
+                      <stop offset="100%" stopColor="#1D4E89" stopOpacity="0.38" />
+                    </radialGradient>
+                  </defs>
+                  <circle
+                    cx="120"
+                    cy="120"
+                    r="88"
+                    fill="url(#maloshaOceanGrad)"
+                    stroke="#0284C7"
+                    strokeWidth="2.4"
+                  />
+                  <path
+                    d="M72 62C84 55 98 61 103 73C107 82 95 92 98 102C101 112 114 114 112 126C110 138 97 148 92 162C88 172 78 168 74 156C69 142 62 132 66 118C70 105 56 96 58 82C60 72 64 67 72 62Z"
+                    fill="#10B981"
+                    fillOpacity="0.62"
+                    stroke="#059669"
+                    strokeWidth="1.2"
+                  />
+                  <path
+                    d="M126 56C145 52 167 64 176 80C184 95 174 114 164 122C156 128 159 144 151 156C142 168 128 162 126 146C124 132 132 122 126 112C118 98 115 80 120 66C122 61 124 58 126 56Z"
+                    fill="#10B981"
+                    fillOpacity="0.6"
+                    stroke="#059669"
+                    strokeWidth="1.2"
+                  />
+                  <path
+                    d="M158 148C168 144 182 152 183 163C184 172 173 182 162 178C152 174 150 153 158 148Z"
+                    fill="#34D399"
+                    fillOpacity="0.65"
+                    stroke="#059669"
+                    strokeWidth="1.1"
+                  />
+                  <ellipse cx="120" cy="120" rx="88" ry="26" stroke="#0284C7" strokeWidth="1.5" />
+                  <ellipse
+                    cx="120"
+                    cy="120"
+                    rx="80"
+                    ry="56"
+                    stroke="#0EA5E9"
+                    strokeWidth="1.35"
+                    strokeDasharray="4 4"
+                  />
+                  <line x1="34" y1="86" x2="206" y2="86" stroke="#0284C7" strokeWidth="1.2" />
+                  <line x1="34" y1="154" x2="206" y2="154" stroke="#0284C7" strokeWidth="1.2" />
+                  <line x1="32" y1="120" x2="208" y2="120" stroke="#F59E0B" strokeWidth="1.9" />
+                  <ellipse cx="120" cy="120" rx="28" ry="88" stroke="#0284C7" strokeWidth="1.5" />
+                  <ellipse cx="120" cy="120" rx="58" ry="88" stroke="#0EA5E9" strokeWidth="1.4" />
+                  <line x1="120" y1="32" x2="120" y2="208" stroke="#0284C7" strokeWidth="1.7" />
+                  <ellipse
+                    cx="120"
+                    cy="120"
+                    rx="106"
+                    ry="34"
+                    transform="rotate(-24 120 120)"
+                    stroke="#F59E0B"
+                    strokeWidth="1.8"
+                    strokeDasharray="6 5"
+                  />
+                  <circle cx="120" cy="32" r="4" fill="#F59E0B" />
+                  <circle cx="208" cy="120" r="4" fill="#10B981" />
+                  <circle cx="120" cy="208" r="4" fill="#0EA5E9" />
+                  <circle cx="32" cy="120" r="4" fill="#F43F5E" />
+                </svg>
+                <svg
+                  viewBox="0 0 240 240"
+                  fill="none"
+                  className="animate-malosha-globe-orbit absolute inset-0 h-full w-full"
+                >
+                  <circle
+                    cx="120"
+                    cy="120"
+                    r="112"
+                    stroke="#6366F1"
+                    strokeWidth="1.4"
+                    strokeDasharray="4 8"
+                  />
+                  <circle cx="120" cy="8" r="4.2" fill="#F59E0B" />
+                  <circle cx="120" cy="232" r="3.8" fill="#10B981" />
+                </svg>
+              </div>
             </div>
 
-            <h1 className="mt-1.5 sm:mt-2 font-display text-base sm:text-xl font-extrabold tracking-tight text-white leading-tight">
-              Malosha Forums
-            </h1>
-            <p className="mt-0.5 text-[10.5px] sm:text-xs text-sky-100/90 max-w-[300px] sm:max-w-xs mx-auto leading-tight line-clamp-1">
-              {promptHintText ||
-                tr(
-                  'Mijadala, Habari, Fursa, Video, Mchart & Mpoll.',
-                  'Forums, Articles, Opportunities, Video, Mchart & Mpoll.'
-                )}
-            </p>
-          </div>
-        </div>
+            {/* Brand Header: Large Circular Fade-Animated Logo + Letter-by-Letter "Malosha Forums" */}
+            <div className="relative z-10 shrink-0 overflow-hidden bg-gradient-to-br from-[#091D33] via-[#0E2A4A] to-[#174678] px-4 pt-4 pb-3.5 text-center text-white">
+              <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#10B981] via-[#F59E0B] to-[#38BDF8]" />
 
-        {/* Card Body: Sign In Tab First, Register Tab Second, Colorful Inputs, Compact Buttons */}
-        <div className="relative z-10 flex-1 flex flex-col justify-center overflow-y-auto overscroll-none px-4 py-2.5 sm:p-5">
-          <div className="w-full space-y-2.5 sm:space-y-3">
-            {/* Tabs: Sign In FIRST (default), Register SECOND */}
-            {mode === 'forgot' ? (
-              <div className="flex items-center justify-between gap-2 rounded-xl bg-sky-50/95 border border-sky-200/90 px-3 py-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <KeyRound className="h-4 w-4 shrink-0 text-[#0284C7]" />
-                  <span className="text-xs font-extrabold text-[#0E2640] truncate">
-                    {tr('Badilisha Nenosiri Kupitia Email', 'Reset Password via Email')}
+              <div className="mx-auto flex flex-col items-center">
+                <div className="animate-malosha-logo-fade h-[76px] w-[76px] sm:h-[88px] sm:w-[88px] rounded-full bg-gradient-to-br from-amber-300 via-sky-300 to-emerald-400 p-[3px] shadow-[0_0_26px_rgba(56,189,248,0.38)] ring-2 ring-white/25">
+                  <img
+                    src="/icon.svg"
+                    alt="Malosha Forums"
+                    className="h-full w-full rounded-full bg-[#091C32] object-cover"
+                  />
+                </div>
+
+                <h1
+                  aria-label="Malosha Forums"
+                  className="mt-2.5 grid place-items-center font-display text-[22px] sm:text-[26px] font-extrabold tracking-tight leading-tight"
+                >
+                  <span aria-hidden="true" className="invisible col-start-1 row-start-1 whitespace-nowrap">
+                    Malosha Forums
                   </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMode('login');
-                    setErrorMsg('');
-                    setInfoMsg('');
-                  }}
-                  className="text-xs font-bold text-[#0284C7] hover:underline shrink-0"
-                >
-                  {tr('Rudi Kuingia', 'Back to Sign In')}
-                </button>
-              </div>
-            ) : (
-              <div
-                role="tablist"
-                aria-label={tr('Chagua njia ya akaunti', 'Choose account mode')}
-                className="grid grid-cols-2 gap-1 rounded-xl border border-sky-200/80 bg-sky-100/65 p-1"
-              >
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={mode === 'login'}
-                  onClick={() => {
-                    setMode('login');
-                    setErrorMsg('');
-                    setInfoMsg('');
-                  }}
-                  className={`min-h-[36px] sm:min-h-[40px] rounded-lg px-2.5 py-1.5 text-xs font-extrabold transition-all sm:text-sm whitespace-nowrap ${
-                    mode === 'login'
-                      ? 'bg-gradient-to-r from-[#0E2640] to-[#1D4E89] text-white shadow-sm'
-                      : 'text-slate-700 hover:text-[#0E2640]'
-                  }`}
-                >
-                  {tr('Ingia (Nina Akaunti)', 'Sign In')}
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={mode === 'register'}
-                  onClick={() => {
-                    setMode('register');
-                    setErrorMsg('');
-                    setInfoMsg('');
-                  }}
-                  className={`min-h-[36px] sm:min-h-[40px] rounded-lg px-2.5 py-1.5 text-xs font-extrabold transition-all sm:text-sm whitespace-nowrap ${
-                    mode === 'register'
-                      ? 'bg-gradient-to-r from-[#0284C7] to-[#0E7490] text-white shadow-sm'
-                      : 'text-slate-700 hover:text-[#0E2640]'
-                  }`}
-                >
-                  {tr('Jisajili (Mpya)', 'Register (New)')}
-                </button>
-              </div>
-            )}
-
-            {/* Feedback Alerts */}
-            {errorMsg && (
-              <div
-                role="alert"
-                className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50/95 px-3 py-1.5 text-[11px] leading-snug text-rose-900"
-              >
-                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-600" aria-hidden="true" />
-                <p className="break-words">{errorMsg}</p>
-              </div>
-            )}
-
-            {infoMsg && (
-              <div
-                role="status"
-                className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50/95 px-3 py-1.5 text-[11px] leading-snug text-emerald-900"
-              >
-                <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" aria-hidden="true" />
-                <p>{infoMsg}</p>
-              </div>
-            )}
-
-            {/* Primary Email & Password Form (Browser Autofill Enabled, Never Pre-Filled) */}
-            <form
-              onSubmit={handleSubmitForm}
-              autoComplete="on"
-              method="post"
-              action="#"
-              className="space-y-2.5"
-            >
-              {mode === 'register' && (
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label
-                      htmlFor="auth-page-fullname"
-                      className="block text-[11px] font-bold text-indigo-900"
-                    >
-                      {tr('Jina Kamili', 'Full Name')}
-                    </label>
-                    <div className="relative mt-0.5">
-                      <UserIcon
-                        className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-indigo-600"
-                        aria-hidden="true"
-                      />
-                      <input
-                        id="auth-page-fullname"
-                        name="name"
-                        type="text"
-                        required
-                        minLength={2}
-                        maxLength={80}
-                        autoComplete="name"
-                        value={fullName}
-                        onChange={(e) => setFullName(e.target.value)}
-                        placeholder={tr('Asha Juma', 'Full name')}
-                        className="h-[40px] sm:h-[42px] w-full rounded-xl border border-indigo-300/90 bg-indigo-50/80 backdrop-blur-[1px] pr-2 pl-8 text-[16px] sm:text-sm font-medium text-[#0A1F36] placeholder:text-[12px] placeholder:text-indigo-400/90 focus:border-indigo-600 focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="auth-page-phone"
-                      className="block text-[11px] font-bold text-emerald-900"
-                    >
-                      {tr('Simu (Hiari)', 'Phone (Optional)')}
-                    </label>
-                    <div className="relative mt-0.5">
-                      <Phone
-                        className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-emerald-600"
-                        aria-hidden="true"
-                      />
-                      <input
-                        id="auth-page-phone"
-                        name="tel"
-                        type="tel"
-                        maxLength={30}
-                        autoComplete="tel"
-                        value={phoneNumber}
-                        onChange={(e) => setPhoneNumber(e.target.value)}
-                        placeholder={tr('0712...', '+255...')}
-                        className="h-[40px] sm:h-[42px] w-full rounded-xl border border-emerald-300/90 bg-emerald-50/75 backdrop-blur-[1px] pr-2 pl-8 text-[16px] sm:text-sm font-medium text-[#0A1F36] placeholder:text-[12px] placeholder:text-emerald-600/65 focus:border-emerald-600 focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:outline-none transition-colors"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div>
-                <label
-                  htmlFor="auth-page-email"
-                  className="block text-[11px] font-bold text-[#0E2640]"
-                >
-                  {tr('Barua Pepe (Email)', 'Email Address')}
-                </label>
-                <div className="relative mt-0.5">
-                  <Mail
-                    className="pointer-events-none absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2 text-[#0284C7]"
+                  <span
                     aria-hidden="true"
-                  />
-                  <input
-                    id="auth-page-email"
-                    name="email"
-                    type="email"
-                    inputMode="email"
-                    required
-                    autoComplete={mode === 'register' ? 'email' : 'username'}
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                    spellCheck={false}
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="jina@mfano.com"
-                    className="h-[40px] sm:h-[44px] w-full rounded-xl border border-sky-300 bg-sky-50/85 backdrop-blur-[1px] pr-3 pl-9 text-[16px] sm:text-sm font-medium text-[#0A1F36] placeholder:text-[12px] placeholder:text-sky-600/65 focus:border-[#0284C7] focus:bg-white focus:ring-2 focus:ring-sky-500/25 focus:outline-none transition-colors"
-                  />
-                </div>
-              </div>
+                    className="col-start-1 row-start-1 justify-self-start whitespace-nowrap"
+                  >
+                    {BRAND_TITLE_FULL.slice(0, visibleChars)
+                      .split('')
+                      .map((ch, idx) => (
+                        <span
+                          key={`${idx}-${ch}`}
+                          className={idx >= 8 ? 'text-amber-300' : 'text-white'}
+                        >
+                          {ch}
+                        </span>
+                      ))}
+                    <span
+                      className={`ml-0.5 inline-block h-[0.86em] w-[2px] align-middle bg-amber-300 ${
+                        isTypingTitle ? 'opacity-100' : 'opacity-0 transition-opacity duration-300'
+                      }`}
+                    />
+                  </span>
+                </h1>
 
-              {mode !== 'forgot' && (
-                <div>
-                  <div className="flex items-center justify-between gap-2">
-                    <label
-                      htmlFor="auth-page-password"
-                      className="block text-[11px] font-bold text-[#0E2640]"
-                    >
-                      {tr('Nenosiri (Password)', 'Password')}
-                    </label>
+                <p className="mt-1 max-w-[300px] text-[11px] font-medium text-sky-100/90 leading-snug line-clamp-1">
+                  {promptHintText ||
+                    tr(
+                      'Mijadala, Makala, Fursa, Video, Mchart & Mpoll.',
+                      'Forums, Articles, Opportunities, Video, Mchart & Mpoll.'
+                    )}
+                </p>
+              </div>
+            </div>
+
+            {/* Compact Card Body (Zero Blank Space on Login or Register) */}
+            <div className="relative z-10 px-4 py-3.5 sm:px-6 sm:py-4">
+              <div className="mx-auto w-full max-w-[306px] sm:max-w-[328px] space-y-3">
+                {/* Keep Strictly Two Tabs: Sign In (1st) & Register (2nd) */}
+                {mode === 'forgot' ? (
+                  <div className="flex items-center justify-between gap-2 rounded-xl border border-sky-200 bg-white/90 px-3 py-2 shadow-2xs">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <KeyRound className="h-4 w-4 shrink-0 text-[#0284C7]" aria-hidden="true" />
+                      <span className="truncate text-xs font-extrabold text-[#0E2640]">
+                        {tr('Badilisha Nenosiri', 'Reset Password')}
+                      </span>
+                    </div>
                     <button
                       type="button"
-                      disabled={formBusy}
                       onClick={() => {
-                        setMode('forgot');
+                        setMode('login');
                         setErrorMsg('');
                         setInfoMsg('');
                       }}
-                      className="text-[11px] font-bold text-[#0284C7] hover:underline"
+                      className="shrink-0 whitespace-nowrap text-xs font-bold text-[#0284C7] hover:underline"
                     >
-                      {tr('Umesahau nenosiri?', 'Forgot password?')}
+                      {tr('Rudi Kuingia', 'Back to Sign In')}
                     </button>
                   </div>
-                  <div className="relative mt-0.5">
-                    <Lock
-                      className="pointer-events-none absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2 text-[#1D4E89]"
-                      aria-hidden="true"
-                    />
-                    <input
-                      id="auth-page-password"
-                      name="password"
-                      type={showPassword ? 'text' : 'password'}
-                      required
-                      minLength={6}
-                      autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder={tr('Angalau herufi 6', 'At least 6 characters')}
-                      className="h-[40px] sm:h-[44px] w-full rounded-xl border border-blue-300/90 bg-blue-50/80 backdrop-blur-[1px] pr-10 pl-9 text-[16px] sm:text-sm font-medium text-[#0A1F36] placeholder:text-[12px] placeholder:text-blue-600/60 focus:border-[#1D4E89] focus:bg-white focus:ring-2 focus:ring-blue-500/25 focus:outline-none transition-colors"
-                    />
+                ) : (
+                  <div
+                    role="tablist"
+                    aria-label={tr('Chagua njia ya akaunti', 'Choose account mode')}
+                    className="grid grid-cols-2 gap-1 rounded-xl border border-sky-200/90 bg-white/75 p-1 shadow-2xs"
+                  >
                     <button
                       type="button"
-                      onClick={() => setShowPassword((p) => !p)}
-                      aria-label={
-                        showPassword
-                          ? tr('Ficha nenosiri', 'Hide password')
-                          : tr('Onyesha nenosiri', 'Show password')
-                      }
-                      className="absolute top-1/2 right-1.5 flex h-[32px] w-[32px] -translate-y-1/2 items-center justify-center rounded-lg text-[#1D4E89] hover:bg-blue-100/80 transition-colors"
+                      role="tab"
+                      aria-selected={mode === 'login'}
+                      onClick={() => {
+                        setMode('login');
+                        setErrorMsg('');
+                        setInfoMsg('');
+                      }}
+                      className={`min-h-[40px] rounded-lg px-2.5 py-1.5 text-xs sm:text-sm font-extrabold transition-all whitespace-nowrap ${
+                        mode === 'login'
+                          ? 'bg-gradient-to-r from-[#0E2640] to-[#1D4E89] text-white shadow-sm'
+                          : 'text-slate-700 hover:text-[#0E2640]'
+                      }`}
                     >
-                      {showPassword ? (
-                        <EyeOff className="h-4 w-4" aria-hidden="true" />
-                      ) : (
-                        <Eye className="h-4 w-4" aria-hidden="true" />
-                      )}
+                      {tr('Ingia', 'Sign In')}
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={mode === 'register'}
+                      onClick={() => {
+                        setMode('register');
+                        setErrorMsg('');
+                        setInfoMsg('');
+                      }}
+                      className={`min-h-[40px] rounded-lg px-2.5 py-1.5 text-xs sm:text-sm font-extrabold transition-all whitespace-nowrap ${
+                        mode === 'register'
+                          ? 'bg-gradient-to-r from-[#0284C7] to-[#0D9488] text-white shadow-sm'
+                          : 'text-slate-700 hover:text-[#0E2640]'
+                      }`}
+                    >
+                      {tr('Jisajili', 'Register')}
                     </button>
                   </div>
-                </div>
-              )}
+                )}
 
-              {/* Compact, Proportional Primary Action Button */}
-              <div className="pt-0.5 flex justify-center">
-                <button
-                  type="submit"
-                  disabled={formBusy || googleBusy}
-                  className={`flex h-[42px] sm:h-[44px] w-[235px] sm:w-[258px] items-center justify-center rounded-xl px-5 text-xs sm:text-sm font-extrabold text-white shadow-sm transition-all hover:brightness-110 active:scale-[0.99] disabled:opacity-60 ${
-                    mode === 'register'
-                      ? 'bg-gradient-to-r from-[#0284C7] to-[#0E7490]'
-                      : 'bg-gradient-to-r from-[#0E2640] to-[#1D4E89]'
-                  }`}
+                {/* Alerts */}
+                {errorMsg && (
+                  <div
+                    role="alert"
+                    className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50/95 px-3 py-2 text-[11.5px] leading-snug text-rose-900"
+                  >
+                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-600" aria-hidden="true" />
+                    <p className="break-words">{errorMsg}</p>
+                  </div>
+                )}
+
+                {infoMsg && (
+                  <div
+                    role="status"
+                    className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50/95 px-3 py-2 text-[11.5px] leading-snug text-emerald-900"
+                  >
+                    <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" aria-hidden="true" />
+                    <p>{infoMsg}</p>
+                  </div>
+                )}
+
+                {/* Main Auth Form with Compact, Colorful Inputs */}
+                <form
+                  onSubmit={handleSubmitForm}
+                  autoComplete="on"
+                  method="post"
+                  action="#"
+                  className="space-y-2.5"
                 >
-                  {formBusy
-                    ? mode === 'forgot'
-                      ? tr('Inatuma ujumbe...', 'Sending reset email...')
-                      : mode === 'register'
-                        ? tr('Inasajili...', 'Creating account...')
-                        : tr('Inaingia...', 'Signing in...')
-                    : mode === 'forgot'
-                      ? tr('Tuma Ujumbe Kwenye Email', 'Send Reset Link')
-                      : mode === 'register'
-                        ? tr('Jisajili Sasa', 'Create Account')
-                        : tr('Ingia Kwenye Akaunti', 'Sign In')}
-                </button>
+                  {mode === 'register' && (
+                    <>
+                      {/* Registration Profile Picture + Resize + Name/Phone Row */}
+                      <div className="flex items-center gap-3 rounded-2xl border border-sky-200/80 bg-white/85 p-2.5 shadow-2xs">
+                        <input
+                          ref={photoInputRef}
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp,image/gif"
+                          onChange={handlePickProfilePhoto}
+                          className="hidden"
+                        />
+
+                        <div className="relative shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => photoInputRef.current?.click()}
+                            aria-label={tr('Weka picha ya wasifu', 'Upload profile picture')}
+                            className="group relative flex h-[66px] w-[66px] items-center justify-center overflow-hidden rounded-full border-2 border-dashed border-[#0284C7] bg-gradient-to-br from-sky-100 to-emerald-100 text-[#0E2640] shadow-xs transition-transform hover:scale-[1.03] active:scale-[0.98]"
+                          >
+                            {profilePhotoPreviewUrl ? (
+                              <img
+                                src={profilePhotoPreviewUrl}
+                                alt={tr('Picha ya wasifu', 'Profile preview')}
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <div className="flex flex-col items-center justify-center text-center">
+                                <Camera className="h-5 w-5 text-[#0284C7]" aria-hidden="true" />
+                                <span className="mt-0.5 text-[9px] font-extrabold text-[#0E2640]">
+                                  {tr('Picha', 'Photo')}
+                                </span>
+                              </div>
+                            )}
+                          </button>
+
+                          {profilePhotoFile && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setProfilePhotoFile(null);
+                                setRawSelectedPhoto(null);
+                                uploadedPhotoCacheRef.current = { file: null, url: '' };
+                              }}
+                              aria-label={tr('Ondoa picha', 'Remove photo')}
+                              className="absolute -top-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full border border-white bg-rose-600 text-white shadow-sm hover:bg-rose-700"
+                            >
+                              <X className="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="min-w-0 flex-1 space-y-1.5">
+                          <p className="text-[11px] font-extrabold text-[#0E2640] leading-tight">
+                            {tr('Picha ya Wasifu (Hiari)', 'Profile Photo (Optional)')}
+                          </p>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => photoInputRef.current?.click()}
+                              className="inline-flex min-h-[30px] items-center gap-1 rounded-lg bg-[#0284C7]/12 px-2.5 py-1 text-[11px] font-bold text-[#0369A1] hover:bg-[#0284C7]/20 whitespace-nowrap"
+                            >
+                              <Camera className="h-3 w-3" aria-hidden="true" />
+                              <span>
+                                {profilePhotoFile
+                                  ? tr('Badilisha', 'Change')
+                                  : tr('Chagua Picha', 'Choose')}
+                              </span>
+                            </button>
+                            {profilePhotoFile && (
+                              <button
+                                type="button"
+                                onClick={() => setPendingCropPhoto(rawSelectedPhoto || profilePhotoFile)}
+                                className="inline-flex min-h-[30px] items-center gap-1 rounded-lg bg-amber-500/15 px-2.5 py-1 text-[11px] font-bold text-amber-900 hover:bg-amber-500/25 whitespace-nowrap"
+                              >
+                                <Crop className="h-3 w-3" aria-hidden="true" />
+                                <span>{tr('Resize', 'Resize')}</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Name & Phone Compact Inputs */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label
+                            htmlFor="auth-page-fullname"
+                            className="block text-[11px] font-bold text-indigo-950"
+                          >
+                            {tr('Jina Kamili', 'Full Name')}
+                          </label>
+                          <div className="relative mt-0.5">
+                            <UserIcon
+                              className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-indigo-600"
+                              aria-hidden="true"
+                            />
+                            <input
+                              id="auth-page-fullname"
+                              name="name"
+                              type="text"
+                              required
+                              minLength={2}
+                              maxLength={80}
+                              autoComplete="name"
+                              value={fullName}
+                              onChange={(e) => setFullName(e.target.value)}
+                              placeholder={tr('Asha Juma', 'Full name')}
+                              className="h-[40px] w-full rounded-xl border border-indigo-300 bg-[#F5F3FF] pr-2 pl-8 text-[15px] sm:text-sm font-medium text-[#0A1F36] placeholder:text-[11.5px] placeholder:text-indigo-400 shadow-2xs focus:border-indigo-600 focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label
+                            htmlFor="auth-page-phone"
+                            className="block text-[11px] font-bold text-emerald-950"
+                          >
+                            {tr('Simu (Hiari)', 'Phone (Opt.)')}
+                          </label>
+                          <div className="relative mt-0.5">
+                            <Phone
+                              className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-emerald-600"
+                              aria-hidden="true"
+                            />
+                            <input
+                              id="auth-page-phone"
+                              name="tel"
+                              type="tel"
+                              maxLength={30}
+                              autoComplete="tel"
+                              value={phoneNumber}
+                              onChange={(e) => setPhoneNumber(e.target.value)}
+                              placeholder="0712..."
+                              className="h-[40px] w-full rounded-xl border border-emerald-300 bg-[#ECFDF5] pr-2 pl-8 text-[15px] sm:text-sm font-medium text-[#0A1F36] placeholder:text-[11.5px] placeholder:text-emerald-600/60 shadow-2xs focus:border-emerald-600 focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:outline-none transition-colors"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Compact Colorful Email Input */}
+                  <div>
+                    <label
+                      htmlFor="auth-page-email"
+                      className="block text-[11px] font-bold text-[#0E2640]"
+                    >
+                      {tr('Barua Pepe (Email)', 'Email Address')}
+                    </label>
+                    <div className="relative mt-0.5">
+                      <Mail
+                        className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[#0284C7]"
+                        aria-hidden="true"
+                      />
+                      <input
+                        id="auth-page-email"
+                        name="email"
+                        type="email"
+                        inputMode="email"
+                        required
+                        autoComplete={mode === 'register' ? 'email' : 'username'}
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="jina@mfano.com"
+                        className="h-[42px] w-full rounded-xl border border-sky-300 bg-[#FFFFFF] pr-3 pl-9 text-[15px] sm:text-sm font-medium text-[#0A1F36] placeholder:text-[12px] placeholder:text-sky-600/55 shadow-2xs focus:border-[#0284C7] focus:ring-2 focus:ring-sky-500/25 focus:outline-none transition-colors"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Compact Colorful Password Input */}
+                  {mode !== 'forgot' && (
+                    <div>
+                      <div className="flex items-center justify-between gap-2">
+                        <label
+                          htmlFor="auth-page-password"
+                          className="block text-[11px] font-bold text-[#0E2640]"
+                        >
+                          {tr('Nenosiri (Password)', 'Password')}
+                        </label>
+                        <button
+                          type="button"
+                          disabled={formBusy}
+                          onClick={() => {
+                            setMode('forgot');
+                            setErrorMsg('');
+                            setInfoMsg('');
+                          }}
+                          className="text-[11px] font-bold text-[#0284C7] hover:underline whitespace-nowrap"
+                        >
+                          {tr('Umesahau nenosiri?', 'Forgot password?')}
+                        </button>
+                      </div>
+                      <div className="relative mt-0.5">
+                        <Lock
+                          className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[#B45309]"
+                          aria-hidden="true"
+                        />
+                        <input
+                          id="auth-page-password"
+                          name="password"
+                          type={showPassword ? 'text' : 'password'}
+                          required
+                          minLength={6}
+                          autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          placeholder={tr('Angalau herufi 6', 'At least 6 characters')}
+                          className="h-[42px] w-full rounded-xl border border-amber-300/90 bg-[#FFFDF5] pr-10 pl-9 text-[15px] sm:text-sm font-medium text-[#0A1F36] placeholder:text-[12px] placeholder:text-amber-700/50 shadow-2xs focus:border-[#D97706] focus:bg-white focus:ring-2 focus:ring-amber-400/25 focus:outline-none transition-colors"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword((p) => !p)}
+                          aria-label={
+                            showPassword
+                              ? tr('Ficha nenosiri', 'Hide password')
+                              : tr('Onyesha nenosiri', 'Show password')
+                          }
+                          className="absolute top-1/2 right-1 flex h-[36px] w-[36px] -translate-y-1/2 items-center justify-center rounded-lg text-[#0E2640] hover:bg-amber-100/75 transition-colors"
+                        >
+                          {showPassword ? (
+                            <EyeOff className="h-4 w-4" aria-hidden="true" />
+                          ) : (
+                            <Eye className="h-4 w-4" aria-hidden="true" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Primary Submit Button */}
+                  <div className="flex justify-center pt-1">
+                    <button
+                      type="submit"
+                      disabled={formBusy || googleBusy}
+                      className={`flex h-[44px] w-[248px] sm:w-[270px] items-center justify-center rounded-xl px-5 text-xs sm:text-sm font-extrabold text-white shadow-sm transition-all hover:brightness-110 active:scale-[0.98] disabled:opacity-60 whitespace-nowrap ${
+                        mode === 'register'
+                          ? 'bg-gradient-to-r from-[#0284C7] to-[#0D9488]'
+                          : 'bg-gradient-to-r from-[#0E2640] to-[#1D4E89]'
+                      }`}
+                    >
+                      {formBusy
+                        ? uploadStageLabel ||
+                          (mode === 'forgot'
+                            ? tr('Inatuma ujumbe...', 'Sending reset email...')
+                            : mode === 'register'
+                              ? tr('Inasajili...', 'Creating account...')
+                              : tr('Inaingia...', 'Signing in...'))
+                        : mode === 'forgot'
+                          ? tr('Tuma Ujumbe Kwenye Email', 'Send Reset Link')
+                          : mode === 'register'
+                            ? tr('Jisajili Sasa', 'Create Account')
+                            : tr('Ingia Kwenye Akaunti', 'Sign In')}
+                    </button>
+                  </div>
+                </form>
+
+                {/* Divider */}
+                <div className="relative flex items-center">
+                  <div className="flex-1 border-t border-sky-200/80" />
+                  <span className="px-2.5 text-[10.5px] font-bold uppercase tracking-wider text-slate-500">
+                    {tr('au', 'or')}
+                  </span>
+                  <div className="flex-1 border-t border-sky-200/80" />
+                </div>
+
+                {/* Google Sign-In & Bottom Go Back Button */}
+                <div className="flex flex-col items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={formBusy || googleBusy}
+                    onClick={() => {
+                      void handleGoogleSignIn();
+                    }}
+                    className="flex h-[44px] w-[248px] sm:w-[270px] items-center justify-center gap-2.5 rounded-xl border border-sky-200 bg-white px-4 text-xs sm:text-sm font-bold text-slate-900 shadow-2xs transition-colors hover:bg-sky-50 active:scale-[0.98] disabled:opacity-60 whitespace-nowrap"
+                  >
+                    <GoogleGIcon />
+                    <span>{googleBusy ? 'Connecting...' : 'Continue with Google'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={onBack}
+                    aria-label={tr('Rudi Nyuma Kwenye Jukwaa', 'Go Back to Forum')}
+                    className="flex h-[42px] w-[248px] sm:w-[270px] items-center justify-center gap-2 rounded-xl border border-slate-300/90 bg-white/75 px-4 text-xs sm:text-sm font-bold text-[#0E2640] transition-colors hover:bg-white active:scale-[0.98] whitespace-nowrap"
+                  >
+                    <ArrowLeft className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span>{tr('Rudi Nyuma', 'Go Back')}</span>
+                  </button>
+                </div>
               </div>
-            </form>
-
-            {/* Divider */}
-            <div className="relative flex items-center">
-              <div className="flex-1 border-t border-slate-200/90" />
-              <span className="px-2.5 text-[10.5px] font-bold uppercase tracking-wider text-slate-400">
-                {tr('au', 'or')}
-              </span>
-              <div className="flex-1 border-t border-slate-200/90" />
             </div>
 
-            {/* Compact, Proportional Google Sign-In & Bottom Go Back Button */}
-            <div className="flex flex-col items-center gap-2">
-              <button
-                type="button"
-                disabled={formBusy || googleBusy}
-                onClick={() => {
-                  void handleGoogleSignIn();
-                }}
-                className="flex h-[42px] sm:h-[44px] w-[235px] sm:w-[258px] items-center justify-center gap-2.5 rounded-xl border border-sky-200 bg-white/95 px-4 text-xs sm:text-sm font-bold text-slate-900 shadow-2xs transition-colors hover:bg-sky-50/70 active:scale-[0.99] disabled:opacity-60"
-              >
-                <GoogleGIcon />
-                <span>{googleBusy ? 'Connecting to Google...' : 'Continue with Google'}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={onBack}
-                aria-label={tr('Rudi Nyuma Kwenye Jukwaa', 'Go Back to Forum')}
-                className="flex h-[40px] sm:h-[42px] w-[235px] sm:w-[258px] items-center justify-center gap-2 rounded-xl border border-slate-300/90 bg-slate-100/85 px-4 text-xs sm:text-sm font-bold text-[#0E2640] transition-colors hover:bg-slate-200/80 active:scale-[0.99]"
-              >
-                <ArrowLeft className="h-4 w-4 shrink-0" aria-hidden="true" />
-                <span>{tr('Rudi Nyuma', 'Go Back')}</span>
-              </button>
+            {/* Bottom-most Card Ownership Footer */}
+            <div className="relative z-10 shrink-0 border-t border-sky-200/75 bg-white/65 px-3 py-2.5 text-center backdrop-blur-[2px]">
+              <p className="text-[10.5px] sm:text-xs font-semibold text-slate-600 leading-snug">
+                Jukwaa hili limetengenezwa na{' '}
+                <span className="font-extrabold text-[#0E2640]">David Malosha Amos</span>,{' '}
+                Mkurugenzi Mkuu wa <span className="font-extrabold text-[#1D4E89]">MBT</span>.
+              </p>
             </div>
-          </div>
-        </div>
-
-        {/* Bottom-most Card Ownership Footer */}
-        <div className="relative z-10 shrink-0 border-t border-slate-100 bg-slate-50/92 backdrop-blur-[2px] px-3 py-2 sm:px-4 sm:py-2.5 text-center">
-          <p className="text-[10.5px] sm:text-xs font-semibold text-slate-600 leading-snug">
-            Jukwaa hili limetengenezwa na{' '}
-            <span className="font-extrabold text-[#0E2640]">David Malosha Amos</span>,{' '}
-            Mkurugenzi Mkuu wa <span className="font-extrabold text-[#1D4E89]">MBT</span>.
-          </p>
-        </div>
+          </>
+        )}
       </section>
     </div>
   );

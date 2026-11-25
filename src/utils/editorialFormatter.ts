@@ -423,6 +423,9 @@ export function extractEditorialPreview(rawBody: string): {
     s
       .replace(/!\[[^\]]*\]\(https:\/\/[^\s)]+\)/gi, '')
       .replace(/@\[video(?:\|[^\]]*)?\]\(https:\/\/[^\s)]+\)/gi, '')
+      .replace(/\[(?:color|bg)=#[0-9a-fA-F]{3,6}\]/gi, '')
+      .replace(/\[\/(?:color|bg|u)\]/gi, '')
+      .replace(/\[u\]/gi, '')
       .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
       .replace(/[*`]/g, '')
       .replace(/\s+/g, ' ')

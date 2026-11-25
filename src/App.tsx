@@ -30,6 +30,8 @@ import {
   ContentRetentionPeriod,
   ContentRetentionSettings,
   DirectChatThread,
+  MchartGroupReadCursor,
+  MchartGroupSettings,
   MchartNote,
   MchartStatus,
   MemberDirectoryCandidate,
@@ -57,6 +59,7 @@ import {
 } from './types';
 import {
   DEFAULT_CONTENT_RETENTION_SETTINGS,
+  DEFAULT_MCHART_GROUP_SETTINGS,
   READ_NOTIFICATION_TTL_MS,
   checkUserVideoLikesBatch,
   cleanupExpiredReadNotifications,
@@ -64,6 +67,7 @@ import {
   deleteTopic,
   editTopic,
   ensureDirectChatThread,
+  fetchPlatformUsersCount,
   getPrivateUserInfo,
   markAllUserNotificationsRead,
   markUserNotificationRead,
@@ -72,7 +76,8 @@ import {
   seedStarterTopics,
   submitReport,
   subscribeContentRetentionSettings,
-  fetchPlatformUsersCount,
+  subscribeMchartGroupReadCursors,
+  subscribeMchartGroupSettings,
   subscribeSiteNavSettings,
   syncUserProfile,
   toggleTopicPin,
@@ -88,6 +93,8 @@ import {
   writeUserPresence,
 } from './services/forumService';
 import { shareTopic } from './utils/formatters';
+import { buildMakalaSocialPayload } from './utils/makalaSocialShare';
+import { MakalaSocialShareModal } from './components/MakalaSocialShareModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Header } from './components/Header';
 import { MobileBottomNav } from './components/MobileBottomNav';
@@ -134,10 +141,6 @@ const MPOLL_BG_THEME_KEY = 'malosha_mpoll_bg_theme_v1';
 function getStartOfTodayBoundaryMs(): number {
   const now = new Date();
   return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).getTime() - 1;
-}
-
-function getLocalDateKey(date = new Date()): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
 function ForumShell() {
@@ -235,9 +238,22 @@ function ForumShell() {
   const [totalUsersCount, setTotalUsersCount] = useState<number | null>(null);
   const [loadingUsersCount, setLoadingUsersCount] = useState(false);
 
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [rawChatMessages, setRawChatMessages] = useState<ChatMessage[]>([]);
   const [loadingChat, setLoadingChat] = useState(true);
-  const [todayKey, setTodayKey] = useState<string>(() => getLocalDateKey());
+  const [nowTickMs, setNowTickMs] = useState<number>(() => Date.now());
+  const [mchartGroupSettings, setMchartGroupSettings] = useState<MchartGroupSettings>(() => ({
+    ...DEFAULT_MCHART_GROUP_SETTINGS,
+  }));
+  const [groupReadCursors, setGroupReadCursors] = useState<MchartGroupReadCursor[]>([]);
+  const [pendingGroupInvite, setPendingGroupInvite] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const params = new URLSearchParams(window.location.search);
+    return (
+      /^\/g\/[^/]+\/?$/.test(window.location.pathname) ||
+      params.has('g') ||
+      params.get('join') === 'group'
+    );
+  });
   const [lastSeenChatMs, setLastSeenChatMs] = useState<number>(() => {
     if (typeof window === 'undefined') return getStartOfTodayBoundaryMs();
     try {
@@ -342,18 +358,23 @@ function ForumShell() {
     if (typeof window === 'undefined') return 'kijiweni';
     const params = new URLSearchParams(window.location.search);
     const tabParam = params.get('tab');
-    const isShortPath = /^\/p\/[a-zA-Z0-9_-]+\/?$/.test(window.location.pathname);
-    if (tabParam === 'mchart' || tabParam === 'chat') return 'chat';
+    const isShortPollPath = /^\/p\/[a-zA-Z0-9_-]+\/?$/.test(window.location.pathname);
+    const isShortMakalaPath = /^\/m\/[a-zA-Z0-9_-]+\/?$/.test(window.location.pathname);
+    const isGroupInvite =
+      /^\/g\/[^/]+\/?$/.test(window.location.pathname) ||
+      params.has('g') ||
+      params.get('join') === 'group';
+    if (tabParam === 'mchart' || tabParam === 'chat' || isGroupInvite) return 'chat';
     if (tabParam === 'video' || tabParam === 'videos') return 'video';
     if (tabParam === 'fursa') return 'fursa';
-    if (tabParam === 'makala') return 'makala';
+    if (tabParam === 'makala' || isShortMakalaPath || params.has('m')) return 'makala';
     if (
       tabParam === 'mpoll' ||
       tabParam === 'kura' ||
       tabParam === 'votes' ||
       params.has('p') ||
       params.has('poll') ||
-      isShortPath
+      isShortPollPath
     ) {
       return 'votes';
     }
@@ -379,19 +400,28 @@ function ForumShell() {
   });
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
-    const raw = new URLSearchParams(window.location.search).get('mada');
-    return raw && raw.trim() ? raw.trim() : null;
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get('mada') || params.get('m');
+    if (raw && raw.trim()) return raw.trim();
+    const makalaMatch = window.location.pathname.match(/^\/m\/([a-zA-Z0-9_-]+)\/?$/);
+    return makalaMatch ? makalaMatch[1] : null;
   });
   const [selectedCategory, setSelectedCategory] = useState<TopicCategory | 'all'>(() => {
     if (typeof window === 'undefined') return 'Kijiweni';
     const params = new URLSearchParams(window.location.search);
     const tabParam = params.get('tab');
-    const isShortPath = /^\/p\/[a-zA-Z0-9_-]+\/?$/.test(window.location.pathname);
+    const isShortPollPath = /^\/p\/[a-zA-Z0-9_-]+\/?$/.test(window.location.pathname);
+    const isShortMakalaPath = /^\/m\/[a-zA-Z0-9_-]+\/?$/.test(window.location.pathname);
+    const isGroupInvite =
+      /^\/g\/[^/]+\/?$/.test(window.location.pathname) ||
+      params.has('g') ||
+      params.get('join') === 'group';
     if (tabParam === 'fursa') return 'Fursa';
-    if (tabParam === 'makala') return 'Makala';
+    if (tabParam === 'makala' || isShortMakalaPath || params.has('m')) return 'Makala';
     if (
       tabParam === 'mchart' ||
       tabParam === 'chat' ||
+      isGroupInvite ||
       tabParam === 'video' ||
       tabParam === 'videos' ||
       tabParam === 'mpoll' ||
@@ -399,7 +429,7 @@ function ForumShell() {
       tabParam === 'votes' ||
       params.has('p') ||
       params.has('poll') ||
-      isShortPath
+      isShortPollPath
     ) {
       return 'all';
     }
@@ -414,6 +444,7 @@ function ForumShell() {
   const [inlineExpandRequest, setInlineExpandRequest] = useState(0);
   const [sharedTopicFallback, setSharedTopicFallback] = useState<Topic | null>(null);
   const [loadingSharedTopic, setLoadingSharedTopic] = useState(false);
+  const [shareModalTopic, setShareModalTopic] = useState<Topic | null>(null);
 
   const [reportTarget, setReportTarget] = useState<{
     targetType: 'topic' | 'reply';
@@ -527,7 +558,7 @@ function ForumShell() {
 
   const isAdmin = useMemo(() => {
     if (!user) return false;
-    return ((user.email || '').toLowerCase() === ADMIN_EMAIL && user.emailVerified) || isAdminDoc;
+    return (user.email || '').toLowerCase() === ADMIN_EMAIL || isAdminDoc;
   }, [user, isAdminDoc]);
 
   useEffect(() => {
@@ -903,30 +934,46 @@ function ForumShell() {
     return () => unsub();
   }, [authReady, user, selectedTopicId]);
 
-  // Keep today's date boundary accurate if app stays open across midnight
+  // Tick every 30s to smoothly expire disappearing group messages client-side
   useEffect(() => {
     const timer = window.setInterval(() => {
-      const next = getLocalDateKey();
-      setTodayKey((curr) => (curr === next ? curr : next));
-    }, 60_000);
+      setNowTickMs(Date.now());
+    }, 30_000);
     return () => window.clearInterval(timer);
   }, []);
 
-  // Real-time community group chat listener (signed-in members only, strictly TODAY's messages)
+  // Subscribe Mchart Group Settings (public metadata for group photo, lock, disappearing timer, invite preview)
+  useEffect(() => {
+    if (!authReady) return;
+    const unsub = subscribeMchartGroupSettings((settings) => {
+      setMchartGroupSettings(settings);
+    });
+    return () => unsub();
+  }, [authReady]);
+
+  // Subscribe Mchart Group Read Cursors (true gray vs blue ticks across group members)
   useEffect(() => {
     if (!authReady || !user) {
-      setChatMessages([]);
+      setGroupReadCursors([]);
+      return;
+    }
+    const unsub = subscribeMchartGroupReadCursors((cursors) => {
+      setGroupReadCursors(cursors);
+    });
+    return () => unsub();
+  }, [authReady, user]);
+
+  // Real-time community group chat listener (signed-in members only; filtered live by disappearing timer)
+  useEffect(() => {
+    if (!authReady || !user) {
+      setRawChatMessages([]);
       setLoadingChat(false);
       return;
     }
     const path = 'forum_chat_messages';
-    const [yr, mo, dy] = todayKey.split('-').map(Number);
-    const startOfToday = new Date(yr, mo - 1, dy, 0, 0, 0, 0);
-    const startOfTodayMs = startOfToday.getTime();
-
     const q = query(
       collection(db, path),
-      where('createdAt', '>=', Timestamp.fromDate(startOfToday)),
+      where('createdAt', '>=', Timestamp.fromMillis(0)),
       orderBy('createdAt', 'desc'),
       limit(200)
     );
@@ -934,35 +981,43 @@ function ForumShell() {
     const unsub = onSnapshot(
       q,
       (snapshot) => {
-        const list: ChatMessage[] = snapshot.docs
-          .map((d) => {
-            const data = d.data();
-            return {
-              id: d.id,
-              senderId: String(data.senderId || ''),
-              senderName: String(data.senderName || 'Mwanachama'),
-              senderPhoto: String(data.senderPhoto || ''),
-              text: String(data.text || ''),
-              attachmentType: (
-                data.attachmentType === 'image' || data.attachmentType === 'document'
-                  ? data.attachmentType
-                  : 'none'
-              ) as ChatMessage['attachmentType'],
-              attachmentUrl: String(data.attachmentUrl || ''),
-              attachmentName: String(data.attachmentName || ''),
-              attachmentSize: Number(data.attachmentSize || 0),
-              attachmentMime: String(data.attachmentMime || ''),
-              replyToId: String(data.replyToId || ''),
-              replyToSenderName: String(data.replyToSenderName || ''),
-              replyToPreview: String(data.replyToPreview || ''),
-              isDeleted: Boolean(data.isDeleted),
-              createdAt: data.createdAt || null,
-              updatedAt: data.updatedAt || null,
-            };
-          })
-          .filter((m) => !m.createdAt || m.createdAt.toMillis() >= startOfTodayMs);
+        const list: ChatMessage[] = snapshot.docs.map((d) => {
+          const data = d.data();
+          return {
+            id: d.id,
+            senderId: String(data.senderId || ''),
+            senderName: String(data.senderName || 'Mwanachama'),
+            senderPhoto: String(data.senderPhoto || ''),
+            text: String(data.text || ''),
+            attachmentType: (
+              data.attachmentType === 'image' ||
+              data.attachmentType === 'document' ||
+              data.attachmentType === 'audio'
+                ? data.attachmentType
+                : 'none'
+            ) as ChatMessage['attachmentType'],
+            attachmentUrl: String(data.attachmentUrl || ''),
+            attachmentName: String(data.attachmentName || ''),
+            attachmentSize: Number(data.attachmentSize || 0),
+            attachmentMime: String(data.attachmentMime || ''),
+            audioDurationSec: Number(data.audioDurationSec || 0),
+            reactions:
+              data.reactions && typeof data.reactions === 'object'
+                ? (data.reactions as Record<string, string[]>)
+                : undefined,
+            isEdited: Boolean(data.isEdited),
+            forwardedFromName:
+              typeof data.forwardedFromName === 'string' ? data.forwardedFromName : '',
+            replyToId: String(data.replyToId || ''),
+            replyToSenderName: String(data.replyToSenderName || ''),
+            replyToPreview: String(data.replyToPreview || ''),
+            isDeleted: Boolean(data.isDeleted),
+            createdAt: data.createdAt || null,
+            updatedAt: data.updatedAt || null,
+          };
+        });
 
-        setChatMessages(list);
+        setRawChatMessages(list);
         setLoadingChat(false);
 
         if (!initialChatLoadedRef.current) {
@@ -990,9 +1045,11 @@ function ForumShell() {
           if (!isViewingChat) {
             const preview =
               newestIncoming.text.trim() ||
-              (newestIncoming.attachmentType === 'image'
-                ? tr('Alituma picha mpya', 'Sent a new photo')
-                : `📄 ${newestIncoming.attachmentName || tr('Alituma nyaraka', 'Sent a document')}`);
+              (newestIncoming.attachmentType === 'audio'
+                ? tr('Alituma ujumbe wa sauti', 'Sent a voice note')
+                : newestIncoming.attachmentType === 'image'
+                  ? tr('Alituma picha mpya', 'Sent a new photo')
+                  : `📄 ${newestIncoming.attachmentName || tr('Alituma nyaraka', 'Sent a document')}`);
             const alertTitle = `${newestIncoming.senderName} · Mchart (Malosha)`;
 
             if (typeof document !== 'undefined' && !document.hidden) {
@@ -1001,7 +1058,7 @@ function ForumShell() {
             void sendPhoneNotification({
               title: alertTitle,
               body: preview.slice(0, 140),
-              url: '/?tab=mchart',
+              url: '/?tab=mchart&view=messages',
               tag: 'malosha-chat-msg',
             });
           }
@@ -1014,7 +1071,15 @@ function ForumShell() {
     );
 
     return () => unsub();
-  }, [authReady, todayKey, user?.uid, showToast, tr]);
+  }, [authReady, user?.uid, showToast, tr]);
+
+  // Apply dynamic disappearing-messages filter in real time
+  const chatMessages = useMemo(() => {
+    const ttlSec = mchartGroupSettings.disappearAfterSeconds || 0;
+    if (ttlSec <= 0) return rawChatMessages;
+    const cutoffMs = nowTickMs - ttlSec * 1000;
+    return rawChatMessages.filter((m) => !m.createdAt || m.createdAt.toMillis() >= cutoffMs);
+  }, [rawChatMessages, mchartGroupSettings.disappearAfterSeconds, nowTickMs]);
 
   // Real-time Mchart Notes listener (signed-in members only)
   useEffect(() => {
@@ -2335,9 +2400,20 @@ function ForumShell() {
     const url = new URL(window.location.href);
     let changed = false;
 
-    // Never keep stale ?mada= query parameter when returning to feed or switching tabs
-    if (!selectedTopicId && url.searchParams.has('mada')) {
+    // Never keep stale ?mada= or ?m= query parameter, and restore root path when closing short links
+    if (!selectedTopicId && (url.searchParams.has('mada') || url.searchParams.has('m'))) {
       url.searchParams.delete('mada');
+      url.searchParams.delete('m');
+      changed = true;
+    }
+    if (!selectedTopicId && /^\/m\/[^/]+\/?$/.test(url.pathname)) {
+      url.pathname = '/';
+      changed = true;
+    }
+    if (!pendingGroupInvite && (url.searchParams.has('g') || url.searchParams.get('join') === 'group' || /^\/g\/[^/]+\/?$/.test(url.pathname))) {
+      url.searchParams.delete('g');
+      if (url.searchParams.get('join') === 'group') url.searchParams.delete('join');
+      if (/^\/g\/[^/]+\/?$/.test(url.pathname)) url.pathname = '/';
       changed = true;
     }
 
@@ -2433,7 +2509,7 @@ function ForumShell() {
     if (changed) {
       window.history.replaceState({}, '', url.toString());
     }
-  }, [selectedTopicId, activeTab, mchartSubTab, selectedPollId]);
+  }, [selectedTopicId, activeTab, mchartSubTab, selectedPollId, pendingGroupInvite]);
 
   useEffect(() => {
     if (!authReady || !selectedTopicId) {
@@ -2566,6 +2642,87 @@ function ForumShell() {
       (sharedTopicFallback?.id === selectedTopicId ? sharedTopicFallback : null),
     [topics, selectedTopicId, sharedTopicFallback]
   );
+
+  const handleShareTopicAction = useCallback(
+    (t: Topic) => {
+      if (normalizeBoardCategory(t.category) === 'Makala') {
+        setShareModalTopic(t);
+        return;
+      }
+      void shareTopic(t, (msg) => showToast(msg), lang);
+    },
+    [lang, showToast]
+  );
+
+  useEffect(() => {
+    if (typeof document === 'undefined' || typeof window === 'undefined') return;
+    const origin = window.location.origin;
+
+    const upsertMeta = (attr: 'name' | 'property', key: string, content: string) => {
+      let el = document.head.querySelector(`meta[${attr}="${key}"]`) as HTMLMetaElement | null;
+      if (!el) {
+        el = document.createElement('meta');
+        el.setAttribute(attr, key);
+        document.head.appendChild(el);
+      }
+      el.setAttribute('content', content);
+    };
+
+    const upsertCanonical = (href: string) => {
+      let el = document.head.querySelector('link[rel="canonical"]') as HTMLLinkElement | null;
+      if (!el) {
+        el = document.createElement('link');
+        el.setAttribute('rel', 'canonical');
+        document.head.appendChild(el);
+      }
+      el.setAttribute('href', href);
+    };
+
+    if (selectedTopic) {
+      const payload = buildMakalaSocialPayload(selectedTopic, origin, lang);
+      const pageTitle = `${payload.title} | Malosha Forums`;
+      const desc =
+        payload.excerpt ||
+        `Soma makala kamili na ${payload.authorName} kwenye Malosha Forums.`;
+
+      document.title = pageTitle;
+      upsertCanonical(payload.shareUrl);
+      upsertMeta('name', 'description', desc);
+      upsertMeta('property', 'og:type', 'article');
+      upsertMeta('property', 'og:url', payload.shareUrl);
+      upsertMeta('property', 'og:title', pageTitle);
+      upsertMeta('property', 'og:description', desc);
+      upsertMeta('property', 'og:image', payload.imageUrl);
+      upsertMeta('property', 'og:image:secure_url', payload.imageUrl);
+      upsertMeta('property', 'og:image:alt', payload.title);
+      upsertMeta('name', 'twitter:card', 'summary_large_image');
+      upsertMeta('name', 'twitter:title', pageTitle);
+      upsertMeta('name', 'twitter:description', desc);
+      upsertMeta('name', 'twitter:image', payload.imageUrl);
+    } else {
+      const fallbackUrl = `${origin}${window.location.pathname || '/'}`;
+      const defaultTitle =
+        lang === 'en'
+          ? 'Malosha Forums — Community Discussion Platform'
+          : 'Malosha Forums — Jukwaa la Mijadala';
+      const defaultDesc =
+        'Mfumo wa kisasa wa mijadala, makala, fursa, video fupi, na Mchart kwa usalama na ufanisi.';
+      const defaultImage = `${origin}/pwa-512x512.png`;
+
+      document.title = defaultTitle;
+      upsertCanonical(fallbackUrl);
+      upsertMeta('name', 'description', defaultDesc);
+      upsertMeta('property', 'og:type', 'website');
+      upsertMeta('property', 'og:url', fallbackUrl);
+      upsertMeta('property', 'og:title', defaultTitle);
+      upsertMeta('property', 'og:description', defaultDesc);
+      upsertMeta('property', 'og:image', defaultImage);
+      upsertMeta('property', 'og:image:secure_url', defaultImage);
+      upsertMeta('name', 'twitter:title', defaultTitle);
+      upsertMeta('name', 'twitter:description', defaultDesc);
+      upsertMeta('name', 'twitter:image', defaultImage);
+    }
+  }, [selectedTopic, lang]);
 
   const handleSignIn = useCallback(
     (reason?: AuthPromptReason | unknown) => {
@@ -3325,7 +3482,7 @@ function ForumShell() {
       <OfflineIndicator />
 
       {!isAuthView && (
-        <div className={isVideoView ? 'hidden md:block' : ''}>
+        <div className={isMchartView ? 'hidden' : isVideoView ? 'hidden md:block' : ''}>
           <Header
             activeTab={activeTab}
             onSelectTab={handleSelectTab}
@@ -3363,9 +3520,11 @@ function ForumShell() {
         className={`flex-1 ${
           isAuthView
             ? 'h-[100dvh] overflow-hidden'
-            : isVideoView
-              ? 'pt-0 md:pt-[var(--malosha-header-h,118px)]'
-              : `pt-[var(--malosha-header-h,118px)] ${isFullStageView ? '' : 'pb-16 md:pb-0'}`
+            : isMchartView
+              ? 'pt-0'
+              : isVideoView
+                ? 'pt-0 md:pt-[var(--malosha-header-h,118px)]'
+                : `pt-[var(--malosha-header-h,118px)] ${isFullStageView ? '' : 'pb-16 md:pb-0'}`
         }`}
       >
         {isSuspended && !isFullStageView && !isAuthView && (
@@ -3423,9 +3582,7 @@ function ForumShell() {
             onBack={returnToFeed}
             onSelectBoard={handleSelectBoard}
             onToggleTopicVote={handleToggleTopicVote}
-            onShareTopic={(t) => {
-              void shareTopic(t, (msg) => showToast(msg), lang);
-            }}
+            onShareTopic={handleShareTopicAction}
             onEditTopic={(t) => {
               if (blockIfSuspended()) return;
               setEditingTopic(t);
@@ -3598,7 +3755,7 @@ function ForumShell() {
             unreadNotesCount={unreadNotesCount}
             readNoteIds={readNoteIds}
             onMarkNoteRead={markNoteRead}
-            onClearedAllChats={() => setChatMessages([])}
+            onClearedAllChats={() => setRawChatMessages([])}
             subTab={mchartSubTab}
             onChangeSubTab={setMchartSubTab}
             activeDirectChatId={activeDirectChatId}
@@ -3609,6 +3766,12 @@ function ForumShell() {
             isAdmin={isAdmin}
             isSuspended={isSuspended}
             keyboardOpen={isMchartView && mobileKeyboardOpen}
+            groupSettings={mchartGroupSettings}
+            groupReadCursors={groupReadCursors}
+            groupUnreadCount={unreadChatCount}
+            onBackToForum={() => handleSelectTab('kijiweni')}
+            pendingGroupInvite={pendingGroupInvite}
+            onDismissGroupInvite={() => setPendingGroupInvite(false)}
             onSignIn={handleSignIn}
             onToast={showToast}
             onRequestConfirm={(opts) => setConfirmState(opts)}
@@ -3674,9 +3837,7 @@ function ForumShell() {
             isSuspended={isSuspended}
             votedTopicIds={votedTopicIds}
             onToggleVote={handleToggleTopicVote}
-            onShareTopic={(t) => {
-              void shareTopic(t, (msg) => showToast(msg), lang);
-            }}
+            onShareTopic={handleShareTopicAction}
             onOpenTopic={openTopicFromFeed}
             onOpenComposer={handleOpenNewTopic}
             onCreateKijiweniPost={handleCreateKijiweniPost}
@@ -3832,6 +3993,12 @@ function ForumShell() {
       )}
 
       {/* Modals */}
+      <MakalaSocialShareModal
+        topic={shareModalTopic}
+        onClose={() => setShareModalTopic(null)}
+        onToast={(msg, kind) => showToast(msg, kind)}
+      />
+
       <TopicComposerModal
         isOpen={composerOpen}
         editingTopic={editingTopic}

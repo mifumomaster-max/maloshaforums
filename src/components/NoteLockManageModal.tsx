@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  ArrowLeft,
   Check,
   Clock,
   Loader2,
@@ -30,12 +31,14 @@ interface NoteLockManageModalProps {
   note: MchartNote | null;
   onClose: () => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
+  inline?: boolean;
 }
 
 export const NoteLockManageModal: React.FC<NoteLockManageModalProps> = ({
   note,
   onClose,
   onToast,
+  inline = false,
 }) => {
   const { tr } = useLanguage();
   const [isLocked, setIsLocked] = useState(true);
@@ -236,34 +239,48 @@ export const NoteLockManageModal: React.FC<NoteLockManageModalProps> = ({
     }
   };
 
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-xs sm:items-center sm:p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="note-lock-modal-title"
-    >
-      <div className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:rounded-2xl">
+  const contentNode = (
+      <div
+        className={
+          inline
+            ? 'flex h-full min-h-0 w-full flex-col overflow-hidden bg-white'
+            : 'flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:rounded-2xl'
+        }
+      >
         {/* Header */}
-        <div className="flex shrink-0 items-center justify-between border-b border-slate-200 px-4 py-3.5 sm:px-6">
-          <div className="min-w-0">
-            <h2
-              id="note-lock-modal-title"
-              className="flex items-center gap-2 font-display text-base font-bold text-[#0E2640] sm:text-lg"
-            >
-              <Lock className="h-4 w-4 shrink-0 text-[#D97706]" aria-hidden="true" />
-              <span className="truncate">{tr('Funga Note & Dhibiti Malipo', 'Lock Note & Payment Access')}</span>
-            </h2>
-            <p className="mt-0.5 truncate text-xs text-slate-500">{note.title}</p>
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-white px-4 py-3 sm:px-6">
+          <div className="flex min-w-0 items-center gap-2.5">
+            {inline && (
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label={tr('Rudi', 'Back')}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700 hover:bg-slate-200"
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </button>
+            )}
+            <div className="min-w-0">
+              <h2
+                id="note-lock-modal-title"
+                className="flex items-center gap-2 font-display text-base font-bold text-[#0E2640] sm:text-lg"
+              >
+                <Lock className="h-4 w-4 shrink-0 text-[#D97706]" aria-hidden="true" />
+                <span className="truncate">{tr('Funga Note & Dhibiti Malipo', 'Lock Note & Payment Access')}</span>
+              </h2>
+              <p className="mt-0.5 truncate text-xs text-slate-500">{note.title}</p>
+            </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={tr('Funga dirisha', 'Close modal')}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100"
-          >
-            <X className="h-5 w-5" />
-          </button>
+          {!inline && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label={tr('Funga dirisha', 'Close modal')}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          )}
         </div>
 
         {/* Scrollable Content */}
@@ -631,6 +648,20 @@ export const NoteLockManageModal: React.FC<NoteLockManageModalProps> = ({
           </section>
         </div>
       </div>
+  );
+
+  if (inline) {
+    return contentNode;
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-xs sm:items-center sm:p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="note-lock-modal-title"
+    >
+      {contentNode}
     </div>
   );
 };

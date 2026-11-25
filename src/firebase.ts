@@ -1,17 +1,21 @@
-import { initializeApp } from 'firebase/app';
+import { getApp, getApps, initializeApp } from 'firebase/app';
 import {
   Auth,
+  GoogleAuthProvider,
+  User,
+  UserCredential,
   browserLocalPersistence,
   browserPopupRedirectResolver,
   getAuth,
-  GoogleAuthProvider,
   indexedDBLocalPersistence,
   initializeAuth,
+  reauthenticateWithPopup,
+  signInWithPopup,
 } from 'firebase/auth';
 import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
-const app = initializeApp(firebaseConfig);
+const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 
 function createPersistentAuth(): Auth {
@@ -28,6 +32,36 @@ function createPersistentAuth(): Auth {
 export const auth = createPersistentAuth();
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
+
+let activeGooglePopupPromise: Promise<UserCredential> | null = null;
+
+export function signInWithGooglePopup(): Promise<UserCredential> {
+  if (activeGooglePopupPromise) {
+    return activeGooglePopupPromise;
+  }
+  const promise = signInWithPopup(auth, googleProvider, browserPopupRedirectResolver).finally(() => {
+    if (activeGooglePopupPromise === promise) {
+      activeGooglePopupPromise = null;
+    }
+  });
+  activeGooglePopupPromise = promise;
+  return promise;
+}
+
+export function reauthenticateWithGooglePopup(user: User): Promise<UserCredential> {
+  if (activeGooglePopupPromise) {
+    return activeGooglePopupPromise;
+  }
+  const promise = reauthenticateWithPopup(user, googleProvider, browserPopupRedirectResolver).finally(
+    () => {
+      if (activeGooglePopupPromise === promise) {
+        activeGooglePopupPromise = null;
+      }
+    }
+  );
+  activeGooglePopupPromise = promise;
+  return promise;
+}
 
 export const ADMIN_EMAIL = 'mifumomaster@gmail.com';
 

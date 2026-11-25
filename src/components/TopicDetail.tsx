@@ -314,7 +314,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                         <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
                         <span>{tr('Shiriki', 'Share')}</span>
                       </button>
-                      {canManageTopic && topic.status === 'open' && (!isSuspended || isAdmin) && (
+                      {canManageTopic && (!isSuspended || isAdmin) && (
                         <button
                           type="button"
                           onClick={() => onEditTopic(topic)}
