@@ -8,15 +8,18 @@ import {
 import {
   FORUM_BOARDS,
   JOB_TYPES,
+  KijiweniFontStyle,
   MAKALA_COVERS,
   MAKALA_SECTIONS,
   Topic,
   TopicCategory,
+  getKijiweniFontMeta,
   getMakalaSection,
   normalizeBoardCategory,
+  normalizeKijiweniFontStyle,
   resolveMakalaCover,
 } from '../types';
-import { uploadImageToCloudinary } from '../services/cloudinaryService';
+import { prepareSharedImageFile, uploadImageToCloudinary } from '../services/cloudinaryService';
 import { autoFormatScholarlyText } from '../utils/editorialFormatter';
 import { parseTagsInput } from '../utils/formatters';
 import {
@@ -32,8 +35,10 @@ import {
   InsertedInlineMedia,
   computeTextAfterInlineMediaInsert,
 } from './InlineMediaInsertModal';
+import { KijiweniDescriptionTools } from './KijiweniDescriptionTools';
 import { MakalaArticleRenderer } from './MakalaArticleRenderer';
 import { MakalaFormatToolbar } from './MakalaFormatToolbar';
+import { RichText } from './RichText';
 import { StudioMakalaPickerBar } from './StudioMakalaPickerBar';
 
 interface TopicComposerModalProps {
@@ -41,19 +46,23 @@ interface TopicComposerModalProps {
   editingTopic: Topic | null;
   defaultCategory?: TopicCategory | 'all';
   onClose: () => void;
-  onSubmit: (data: {
-    title: string;
-    body: string;
-    category: TopicCategory;
-    tags: string[];
-    company?: string;
-    location?: string;
-    jobType?: string;
-    deadline?: string;
-    applyInfo?: string;
-    coverImage?: string;
-    images?: string[];
-  }) => Promise<void>;
+  onSubmit: (
+    data: {
+      title: string;
+      body: string;
+      category: TopicCategory;
+      tags: string[];
+      company?: string;
+      location?: string;
+      jobType?: string;
+      deadline?: string;
+      applyInfo?: string;
+      coverImage?: string;
+      images?: string[];
+      bodyFontStyle?: KijiweniFontStyle;
+    },
+    options?: { silent?: boolean; stayOnFeed?: boolean }
+  ) => Promise<void>;
 }
 
 export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
@@ -79,8 +88,10 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
 
   // Makala (BBC-style article) cover selector / Cloudinary upload
   const [coverImage, setCoverImage] = useState<string>(MAKALA_COVERS[0].path);
-  // Kijiweni & Fursa Cloudinary attachment
+  // Kijiweni & Fursa Cloudinary attachment(s)
   const [kijiweniImage, setKijiweniImage] = useState<string>('');
+  const [kijiweniImages, setKijiweniImages] = useState<string[]>([]);
+  const [publishAsAlbum, setPublishAsAlbum] = useState(true);
   const [pendingResize, setPendingResize] = useState<{
     file: File;
     target: 'kijiweni' | 'makala';
@@ -91,6 +102,8 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
   const bodyTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const [makalaPreview, setMakalaPreview] = useState(false);
+  const [bodyFontStyle, setBodyFontStyle] = useState<KijiweniFontStyle>('sans');
+  const [kijiweniPreview, setKijiweniPreview] = useState(false);
   const [inlineMediaPicker, setInlineMediaPicker] = useState<{
     atIndex: number;
     replaceAt: boolean;
@@ -117,9 +130,18 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
       setDeadline(editingTopic.deadline || '');
       setApplyInfo(editingTopic.applyInfo || '');
       setCoverImage(resolveMakalaCover(editingTopic.coverImage) || MAKALA_COVERS[0].path);
+      const existingList =
+        norm === 'Kijiweni' && Array.isArray(editingTopic.images) && editingTopic.images.length > 0
+          ? editingTopic.images
+          : norm === 'Kijiweni' && editingTopic.coverImage
+            ? [editingTopic.coverImage]
+            : [];
+      setKijiweniImages(existingList);
       setKijiweniImage(
-        norm === 'Kijiweni' || norm === 'Fursa' ? editingTopic.coverImage || '' : ''
+        norm === 'Kijiweni' || norm === 'Fursa' ? existingList[0] || editingTopic.coverImage || '' : ''
       );
+      setBodyFontStyle(normalizeKijiweniFontStyle(editingTopic.bodyFontStyle));
+      setPublishAsAlbum(true);
     } else {
       const initialCat =
         defaultCategory && defaultCategory !== 'all'
@@ -137,8 +159,12 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
       setApplyInfo('');
       setCoverImage(MAKALA_COVERS[0].path);
       setKijiweniImage('');
+      setKijiweniImages([]);
+      setBodyFontStyle('sans');
+      setPublishAsAlbum(true);
     }
     setMakalaPreview(false);
+    setKijiweniPreview(false);
     setInlineMediaPicker(null);
     setSelectedWordCount(0);
     setError('');
@@ -165,6 +191,7 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
   const isMakala = category === 'Makala';
   const isKijiweni = category === 'Kijiweni';
   const maxBodyLength = isMakala ? 16000 : 8000;
+  const activeKijiweniFont = getKijiweniFontMeta(bodyFontStyle);
 
   const syncSelectionCount = () => {
     const el = bodyTextareaRef.current;
@@ -192,6 +219,7 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
     );
     setBody(nextBody);
     setMakalaPreview(false);
+    setKijiweniPreview(false);
     restoreTextareaSelectionAndScroll(el, nextSelStart, nextSelEnd, snapshot);
     window.setTimeout(() => {
       const words = nextBody.slice(nextSelStart, nextSelEnd).trim().split(/\s+/).filter(Boolean).length;
@@ -246,12 +274,41 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
     restoreTextareaSelectionAndScroll(el, clampedPos, clampedPos, snapshot);
   };
 
-  const handleKijiweniFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const handleKijiweniFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
     e.target.value = '';
-    if (!file) return;
+    if (files.length === 0) return;
     setError('');
-    setPendingResize({ file, target: 'kijiweni' });
+
+    if (!isKijiweni || (files.length === 1 && kijiweniImages.length === 0)) {
+      setPendingResize({ file: files[0], target: 'kijiweni' });
+      return;
+    }
+
+    setUploadingImage(true);
+    try {
+      const uploadedUrls: string[] = [];
+      for (const rawFile of files.slice(0, 60)) {
+        const prepared = await prepareSharedImageFile(rawFile);
+        const url = await uploadImageToCloudinary(prepared);
+        uploadedUrls.push(url);
+      }
+      if (uploadedUrls.length > 0) {
+        setKijiweniImages((prev) => {
+          const next = [...prev, ...uploadedUrls];
+          setKijiweniImage(next[0] || '');
+          return next;
+        });
+      }
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : tr('Imeshindwa kupakia baadhi ya picha.', 'Failed uploading some photos.')
+      );
+    } finally {
+      setUploadingImage(false);
+    }
   };
 
   const handleMakalaFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -271,6 +328,12 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
       const url = await uploadImageToCloudinary(resizedFile);
       if (target === 'makala') {
         setCoverImage(url);
+      } else if (isKijiweni) {
+        setKijiweniImages((prev) => {
+          const next = [...prev, url];
+          setKijiweniImage(next[0] || '');
+          return next;
+        });
       } else {
         setKijiweniImage(url);
       }
@@ -291,11 +354,13 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
 
     const cleanTitle = title.trim();
     const cleanBody = body.trim();
-    const hasExistingAlbum =
-      Boolean(editingTopic?.images && editingTopic.images.length > 0) &&
-      kijiweniImage.trim().length >= 10;
-    const isImageOnlyKijiweni =
-      isKijiweni && (kijiweniImage.trim().length >= 10 || hasExistingAlbum);
+    const effectiveKijiweniImages =
+      kijiweniImages.length > 0
+        ? kijiweniImages
+        : kijiweniImage.trim().length >= 10
+          ? [kijiweniImage.trim()]
+          : [];
+    const isImageOnlyKijiweni = isKijiweni && effectiveKijiweniImages.length > 0;
 
     if (!isImageOnlyKijiweni) {
       if (cleanTitle.length < 5 || cleanTitle.length > 140) {
@@ -338,6 +403,31 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
           ].slice(0, 5)
         : parsedTags;
 
+      if (isKijiweni && !editingTopic && effectiveKijiweniImages.length > 1 && !publishAsAlbum) {
+        const total = effectiveKijiweniImages.length;
+        for (let idx = total - 1; idx >= 0; idx--) {
+          const suffix = cleanTitle ? ` (${idx + 1}/${total})` : '';
+          const perTitle = cleanTitle ? `${cleanTitle.slice(0, 140 - suffix.length)}${suffix}` : '';
+          await onSubmit(
+            {
+              title: perTitle,
+              body: cleanBody,
+              category: 'Kijiweni',
+              tags: finalTags,
+              coverImage: effectiveKijiweniImages[idx],
+              images: [effectiveKijiweniImages[idx]],
+              bodyFontStyle,
+            },
+            { silent: idx > 0, stayOnFeed: idx === 0 }
+          );
+          if (idx > 0) {
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+        }
+        onClose();
+        return;
+      }
+
       await onSubmit({
         title: cleanTitle,
         body: cleanBody,
@@ -353,13 +443,12 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
             }
           : {}),
         ...(isMakala ? { coverImage } : {}),
-        ...(isKijiweni || isFursa ? { coverImage: kijiweniImage } : {}),
-        ...(isKijiweni && hasExistingAlbum && editingTopic?.images
+        ...(isFursa ? { coverImage: kijiweniImage } : {}),
+        ...(isKijiweni
           ? {
-              images:
-                kijiweniImage && editingTopic.images[0] !== kijiweniImage
-                  ? [kijiweniImage, ...editingTopic.images.slice(1)]
-                  : editingTopic.images,
+              coverImage: effectiveKijiweniImages[0] || '',
+              images: effectiveKijiweniImages,
+              bodyFontStyle,
             }
           : {}),
       });
@@ -623,30 +712,137 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
             </div>
           )}
 
-          {/* Kijiweni & Fursa Cloudinary Image Attachment */}
+          {/* Kijiweni & Fursa Cloudinary Image Attachment(s) */}
           {(isKijiweni || isFursa) && (
             <div>
               <span className="block text-xs font-semibold text-slate-700">
                 {isFursa
                   ? tr('Picha ya Tangazo la Fursa (Hiari · Cloudinary)', 'Opportunity Image (Optional · Cloudinary)')
-                  : tr('Picha ya Chapisho (Hiari · Cloudinary)', 'Post Image (Optional · Cloudinary)')}
+                  : tr('Picha za Chapisho (Hiari · Picha 1 au Nyingi)', 'Post Photos (Optional · Single or Multiple)')}
               </span>
               <input
                 ref={kijiweniFileRef}
                 type="file"
+                multiple={isKijiweni && !editingTopic}
                 accept="image/jpeg,image/png,image/webp,image/gif"
-                onChange={handleKijiweniFileChange}
+                onChange={(e) => void handleKijiweniFileChange(e)}
                 className="hidden"
               />
               {uploadingImage && (
                 <div className="mt-2 flex items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-[#163A5F]">
                   <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
                   <span>
-                    {tr('Inapakia picha kwenda Cloudinary...', 'Uploading image to Cloudinary...')}
+                    {tr('Inapakia picha kwenda Cloudinary...', 'Uploading image(s) to Cloudinary...')}
                   </span>
                 </div>
               )}
-              {kijiweniImage && !uploadingImage && (
+
+              {isKijiweni && kijiweniImages.length > 0 && !uploadingImage && (
+                <div className="mt-2 space-y-2.5 rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="font-bold text-[#0E2640]">
+                      {tr(`Picha ${kijiweniImages.length} zimepakiwa`, `${kijiweniImages.length} photo(s) attached`)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setKijiweniImages([]);
+                        setKijiweniImage('');
+                      }}
+                      className="font-semibold text-red-600 hover:underline"
+                    >
+                      {tr('Ondoa zote', 'Clear all')}
+                    </button>
+                  </div>
+
+                  {!editingTopic && (
+                    <div
+                      role="radiogroup"
+                      aria-label={tr('Mtindo wa kuchapisha picha', 'Photo publish mode')}
+                      className="grid grid-cols-1 gap-2 sm:grid-cols-2"
+                    >
+                      <button
+                        type="button"
+                        role="radio"
+                        aria-checked={publishAsAlbum}
+                        onClick={() => setPublishAsAlbum(true)}
+                        className={`flex flex-col items-start rounded-lg border px-3 py-2 text-left transition-all ${
+                          publishAsAlbum
+                            ? 'border-[#1D4E89] bg-sky-50/90 ring-1 ring-[#1D4E89]'
+                            : 'border-slate-200 bg-white hover:bg-slate-100'
+                        }`}
+                      >
+                        <span className="text-xs font-bold text-[#0E2640]">
+                          {tr('Zote Katika Post 1 (Auto-Slide)', 'All in 1 Post (Auto-Slide)')}
+                        </span>
+                        <span className="mt-0.5 text-[10.5px] text-slate-600">
+                          {tr('Picha zitaenda pamoja na kuslide zenyewe.', 'Combine all photos into 1 auto-sliding post.')}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        role="radio"
+                        aria-checked={!publishAsAlbum}
+                        onClick={() => setPublishAsAlbum(false)}
+                        className={`flex flex-col items-start rounded-lg border px-3 py-2 text-left transition-all ${
+                          !publishAsAlbum
+                            ? 'border-[#1D4E89] bg-sky-50/90 ring-1 ring-[#1D4E89]'
+                            : 'border-slate-200 bg-white hover:bg-slate-100'
+                        }`}
+                      >
+                        <span className="text-xs font-bold text-[#0E2640]">
+                          {tr(
+                            `Kila Picha Iwe Post Yake (${kijiweniImages.length})`,
+                            `Each Photo Its Own Post (${kijiweniImages.length})`
+                          )}
+                        </span>
+                        <span className="mt-0.5 text-[10.5px] text-slate-600">
+                          {tr('Kila picha itachapishwa kama post yake pekee.', 'Publish each photo as a separate post.')}
+                        </span>
+                      </button>
+                    </div>
+                  )}
+
+                  <div
+                    className={`grid gap-2 ${
+                      kijiweniImages.length === 1 ? 'grid-cols-1' : 'grid-cols-3 sm:grid-cols-4'
+                    }`}
+                  >
+                    {kijiweniImages.map((imgUrl, idx) => (
+                      <div
+                        key={`${imgUrl}-${idx}`}
+                        className="relative overflow-hidden rounded-lg border border-slate-200 bg-white"
+                      >
+                        <img
+                          src={imgUrl}
+                          alt={`${tr('Picha', 'Photo')} ${idx + 1}`}
+                          referrerPolicy="no-referrer"
+                          className={`block w-full bg-slate-100 ${
+                            kijiweniImages.length === 1 ? 'max-h-64 object-contain' : 'h-24 object-cover'
+                          }`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setKijiweniImages((prev) => {
+                              const next = prev.filter((_, i) => i !== idx);
+                              setKijiweniImage(next[0] || '');
+                              return next;
+                            })
+                          }
+                          aria-label={tr('Ondoa picha', 'Remove photo')}
+                          className="absolute top-1.5 right-1.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-red-600/90 text-white hover:bg-red-700"
+                        >
+                          <X className="h-3 w-3" aria-hidden="true" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {isFursa && kijiweniImage && !uploadingImage && (
                 <div className="relative mt-2 overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
                   <img
                     src={kijiweniImage}
@@ -664,6 +860,7 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
                   </button>
                 </div>
               )}
+
               <button
                 type="button"
                 disabled={uploadingImage}
@@ -672,9 +869,13 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
               >
                 <ImagePlus className="h-4 w-4 text-emerald-700" aria-hidden="true" />
                 <span>
-                  {kijiweniImage
-                    ? tr('Badilisha Picha', 'Change Photo')
-                    : tr('Ambatanisha Picha', 'Attach Photo')}
+                  {isKijiweni
+                    ? kijiweniImages.length > 0
+                      ? tr(`Ongeza Picha (${kijiweniImages.length})`, `Add More Photos (${kijiweniImages.length})`)
+                      : tr('Ambatanisha Picha (1 au Nyingi)', 'Attach Photos (Single or Multiple)')
+                    : kijiweniImage
+                      ? tr('Badilisha Picha', 'Change Photo')
+                      : tr('Ambatanisha Picha', 'Attach Photo')}
                 </span>
               </button>
             </div>
@@ -818,6 +1019,10 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
                     <span>{tr('Hakiki (BBC)', 'Preview')}</span>
                   </button>
                 </div>
+              ) : isKijiweni ? (
+                <span className="text-[11px] text-slate-500">
+                  {tr('Chagua mwandiko na mpangilio hapa chini', 'Choose font & scholarly style below')}
+                </span>
               ) : (
                 <span className="text-[11px] text-slate-500">
                   {tr('**nzito** · *italiki* · > nukuu', '**bold** · *italic* · > quote')}
@@ -839,9 +1044,32 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
               />
             )}
 
+            {isKijiweni && (
+              <div className="mt-1.5">
+                <KijiweniDescriptionTools
+                  fontStyle={bodyFontStyle}
+                  onChangeFontStyle={setBodyFontStyle}
+                  previewMode={kijiweniPreview}
+                  onTogglePreview={setKijiweniPreview}
+                  selectedWordCount={selectedWordCount}
+                  onApplyFormat={handleApplyMakalaFormat}
+                  onAutoFormat={handleAutoFormatBody}
+                />
+              </div>
+            )}
+
             {isMakala && makalaPreview ? (
               <div className="min-h-[190px] rounded-b-lg border border-slate-300 bg-white p-4">
                 <MakalaArticleRenderer body={body} previewMode />
+              </div>
+            ) : isKijiweni && kijiweniPreview ? (
+              <div className="min-h-[190px] rounded-b-lg border border-slate-200 bg-white p-4">
+                {title.trim() && (
+                  <h3 className="mb-2 border-b border-slate-100 pb-2 font-display text-lg font-bold leading-snug text-[#0E2640] [text-wrap:balance]">
+                    {title.trim()}
+                  </h3>
+                )}
+                <RichText content={body} fontStyle={bodyFontStyle} scholarly />
               </div>
             ) : (
               <textarea
@@ -851,9 +1079,10 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
                 maxLength={maxBodyLength}
                 value={body}
                 onChange={handleBodyChange}
-                onSelect={isMakala ? syncSelectionCount : undefined}
-                onKeyUp={isMakala ? syncSelectionCount : undefined}
-                onMouseUp={isMakala ? syncSelectionCount : undefined}
+                onSelect={isMakala || isKijiweni ? syncSelectionCount : undefined}
+                onKeyUp={isMakala || isKijiweni ? syncSelectionCount : undefined}
+                onMouseUp={isMakala || isKijiweni ? syncSelectionCount : undefined}
+                style={isKijiweni ? { fontFamily: activeKijiweniFont.fontFamilyCss } : undefined}
                 placeholder={
                   isFursa
                     ? tr(
@@ -865,10 +1094,17 @@ export const TopicComposerModal: React.FC<TopicComposerModalProps> = ({
                           'Andika uchambuzi, chagua maneno kuyabadilisha nukuu/orodha/rangi, au andika @ kuweka picha/video...',
                           'Write your analysis, select text to format quotes/bullets/colors, or type @ to insert media...'
                         )
-                      : tr('Shiriki mawazo yako na jamii...', 'Share your thoughts with the community...')
+                      : tr(
+                          'Shiriki mawazo yako, chagua mwandiko unaovutia hapo juu, au tumia Panga Kisomi...',
+                          'Share your thoughts, choose an expressive font above, or use Auto-Format...'
+                        )
                 }
-                className={`w-full border border-slate-300 bg-white p-3.5 text-sm leading-relaxed text-slate-900 focus:border-[#1D4E89] focus:outline-none ${
-                  isMakala ? 'rounded-b-lg' : 'mt-1.5 rounded-lg'
+                className={`w-full border border-slate-300 bg-white p-3.5 leading-relaxed text-slate-900 focus:border-[#1D4E89] focus:outline-none ${
+                  isKijiweni
+                    ? `rounded-b-lg border-slate-200 ${activeKijiweniFont.bodySizeClass}`
+                    : isMakala
+                      ? 'rounded-b-lg text-sm'
+                      : 'mt-1.5 rounded-lg text-sm'
                 }`}
               />
             )}

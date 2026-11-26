@@ -23,7 +23,7 @@ import {
   togglePollCommentLike,
 } from '../services/pollService';
 import { AuthPromptReason, Poll, PollComment } from '../types';
-import { Avatar, OnlineStatusPill } from './Avatar';
+import { AuthorName, Avatar, OnlineStatusPill } from './Avatar';
 import { renderLinkedInline } from './RichText';
 import { AuthorVerificationBadge } from './VerificationBadge';
 
@@ -535,7 +535,7 @@ export const PollCommentsThread: React.FC<PollCommentsThreadProps> = ({
                 >
                   <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                     <span className={`text-[13px] font-bold ${nameColor}`}>
-                      {comment.authorName}
+                      <AuthorName uid={comment.authorId} fallback={comment.authorName} />
                     </span>
                     <AuthorVerificationBadge uid={comment.authorId} size="xs" />
                     <OnlineStatusPill uid={comment.authorId} />

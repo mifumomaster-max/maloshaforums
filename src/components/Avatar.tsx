@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useLanguage } from '../context/LanguageContext';
+import { useAuthorIdentity } from '../context/UserBadgesContext';
 import { useUserOnline } from '../context/UserPresenceContext';
 import { optimizeCloudinaryUrl } from '../services/cloudinaryService';
 import { getInitials } from '../utils/formatters';
@@ -12,6 +13,14 @@ interface AvatarProps {
   showOnlineIndicator?: boolean;
   isOnline?: boolean;
 }
+
+export const AuthorName: React.FC<{
+  uid?: string | null;
+  fallback: string;
+}> = ({ uid, fallback }) => {
+  const { displayName } = useAuthorIdentity(uid, fallback, '');
+  return <>{displayName}</>;
+};
 
 export const OnlineStatusPill: React.FC<{
   uid?: string | null;
@@ -51,6 +60,14 @@ export const Avatar: React.FC<AvatarProps> = ({
   isOnline: isOnlineProp,
 }) => {
   const [failed, setFailed] = useState(false);
+  const resolvedIdentity = useAuthorIdentity(uid, name, photoURL || '');
+  const resolvedName = uid ? resolvedIdentity.displayName : name;
+  const resolvedPhotoURL = uid ? resolvedIdentity.photoURL : photoURL;
+
+  useEffect(() => {
+    setFailed(false);
+  }, [resolvedPhotoURL]);
+
   const contextOnline = useUserOnline(showOnlineIndicator ? uid : null);
   const online =
     typeof isOnlineProp === 'boolean'
@@ -71,13 +88,13 @@ export const Avatar: React.FC<AvatarProps> = ({
         ? 'h-3 w-3 right-0 bottom-0'
         : 'h-2.5 w-2.5 right-0 bottom-0';
 
-  const optimizedUrl = optimizeCloudinaryUrl(photoURL, 128);
+  const optimizedUrl = optimizeCloudinaryUrl(resolvedPhotoURL, 128);
 
   const imgOrInitials =
     optimizedUrl && !failed ? (
       <img
         src={optimizedUrl}
-        alt={name}
+        alt={resolvedName}
         loading="lazy"
         decoding="async"
         referrerPolicy="no-referrer"
@@ -89,7 +106,7 @@ export const Avatar: React.FC<AvatarProps> = ({
         aria-hidden="true"
         className={`${sizeClass} inline-flex shrink-0 items-center justify-center rounded-full border border-stone-200 bg-stone-100 font-semibold text-stone-700`}
       >
-        {getInitials(name)}
+        {getInitials(resolvedName)}
       </span>
     );
 

@@ -106,8 +106,14 @@ export const VerificationBadge: React.FC<VerificationBadgeProps> = ({
         aria-hidden="true"
         className={`${iconSizeClass} shrink-0`}
       >
-        <path d={STARBURST_PATH} fill={meta.fillHex} />
-        <path d={CHECKMARK_PATH} fill="#FFFFFF" />
+        <path
+          d={STARBURST_PATH}
+          fill={meta.fillHex}
+          stroke={meta.strokeHex}
+          strokeWidth={meta.strokeHex ? 4 : 0}
+          strokeLinejoin="round"
+        />
+        <path d={CHECKMARK_PATH} fill={meta.checkHex || '#FFFFFF'} />
       </svg>
 
       {showLabel && (

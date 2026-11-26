@@ -17,7 +17,8 @@ import {
 import { AuthPromptReason, Topic } from '../types';
 import { optimizeCloudinaryUrl } from '../services/cloudinaryService';
 import { useLanguage } from '../context/LanguageContext';
-import { Avatar } from './Avatar';
+import { useUserPresence } from '../context/UserPresenceContext';
+import { AuthorName, Avatar } from './Avatar';
 import { FacebookCommentsThread } from './FacebookCommentsThread';
 import { LinkedText, RichText, extractFirstUrl } from './RichText';
 import { AuthorVerificationBadge } from './VerificationBadge';
@@ -68,10 +69,12 @@ export const FursaPostCard: React.FC<FursaPostCardProps> = ({
   onRequestConfirm,
 }) => {
   const { tr, formatTime, getJobTypeLabel } = useLanguage();
+  const { getTopicCommentTypingUsers } = useUserPresence();
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [autoFocusComment, setAutoFocusComment] = useState(false);
   const [expandedText, setExpandedText] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
+  const typingUsers = getTopicCommentTypingUsers(post.id);
 
   const isLongPost = post.body.length > 420;
   const displayedBody =
@@ -113,7 +116,12 @@ export const FursaPostCard: React.FC<FursaPostCardProps> = ({
               aria-label={tr(`Tazama wasifu wa ${post.authorName}`, `View ${post.authorName}'s profile`)}
               className="shrink-0 rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1D4E89]"
             >
-              <Avatar name={post.authorName} photoURL={post.authorPhoto} size="md" />
+              <Avatar
+                name={post.authorName}
+                photoURL={post.authorPhoto}
+                uid={post.authorId}
+                size="md"
+              />
             </button>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
@@ -128,7 +136,7 @@ export const FursaPostCard: React.FC<FursaPostCardProps> = ({
                   }
                   className="truncate text-left text-[15px] font-bold text-slate-900 hover:text-[#1D4E89] hover:underline"
                 >
-                  {post.authorName}
+                  <AuthorName uid={post.authorId} fallback={post.authorName} />
                 </button>
                 <AuthorVerificationBadge uid={post.authorId} size="sm" />
                 {post.isPinned && (
@@ -306,81 +314,92 @@ export const FursaPostCard: React.FC<FursaPostCardProps> = ({
           </p>
         )}
 
-        {/* Engagement Summary */}
-        <div className="mt-3 flex items-center justify-between border-t border-slate-100 py-2 text-xs text-slate-500">
-          <span className="inline-flex items-center gap-1.5 tabular-nums">
-            <Heart
-              className={`h-3.5 w-3.5 ${
-                post.upvotesCount > 0 ? 'fill-rose-600 text-rose-600' : 'text-slate-400'
-              }`}
-              aria-hidden="true"
-            />
-            <span>
-              {post.upvotesCount === 0
-                ? tr('Kuwa wa kwanza kupenda', 'Be the first to like')
-                : post.upvotesCount === 1
-                  ? tr('Mtu 1 amependa', '1 person liked this')
-                  : tr(
-                      `Watu ${post.upvotesCount} wamependa`,
-                      `${post.upvotesCount} people liked this`
-                    )}
-            </span>
-          </span>
-
+        {typingUsers.length > 0 && !commentsOpen && (
           <button
             type="button"
             onClick={() => handleToggleComments(false)}
-            className="font-medium text-slate-600 hover:text-slate-900 hover:underline tabular-nums"
+            className="mt-2.5 flex w-full items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50/90 px-3 py-1.5 text-left text-xs font-medium text-emerald-900 transition-colors hover:bg-emerald-100/80"
           >
-            {post.repliesCount === 0
-              ? tr('Hakuna maswali / maoni', 'No questions / comments')
-              : post.repliesCount === 1
-                ? tr('Maoni 1', '1 comment')
-                : tr(`Maoni ${post.repliesCount}`, `${post.repliesCount} comments`)}
+            <span className="inline-flex items-center gap-0.5 shrink-0" aria-hidden="true">
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-600 [animation-delay:-0.25s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-600 [animation-delay:-0.12s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-600" />
+            </span>
+            <span className="truncate">
+              {typingUsers.length === 1
+                ? typingUsers[0].replyingToName
+                  ? tr(
+                      `${typingUsers[0].displayName} anamjibu ${typingUsers[0].replyingToName}...`,
+                      `${typingUsers[0].displayName} is replying to ${typingUsers[0].replyingToName}...`
+                    )
+                  : tr(
+                      `${typingUsers[0].displayName} anaandika maoni...`,
+                      `${typingUsers[0].displayName} is typing a comment...`
+                    )
+                : tr(
+                    `${typingUsers[0].displayName} na wengine ${typingUsers.length - 1} wanaandika...`,
+                    `${typingUsers[0].displayName} and ${typingUsers.length - 1} others are typing...`
+                  )}
+            </span>
           </button>
-        </div>
+        )}
       </div>
 
-      {/* Social Action Bar */}
-      <div className="grid grid-cols-3 border-t border-slate-100 px-2 py-1 text-xs sm:px-3">
+      {/* Social Action Bar with Counts Directly on Icons */}
+      <div className="mt-3 grid grid-cols-3 border-t border-slate-100 px-2 py-1 text-xs sm:px-3">
         <button
           type="button"
           onClick={() => onToggleVote(post)}
           aria-pressed={hasVoted}
-          className={`inline-flex min-h-[42px] items-center justify-center gap-2 rounded-lg font-semibold transition-colors ${
+          aria-label={tr(`Penda (${post.upvotesCount})`, `Like (${post.upvotesCount})`)}
+          className={`inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg font-semibold transition-colors ${
             hasVoted
               ? 'text-rose-600 hover:bg-rose-50/70'
               : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
           }`}
         >
           <Heart
-            className={`h-4 w-4 ${hasVoted ? 'fill-rose-600 text-rose-600' : ''}`}
+            className={`h-4 w-4 shrink-0 ${hasVoted ? 'fill-rose-600 text-rose-600' : ''}`}
             aria-hidden="true"
           />
           <span>{tr('Penda', 'Like')}</span>
+          <span className="font-mono text-[11px] font-bold tabular-nums opacity-90">
+            {post.upvotesCount}
+          </span>
         </button>
 
         <button
           type="button"
           onClick={() => handleToggleComments(true)}
           aria-expanded={commentsOpen}
-          className={`inline-flex min-h-[42px] items-center justify-center gap-2 rounded-lg font-semibold transition-colors ${
+          aria-label={tr(`Maoni (${post.repliesCount})`, `Comments (${post.repliesCount})`)}
+          className={`inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg font-semibold transition-colors ${
             commentsOpen
               ? 'bg-sky-50 text-[#1D4E89]'
               : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
           }`}
         >
-          <MessageCircle className="h-4 w-4" aria-hidden="true" />
+          <MessageCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span>{tr('Maoni', 'Comment')}</span>
+          <span className="font-mono text-[11px] font-bold tabular-nums opacity-90">
+            {post.repliesCount}
+          </span>
         </button>
 
         <button
           type="button"
           onClick={() => onShareTopic(post)}
-          className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-lg font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
+          aria-label={tr(
+            `Shiriki (${post.sharesCount ?? 0})`,
+            `Share (${post.sharesCount ?? 0})`
+          )}
+          className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
         >
-          <Share2 className="h-4 w-4" aria-hidden="true" />
+          <Share2 className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span>{tr('Shiriki', 'Share')}</span>
+          <span className="font-mono text-[11px] font-bold tabular-nums opacity-90">
+            {post.sharesCount ?? 0}
+          </span>
         </button>
       </div>
 

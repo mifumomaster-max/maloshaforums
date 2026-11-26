@@ -10,7 +10,9 @@ import {
 import {
   AlertTriangle,
   Award,
+  Banknote,
   BellRing,
+  Calendar,
   Camera,
   Check,
   CheckCircle2,
@@ -21,6 +23,7 @@ import {
   CreditCard,
   Eye,
   EyeOff,
+  FileText,
   Globe,
   Heart,
   Images,
@@ -30,6 +33,7 @@ import {
   Lock,
   MessageCircle,
   PenTool,
+  Share2,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
@@ -55,6 +59,7 @@ import {
   COMMUNITY_SAFETY_RULES,
   ContentRetentionPeriod,
   ContentRetentionSettings,
+  MONETIZATION_PAYOUT_RATES,
   MONETIZATION_REQUIREMENTS,
   PrimaryBoard,
   Report,
@@ -140,6 +145,12 @@ interface SafetyGuidelinesViewProps {
 
 const BADGE_LEGEND_ORDER: VerificationBadgeType[] = [
   'owner',
+  'black',
+  'white',
+  'gray',
+  'gold',
+  'silver',
+  'copper',
   'government',
   'organization',
   'journalist',
@@ -223,7 +234,10 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
     }
     return 'profile';
   });
-  const [openAccordions, setOpenAccordions] = useState<Record<string, boolean>>({});
+  const [openAccordions, setOpenAccordions] = useState<Record<string, boolean>>({
+    profile_edit: true,
+  });
+  const [openPayoutsSignal, setOpenPayoutsSignal] = useState(0);
 
   const selectProfileTab = (next: 'profile' | 'poster' | 'cartoon') => {
     setProfileTab(next);
@@ -404,9 +418,12 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
     setSavedNotice('');
     try {
       await onSaveProfile(displayName, bio, phone);
-      setSavedNotice(
-        tr('Wasifu wako umehifadhiwa kikamilifu.', 'Your profile has been saved.')
+      const msg = tr(
+        'Wasifu wako umehifadhiwa na kubadilishwa kwenye akaunti yako yote.',
+        'Your profile has been saved and updated across your entire account.'
       );
+      setSavedNotice(msg);
+      onToast(msg);
     } catch (err) {
       setError(
         err instanceof Error
@@ -1306,53 +1323,104 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
             </section>
           )}
 
-          {/* Accordion 3: Creator Metrics & Monetization Rules */}
+          {/* Accordion 3: Creator Metrics, Hard Monetization Rules & Monthly Payouts */}
           {userUid && userProfile && (() => {
             const ownMetrics = computeAuthorMetrics(
               topics,
               userUid,
               userProfile.followersCount || 0,
               videos,
-              friendsCount
+              friendsCount,
+              {
+                repliesGivenCount: userProfile.repliesCount || 0,
+                accountCreatedAt: userProfile.createdAt,
+                verificationBadge: userProfile.verificationBadge,
+                accountStatus: userProfile.accountStatus,
+                emailVerified: userEmailVerified,
+                hasProfilePhoto: Boolean(userProfile.photoURL),
+                bioLength: (userProfile.bio || '').trim().length,
+              }
             );
             const criteria = [
               {
                 label: tr('Wafuasi (Followers)', 'Followers'),
-                current: ownMetrics.followersCount,
-                target: MONETIZATION_REQUIREMENTS.minFollowers,
+                currentText: ownMetrics.followersCount.toLocaleString(),
+                targetText: MONETIZATION_REQUIREMENTS.minFollowers.toLocaleString(),
                 met: ownMetrics.followersCount >= MONETIZATION_REQUIREMENTS.minFollowers,
               },
               {
-                label: tr('Marafiki (Friends)', 'Friends'),
-                current: ownMetrics.friendsCount,
-                target: MONETIZATION_REQUIREMENTS.minFriends,
+                label: tr('Marafiki (Friends / DM)', 'Friends / Direct Contacts'),
+                currentText: ownMetrics.friendsCount.toLocaleString(),
+                targetText: MONETIZATION_REQUIREMENTS.minFriends.toLocaleString(),
                 met: ownMetrics.friendsCount >= MONETIZATION_REQUIREMENTS.minFriends,
               },
               {
-                label: tr('Video zilizopakiwa', 'Videos Posted'),
-                current: ownMetrics.videosCount,
-                target: MONETIZATION_REQUIREMENTS.minVideos,
-                met: ownMetrics.videosCount >= MONETIZATION_REQUIREMENTS.minVideos,
-              },
-              {
-                label: tr('Machapisho (Posts)', 'Posts'),
-                current: ownMetrics.postsCount,
-                target: MONETIZATION_REQUIREMENTS.minPosts,
+                label: tr('Machapisho Yote (Posts)', 'Total Posts'),
+                currentText: ownMetrics.postsCount.toLocaleString(),
+                targetText: MONETIZATION_REQUIREMENTS.minPosts.toLocaleString(),
                 met: ownMetrics.postsCount >= MONETIZATION_REQUIREMENTS.minPosts,
               },
               {
-                label: tr('Likes ulizopata', 'Likes Received'),
-                current: ownMetrics.totalLikesReceived,
-                target: MONETIZATION_REQUIREMENTS.minLikes,
+                label: tr('Makala za Kina (Articles)', 'In-Depth Articles (Makala)'),
+                currentText: ownMetrics.articlesCount.toLocaleString(),
+                targetText: MONETIZATION_REQUIREMENTS.minArticles.toLocaleString(),
+                met: ownMetrics.articlesCount >= MONETIZATION_REQUIREMENTS.minArticles,
+              },
+              {
+                label: tr('Video Zilizopakiwa', 'Videos Posted'),
+                currentText: ownMetrics.videosCount.toLocaleString(),
+                targetText: MONETIZATION_REQUIREMENTS.minVideos.toLocaleString(),
+                met: ownMetrics.videosCount >= MONETIZATION_REQUIREMENTS.minVideos,
+              },
+              {
+                label: tr('Likes Ulizopokea', 'Likes Received'),
+                currentText: ownMetrics.totalLikesReceived.toLocaleString(),
+                targetText: MONETIZATION_REQUIREMENTS.minLikes.toLocaleString(),
                 met: ownMetrics.totalLikesReceived >= MONETIZATION_REQUIREMENTS.minLikes,
               },
               {
-                label: tr('Maoni uliyopokea', 'Comments Received'),
-                current: ownMetrics.totalCommentsReceived,
-                target: MONETIZATION_REQUIREMENTS.minComments,
+                label: tr('Maoni Uliyopokea', 'Comments Received'),
+                currentText: ownMetrics.totalCommentsReceived.toLocaleString(),
+                targetText: MONETIZATION_REQUIREMENTS.minComments.toLocaleString(),
                 met: ownMetrics.totalCommentsReceived >= MONETIZATION_REQUIREMENTS.minComments,
               },
+              {
+                label: tr('Shares / Kushirikiwa', 'Shares Received'),
+                currentText: ownMetrics.totalSharesReceived.toLocaleString(),
+                targetText: MONETIZATION_REQUIREMENTS.minShares.toLocaleString(),
+                met: ownMetrics.totalSharesReceived >= MONETIZATION_REQUIREMENTS.minShares,
+              },
+              {
+                label: tr('Majibu Uliyoandika (Replies)', 'Replies Written'),
+                currentText: ownMetrics.repliesGivenCount.toLocaleString(),
+                targetText: MONETIZATION_REQUIREMENTS.minRepliesGiven.toLocaleString(),
+                met: ownMetrics.repliesGivenCount >= MONETIZATION_REQUIREMENTS.minRepliesGiven,
+              },
+              {
+                label: tr('Umri wa Akaunti (Siku)', 'Account Age (Days)'),
+                currentText: `${ownMetrics.accountAgeDays.toLocaleString()} ${tr('siku', 'd')}`,
+                targetText: `${MONETIZATION_REQUIREMENTS.minAccountDays.toLocaleString()} ${tr('siku', 'd')}`,
+                met: ownMetrics.accountAgeDays >= MONETIZATION_REQUIREMENTS.minAccountDays,
+              },
+              {
+                label: tr('Beji Rasmi ya Uthibitisho', 'Official Verification Badge'),
+                currentText: ownMetrics.hasVerificationBadge
+                  ? getBadgeLabel(userProfile.verificationBadge, true)
+                  : tr('Hana', 'None'),
+                targetText: tr('Inahitajika', 'Required'),
+                met: ownMetrics.hasVerificationBadge,
+              },
+              {
+                label: tr('Email Verified, Picha, Bio & Rekodi Safi', 'Verified Email, Profile & Clean Standing'),
+                currentText: ownMetrics.hasCleanVerifiedAccount
+                  ? tr('Kamili', 'Verified')
+                  : tr('Haijakamilika', 'Incomplete'),
+                targetText: tr('Kamili (100%)', '100% Clean'),
+                met: ownMetrics.hasCleanVerifiedAccount,
+              },
             ];
+
+            const canSeeMonthlyPayout = isAdmin || ownMetrics.isEligibleForMonetization;
 
             return (
               <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
@@ -1368,15 +1436,23 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
                     </span>
                     <div className="min-w-0">
                       <h2 className="truncate font-display text-sm font-bold text-slate-900 sm:text-base">
-                        {tr('Takwimu Zako & Masharti ya Malipo', 'Your Stats & Monetization Progress')}
+                        {tr('Masharti Magumu ya Kulipwa & Kiasi cha Pesa', 'Creator Payout Criteria & Monthly Earnings')}
                       </h2>
                       <p className="truncate text-xs text-slate-500 tabular-nums">
                         {ownMetrics.isEligibleForMonetization
-                          ? tr('Umekidhi masharti yote ya malipo!', 'Eligible for Creator Payouts!')
-                          : tr(
-                              `${ownMetrics.progressPercent}% imefikiwa · Wafuasi ${ownMetrics.followersCount.toLocaleString()}, Video ${ownMetrics.videosCount.toLocaleString()}, Post ${ownMetrics.postsCount.toLocaleString()}`,
-                              `${ownMetrics.progressPercent}% complete · ${ownMetrics.followersCount.toLocaleString()} Followers, ${ownMetrics.videosCount.toLocaleString()} Videos, ${ownMetrics.postsCount.toLocaleString()} Posts`
-                            )}
+                          ? tr(
+                              `Umefuzu vigezo vyote ${ownMetrics.totalCriteriaCount}/${ownMetrics.totalCriteriaCount} · Malipo ya Mwezi: TZS ${ownMetrics.monthlyTotalPayoutTzs.toLocaleString()}`,
+                              `All ${ownMetrics.totalCriteriaCount}/${ownMetrics.totalCriteriaCount} met · Monthly Payout: TZS ${ownMetrics.monthlyTotalPayoutTzs.toLocaleString()}`
+                            )
+                          : isAdmin
+                            ? tr(
+                                `Vigezo ${ownMetrics.metCriteriaCount}/${ownMetrics.totalCriteriaCount} (${ownMetrics.progressPercent}%) · Muonekano wa Mmiliki: Makadirio TZS ${ownMetrics.projectedMonthlyWithBaseTzs.toLocaleString()}/mwezi`,
+                                `Criteria ${ownMetrics.metCriteriaCount}/${ownMetrics.totalCriteriaCount} (${ownMetrics.progressPercent}%) · Owner View: Est. TZS ${ownMetrics.projectedMonthlyWithBaseTzs.toLocaleString()}/mo`
+                              )
+                            : tr(
+                                `Vigezo ${ownMetrics.metCriteriaCount}/${ownMetrics.totalCriteriaCount} (${ownMetrics.progressPercent}%) · Malipo ya mwezi yamefungwa mpaka ukamilishe vyote 12`,
+                                `${ownMetrics.metCriteriaCount}/${ownMetrics.totalCriteriaCount} criteria (${ownMetrics.progressPercent}%) · Monthly payouts locked until all 12 met`
+                              )}
                       </p>
                     </div>
                   </div>
@@ -1389,83 +1465,99 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
                 </button>
 
                 {openAccordions.stats_monetization && (
-                  <div className="border-t border-slate-100 p-4 sm:p-5">
+                  <div className="space-y-4 border-t border-slate-100 p-4 sm:p-5">
+                    {/* Header Progress & Status */}
                     <div className="rounded-xl border border-amber-200 bg-gradient-to-br from-amber-50/70 via-white to-sky-50/40 p-4 sm:p-5">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-xs font-bold tracking-wide text-slate-900 uppercase">
-                          {tr('Masharti ya Wabunifu Kuanza Kulipwa', 'Creator Payout Eligibility')}
-                        </span>
+                        <div>
+                          <span className="text-xs font-bold tracking-wide text-slate-900 uppercase">
+                            {tr(
+                              'Masharti 12 Magumu ya Kuanza Kulipwa',
+                              '12 Strict Creator Payout Requirements'
+                            )}
+                          </span>
+                          <p className="mt-0.5 text-[11px] text-slate-600">
+                            {tr(
+                              'Lazima ukamilishe vigezo vyote 12 kwa asilimia 100% ili mfumo uanze kuhesabu na kuonyesha malipo yako ya mwezi.',
+                              'All 12 strict thresholds must reach 100% before monthly payouts unlock and become visible.'
+                            )}
+                          </p>
+                        </div>
                         <span
-                          className={`rounded-md px-2.5 py-0.5 text-[11px] font-bold tabular-nums ${
+                          className={`rounded-md px-2.5 py-1 text-[11px] font-bold tabular-nums ${
                             ownMetrics.isEligibleForMonetization
                               ? 'bg-emerald-100 text-emerald-800'
                               : 'bg-amber-100 text-amber-900'
                           }`}
                         >
                           {ownMetrics.isEligibleForMonetization
-                            ? tr('Umekidhi Masharti Yote ya Malipo!', 'Eligible for Creator Payouts!')
-                            : `${ownMetrics.progressPercent}% ${tr('imefikiwa', 'complete')}`}
+                            ? tr('Amekidhi Vigezo Vyote 12/12!', 'Eligible 12/12 Complete!')
+                            : `${ownMetrics.metCriteriaCount}/${ownMetrics.totalCriteriaCount} · ${ownMetrics.progressPercent}%`}
                         </span>
                       </div>
 
-                      <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
-                        <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                      {/* Top KPI Row */}
+                      <div className="mt-3.5 grid grid-cols-2 gap-2.5 sm:grid-cols-4 lg:grid-cols-8">
+                        <div className="rounded-lg border border-slate-200 bg-white p-2.5 text-center">
                           <Users className="mx-auto h-4 w-4 text-[#1D4E89]" aria-hidden="true" />
-                          <p className="mt-1 font-display text-lg font-bold text-slate-900 tabular-nums">
+                          <p className="mt-1 font-display text-base font-bold text-slate-900 tabular-nums">
                             {ownMetrics.followersCount.toLocaleString()}
                           </p>
-                          <p className="text-[11px] font-medium text-slate-600">
-                            {tr('Wafuasi', 'Followers')}
-                          </p>
+                          <p className="text-[10.5px] font-medium text-slate-600">{tr('Wafuasi', 'Followers')}</p>
                         </div>
-                        <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                        <div className="rounded-lg border border-slate-200 bg-white p-2.5 text-center">
                           <UserPlus className="mx-auto h-4 w-4 text-sky-600" aria-hidden="true" />
-                          <p className="mt-1 font-display text-lg font-bold text-slate-900 tabular-nums">
+                          <p className="mt-1 font-display text-base font-bold text-slate-900 tabular-nums">
                             {ownMetrics.friendsCount.toLocaleString()}
                           </p>
-                          <p className="text-[11px] font-medium text-slate-600">
-                            {tr('Marafiki', 'Friends')}
-                          </p>
+                          <p className="text-[10.5px] font-medium text-slate-600">{tr('Marafiki', 'Friends')}</p>
                         </div>
-                        <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
-                          <VideoIcon className="mx-auto h-4 w-4 text-purple-600" aria-hidden="true" />
-                          <p className="mt-1 font-display text-lg font-bold text-slate-900 tabular-nums">
-                            {ownMetrics.videosCount.toLocaleString()}
-                          </p>
-                          <p className="text-[11px] font-medium text-slate-600">
-                            {tr('Video', 'Videos')}
-                          </p>
-                        </div>
-                        <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                        <div className="rounded-lg border border-slate-200 bg-white p-2.5 text-center">
                           <Sparkles className="mx-auto h-4 w-4 text-amber-600" aria-hidden="true" />
-                          <p className="mt-1 font-display text-lg font-bold text-slate-900 tabular-nums">
+                          <p className="mt-1 font-display text-base font-bold text-slate-900 tabular-nums">
                             {ownMetrics.postsCount.toLocaleString()}
                           </p>
-                          <p className="text-[11px] font-medium text-slate-600">
-                            {tr('Post', 'Posts')}
-                          </p>
+                          <p className="text-[10.5px] font-medium text-slate-600">{tr('Post', 'Posts')}</p>
                         </div>
-                        <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                        <div className="rounded-lg border border-slate-200 bg-white p-2.5 text-center">
+                          <FileText className="mx-auto h-4 w-4 text-indigo-600" aria-hidden="true" />
+                          <p className="mt-1 font-display text-base font-bold text-slate-900 tabular-nums">
+                            {ownMetrics.articlesCount.toLocaleString()}
+                          </p>
+                          <p className="text-[10.5px] font-medium text-slate-600">{tr('Makala', 'Articles')}</p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-white p-2.5 text-center">
+                          <VideoIcon className="mx-auto h-4 w-4 text-purple-600" aria-hidden="true" />
+                          <p className="mt-1 font-display text-base font-bold text-slate-900 tabular-nums">
+                            {ownMetrics.videosCount.toLocaleString()}
+                          </p>
+                          <p className="text-[10.5px] font-medium text-slate-600">{tr('Video', 'Videos')}</p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-white p-2.5 text-center">
                           <Heart className="mx-auto h-4 w-4 text-rose-600" aria-hidden="true" />
-                          <p className="mt-1 font-display text-lg font-bold text-slate-900 tabular-nums">
+                          <p className="mt-1 font-display text-base font-bold text-slate-900 tabular-nums">
                             {ownMetrics.totalLikesReceived.toLocaleString()}
                           </p>
-                          <p className="text-[11px] font-medium text-slate-600">
-                            {tr('Likes', 'Likes')}
-                          </p>
+                          <p className="text-[10.5px] font-medium text-slate-600">{tr('Likes', 'Likes')}</p>
                         </div>
-                        <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                        <div className="rounded-lg border border-slate-200 bg-white p-2.5 text-center">
                           <MessageCircle className="mx-auto h-4 w-4 text-emerald-700" aria-hidden="true" />
-                          <p className="mt-1 font-display text-lg font-bold text-slate-900 tabular-nums">
+                          <p className="mt-1 font-display text-base font-bold text-slate-900 tabular-nums">
                             {ownMetrics.totalCommentsReceived.toLocaleString()}
                           </p>
-                          <p className="text-[11px] font-medium text-slate-600">
-                            {tr('Maoni', 'Comments')}
+                          <p className="text-[10.5px] font-medium text-slate-600">{tr('Maoni', 'Comments')}</p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-white p-2.5 text-center">
+                          <Share2 className="mx-auto h-4 w-4 text-cyan-700" aria-hidden="true" />
+                          <p className="mt-1 font-display text-base font-bold text-slate-900 tabular-nums">
+                            {ownMetrics.totalSharesReceived.toLocaleString()}
                           </p>
+                          <p className="text-[10.5px] font-medium text-slate-600">{tr('Shares', 'Shares')}</p>
                         </div>
                       </div>
 
-                      <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-amber-100">
+                      {/* Progress Bar */}
+                      <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-amber-100">
                         <div
                           className={`h-full rounded-full transition-all duration-300 ${
                             ownMetrics.isEligibleForMonetization ? 'bg-emerald-600' : 'bg-amber-500'
@@ -1474,20 +1566,14 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
                         />
                       </div>
 
-                      <p className="mt-2.5 text-[11px] leading-relaxed text-slate-600">
-                        {tr(
-                          'Masharti rasmi ya kuanza kulipwa: Wafuasi 1,000+, Marafiki 5,000+, Video 1,000+, Machapisho (Post) 8,000+, Likes 10,000+, na Maoni 15,000+ bila kukiuka sheria 13 za jukwaa.',
-                          'Creator payout thresholds: 1,000+ Followers, 5,000+ Friends, 1,000+ Videos, 8,000+ Posts, 10,000+ Likes, and 15,000+ Comments in good standing.'
-                        )}
-                      </p>
-
-                      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {/* All 12 Criteria Grid */}
+                      <div className="mt-3.5 grid grid-cols-1 gap-2 sm:grid-cols-2">
                         {criteria.map((c) => (
                           <div
                             key={c.label}
-                            className="flex items-center justify-between rounded-lg border border-slate-200/80 bg-white px-3 py-2 text-xs"
+                            className="flex items-center justify-between gap-2 rounded-lg border border-slate-200/80 bg-white px-3 py-2 text-xs"
                           >
-                            <span className="flex items-center gap-1.5 text-slate-700">
+                            <span className="flex min-w-0 items-center gap-1.5 text-slate-700">
                               {c.met ? (
                                 <CheckCircle2
                                   className="h-3.5 w-3.5 shrink-0 text-emerald-600"
@@ -1499,15 +1585,201 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
                                   aria-hidden="true"
                                 />
                               )}
-                              <span>{c.label}</span>
+                              <span className="truncate">{c.label}</span>
                             </span>
-                            <span className="font-mono text-[11px] font-bold text-slate-900 tabular-nums">
-                              {c.current.toLocaleString()} / {c.target.toLocaleString()}
+                            <span className="shrink-0 font-mono text-[11px] font-bold text-slate-900 tabular-nums">
+                              {c.currentText} / {c.targetText}
                             </span>
                           </div>
                         ))}
                       </div>
                     </div>
+
+                    {/* Published Payout Schedule (Rates in TZS) */}
+                    <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Banknote className="h-4 w-4 text-emerald-700" aria-hidden="true" />
+                          <h3 className="text-xs font-bold tracking-wide text-slate-900 uppercase">
+                            {tr(
+                              'Viwango Rasmi vya Malipo Baada ya Kufuzu (TZS)',
+                              'Official Creator Payout Rates Upon Qualification (TZS)'
+                            )}
+                          </h3>
+                        </div>
+                        <span className="text-[11px] font-semibold text-slate-600 tabular-nums">
+                          {tr('Kima cha Chini cha Kutoa:', 'Min. Payout:')}{' '}
+                          <strong className="text-slate-900">
+                            TZS {MONETIZATION_PAYOUT_RATES.minWithdrawalTzs.toLocaleString()}
+                          </strong>
+                        </span>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+                        {[
+                          {
+                            label: tr('Posho ya Mwezi', 'Monthly Base'),
+                            amount: `TZS ${MONETIZATION_PAYOUT_RATES.monthlyBaseAllowanceTzs.toLocaleString()}`,
+                          },
+                          {
+                            label: tr('Kila Makala', 'Per Article'),
+                            amount: `TZS ${MONETIZATION_PAYOUT_RATES.perArticleTzs.toLocaleString()}`,
+                          },
+                          {
+                            label: tr('Kila Video', 'Per Video'),
+                            amount: `TZS ${MONETIZATION_PAYOUT_RATES.perVideoTzs.toLocaleString()}`,
+                          },
+                          {
+                            label: tr('Kila Post', 'Per Post'),
+                            amount: `TZS ${MONETIZATION_PAYOUT_RATES.perPostTzs.toLocaleString()}`,
+                          },
+                          {
+                            label: tr('Likes 100', '100 Likes'),
+                            amount: `TZS ${(MONETIZATION_PAYOUT_RATES.perLikeTzs * 100).toLocaleString()}`,
+                          },
+                          {
+                            label: tr('Maoni 10', '10 Comments'),
+                            amount: `TZS ${(MONETIZATION_PAYOUT_RATES.perCommentTzs * 10).toLocaleString()}`,
+                          },
+                          {
+                            label: tr('Shares 10', '10 Shares'),
+                            amount: `TZS ${(MONETIZATION_PAYOUT_RATES.perShareTzs * 10).toLocaleString()}`,
+                          },
+                        ].map((rate) => (
+                          <div
+                            key={rate.label}
+                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-2"
+                          >
+                            <p className="text-[10.5px] font-medium text-slate-500">{rate.label}</p>
+                            <p className="mt-0.5 font-mono text-xs font-bold text-emerald-800 tabular-nums">
+                              {rate.amount}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Monthly Earnings Panel — Locked for non-eligible users; Always full for Owner */}
+                    {canSeeMonthlyPayout ? (
+                      <div className="rounded-xl border border-emerald-300 bg-emerald-50/55 p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <Banknote className="h-4 w-4 text-emerald-700" aria-hidden="true" />
+                            <h3 className="text-xs font-bold tracking-wide text-emerald-950 uppercase">
+                              {isAdmin && !ownMetrics.isEligibleForMonetization
+                                ? tr(
+                                    'Muonekano wa Mmiliki — Hesabu Zote za Malipo (Kabla ya Kufuzu)',
+                                    'Owner Full Visibility — All Payout Calculations (Pre-Qualification)'
+                                  )
+                                : tr('Malipo Yako ya Mwezi Huu', 'Your Monthly Payout Summary')}
+                            </h3>
+                          </div>
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setOpenAccordions((prev) => ({ ...prev, admin_moderation: true }));
+                                setOpenPayoutsSignal((n) => n + 1);
+                              }}
+                              className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg bg-[#0E2640] px-3 py-1.5 text-[11px] font-bold text-white transition-colors hover:bg-[#163A5F]"
+                            >
+                              <Banknote className="h-3.5 w-3.5 text-amber-300" aria-hidden="true" />
+                              <span>
+                                {tr(
+                                  'Angalia Malipo ya Wanachama Wote',
+                                  'View All Members Payout Ledger'
+                                )}
+                              </span>
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                          <div className="rounded-lg border border-emerald-200 bg-white p-3">
+                            <p className="text-[11px] font-semibold text-slate-500">
+                              {ownMetrics.isEligibleForMonetization
+                                ? tr('Malipo Halisi ya Mwezi Huu', 'Unlocked Monthly Payout')
+                                : tr('Makadirio ya Shughuli za Mwezi (Bila Posho)', 'This Month Activity Value')}
+                            </p>
+                            <p className="mt-1 font-mono text-lg font-extrabold text-emerald-800 tabular-nums">
+                              TZS{' '}
+                              {(ownMetrics.isEligibleForMonetization
+                                ? ownMetrics.monthlyTotalPayoutTzs
+                                : ownMetrics.monthlyEngagementPayoutTzs
+                              ).toLocaleString()}
+                            </p>
+                          </div>
+
+                          <div className="rounded-lg border border-emerald-200 bg-white p-3">
+                            <p className="text-[11px] font-semibold text-slate-500">
+                              {tr('Malipo ya Mwezi + Posho (Ukifuzu)', 'Projected Monthly Total (+Base)')}
+                            </p>
+                            <p className="mt-1 font-mono text-lg font-extrabold text-slate-900 tabular-nums">
+                              TZS {ownMetrics.projectedMonthlyWithBaseTzs.toLocaleString()}
+                            </p>
+                          </div>
+
+                          <div className="rounded-lg border border-emerald-200 bg-white p-3">
+                            <p className="text-[11px] font-semibold text-slate-500">
+                              {tr('Thamani ya Jumla ya Maudhui Yote', 'Cumulative Engagement Value')}
+                            </p>
+                            <p className="mt-1 font-mono text-lg font-extrabold text-[#1D4E89] tabular-nums">
+                              TZS {ownMetrics.lifetimeEstimatedValueTzs.toLocaleString()}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-emerald-950 tabular-nums">
+                          <span className="inline-flex items-center gap-1 font-semibold">
+                            <Calendar className="h-3.5 w-3.5 text-emerald-700" aria-hidden="true" />
+                            <span>{tr('Mwezi Huu:', 'This Month:')}</span>
+                          </span>
+                          <span>
+                            {tr('Post', 'Posts')}: <strong>{ownMetrics.monthlyPostsCount}</strong>
+                          </span>
+                          <span>
+                            {tr('Makala', 'Articles')}: <strong>{ownMetrics.monthlyArticlesCount}</strong>
+                          </span>
+                          <span>
+                            {tr('Video', 'Videos')}: <strong>{ownMetrics.monthlyVideosCount}</strong>
+                          </span>
+                          <span>
+                            {tr('Likes', 'Likes')}: <strong>{ownMetrics.monthlyLikesReceived.toLocaleString()}</strong>
+                          </span>
+                          <span>
+                            {tr('Maoni', 'Comments')}: <strong>{ownMetrics.monthlyCommentsReceived.toLocaleString()}</strong>
+                          </span>
+                          <span>
+                            {tr('Shares', 'Shares')}: <strong>{ownMetrics.monthlySharesReceived.toLocaleString()}</strong>
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-100/80 p-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex items-start gap-3">
+                          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-200 text-slate-700">
+                            <Lock className="h-4 w-4" aria-hidden="true" />
+                          </span>
+                          <div>
+                            <p className="text-xs font-bold text-slate-900">
+                              {tr(
+                                'Malipo Yako ya Mwezi Bado Yamefungwa',
+                                'Your Monthly Payouts Are Currently Locked'
+                              )}
+                            </p>
+                            <p className="mt-0.5 text-[11px] leading-relaxed text-slate-600">
+                              {tr(
+                                `Malipo yataanza na kiasi chako cha mwezi kitaanza kuonekana hapa mara tu utakapotimiza vigezo vyote ${ownMetrics.totalCriteriaCount}. Kwa sasa umetimiza ${ownMetrics.metCriteriaCount}/${ownMetrics.totalCriteriaCount} (${ownMetrics.progressPercent}%).`,
+                                `Monthly earnings begin and unlock here only after all ${ownMetrics.totalCriteriaCount} strict criteria are fulfilled (currently ${ownMetrics.metCriteriaCount}/${ownMetrics.totalCriteriaCount} · ${ownMetrics.progressPercent}%).`
+                              )}
+                            </p>
+                          </div>
+                        </div>
+                        <span className="shrink-0 font-mono text-xs font-bold text-slate-700 tabular-nums">
+                          {ownMetrics.metCriteriaCount} / {ownMetrics.totalCriteriaCount}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 )}
               </section>
@@ -2272,6 +2544,7 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
                     onUpdateRetentionSettings={onUpdateRetentionSettings}
                     onRunRetentionNow={onRunRetentionNow}
                     signupLastSeenMs={signupLastSeenMs}
+                    openPayoutsSignal={openPayoutsSignal}
                   />
                 </div>
               )}
@@ -2296,8 +2569,8 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
                   </h2>
                   <p className="truncate text-xs text-slate-500">
                     {tr(
-                      'Rangi saba za alama za uaminifu kwa mmiliki, taifa, taasisi na wabunifu',
-                      'Seven official badge colors for verified community roles'
+                      'Daraja 13 za rangi na madini (Black, White, Kijivu, Gold, Silver, Copper na zaidi)',
+                      '13 official badge tiers (Black, White, Gray, Gold, Silver, Copper, and role colors)'
                     )}
                   </p>
                 </div>
@@ -2314,8 +2587,8 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
               <div className="border-t border-slate-100 p-4 sm:p-5">
                 <p className="text-xs leading-relaxed text-slate-600">
                   {tr(
-                    'Ili kuongeza uaminifu kwenye mijadala, matangazo ya ajira, na taarifa rasmi, Malosha Forums linatumia rangi saba tofauti za alama za uthibitisho:',
-                    'To build trust across discussions, job listings, and official announcements, Malosha Forums uses seven distinct verification badge colors:'
+                    'Ili kuongeza uaminifu na kuwatambua wanachama wa madaraja yote (Black, White, Kijivu, Gold, Silver, Copper na taasisi), Malosha Forums linatumia rangi 13 rasmi za uthibitisho:',
+                    'To recognize community trust and creator tiers (including Black, White, Gray, Gold, Silver, Copper, and official roles), Malosha Forums supports 13 verification badge tiers:'
                   )}
                 </p>
 

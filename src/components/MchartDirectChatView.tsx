@@ -74,7 +74,7 @@ import {
 } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 import { useUserPresence } from '../context/UserPresenceContext';
-import { Avatar, OnlineStatusPill } from './Avatar';
+import { AuthorName, Avatar, OnlineStatusPill } from './Avatar';
 import { ImageResizeModal } from './ImageResizeModal';
 import { MchartStatusTab } from './MchartStatusView';
 import { EditMessageModal, ForwardMessageModal, MessageInfoModal } from './MchartMessageModals';
@@ -539,7 +539,7 @@ export const MchartDirectInbox: React.FC<MchartDirectInboxProps> = ({
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5">
                             <span className="truncate text-sm font-bold text-slate-900">
-                              {m.displayName}
+                              <AuthorName uid={m.uid} fallback={m.displayName} />
                             </span>
                             <AuthorVerificationBadge uid={m.uid} size="xs" />
                           </div>
@@ -746,7 +746,7 @@ export const MchartDirectInbox: React.FC<MchartDirectInboxProps> = ({
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex min-w-0 items-center gap-1.5">
                           <span className="truncate text-sm font-bold text-slate-900">
-                            {partner.name}
+                            <AuthorName uid={partner.uid} fallback={partner.name} />
                           </span>
                           <AuthorVerificationBadge uid={partner.uid} size="xs" />
                         </div>
@@ -1444,7 +1444,9 @@ export const MchartDirectRoom: React.FC<MchartDirectRoomProps> = ({
           />
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
-              <p className="truncate text-sm font-bold text-slate-900">{partner.name}</p>
+              <p className="truncate text-sm font-bold text-slate-900">
+                <AuthorName uid={partner.uid} fallback={partner.name} />
+              </p>
               <AuthorVerificationBadge uid={partner.uid} size="xs" />
             </div>
             <div className="flex items-center gap-1.5 text-[11px] text-slate-500">

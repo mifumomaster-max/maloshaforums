@@ -19,10 +19,24 @@ import {
   uploadImageToCloudinary,
 } from '../services/cloudinaryService';
 import { parseTagsInput } from '../utils/formatters';
+import { autoFormatScholarlyText } from '../utils/editorialFormatter';
+import {
+  MakalaFormatAction,
+  applyMakalaFormatAction,
+  captureTextareaScrollSnapshot,
+  restoreTextareaSelectionAndScroll,
+} from '../utils/makalaSelectionFormatter';
 import { useLanguage } from '../context/LanguageContext';
-import { AuthPromptReason, SharedMediaPayload } from '../types';
+import {
+  AuthPromptReason,
+  KijiweniFontStyle,
+  SharedMediaPayload,
+  getKijiweniFontMeta,
+} from '../types';
 import { Avatar } from './Avatar';
 import { ImageResizeModal } from './ImageResizeModal';
+import { KijiweniDescriptionTools } from './KijiweniDescriptionTools';
+import { RichText } from './RichText';
 import { AuthorVerificationBadge } from './VerificationBadge';
 
 const MAX_KIJIWENI_IMAGES = 250;
@@ -54,6 +68,7 @@ interface KijiweniInlineComposerProps {
       tags: string[];
       coverImage?: string;
       images?: string[];
+      bodyFontStyle?: KijiweniFontStyle;
       status?: 'open' | 'private';
     },
     options?: { silent?: boolean }
@@ -77,6 +92,9 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
   const { tr } = useLanguage();
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
+  const [bodyFontStyle, setBodyFontStyle] = useState<KijiweniFontStyle>('sans');
+  const [bodyPreviewMode, setBodyPreviewMode] = useState(false);
+  const [selectedWordCount, setSelectedWordCount] = useState(0);
   const [tagsRaw, setTagsRaw] = useState('');
   const [queuedImages, setQueuedImages] = useState<QueuedKijiweniImage[]>([]);
   const [publishAsAlbum, setPublishAsAlbum] = useState(true);
@@ -100,9 +118,11 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
   const [error, setError] = useState('');
 
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const bodyTextareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastHandledShareIdRef = useRef<number>(0);
   const { configured: cloudinaryConfigured } = getCloudinaryConfig();
+  const activeFontMeta = getKijiweniFontMeta(bodyFontStyle);
 
   useEffect(() => {
     if (expanded && userUid) {
@@ -200,6 +220,9 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
   const handleResetAndCollapse = () => {
     setTitle('');
     setBody('');
+    setBodyFontStyle('sans');
+    setBodyPreviewMode(false);
+    setSelectedWordCount(0);
     setTagsRaw('');
     setQueuedImages([]);
     setPublishAsAlbum(true);
@@ -218,6 +241,50 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
       onClearSharedPayload?.(sharedPayload.id);
     }
     onExpandedChange(false);
+  };
+
+  const syncSelectionCount = () => {
+    const el = bodyTextareaRef.current;
+    if (!el) {
+      setSelectedWordCount(0);
+      return;
+    }
+    const start = el.selectionStart ?? 0;
+    const end = el.selectionEnd ?? 0;
+    if (end <= start) {
+      setSelectedWordCount(0);
+      return;
+    }
+    const words = body.slice(start, end).trim().split(/\s+/).filter(Boolean).length;
+    setSelectedWordCount(words);
+  };
+
+  const handleApplyBodyFormat = (action: MakalaFormatAction, sample: string) => {
+    const el = bodyTextareaRef.current;
+    const { nextBody, nextSelStart, nextSelEnd, snapshot } = applyMakalaFormatAction(
+      body,
+      el,
+      action,
+      sample
+    );
+    setBody(nextBody.slice(0, 8000));
+    setBodyPreviewMode(false);
+    restoreTextareaSelectionAndScroll(el, nextSelStart, nextSelEnd, snapshot);
+    window.setTimeout(() => {
+      const words = nextBody.slice(nextSelStart, nextSelEnd).trim().split(/\s+/).filter(Boolean).length;
+      setSelectedWordCount(nextSelEnd > nextSelStart ? words : 0);
+    }, 0);
+  };
+
+  const handleAutoFormatBody = () => {
+    if (!body.trim()) return;
+    const el = bodyTextareaRef.current;
+    const snapshot = captureTextareaScrollSnapshot(el);
+    const prevCursor = el?.selectionStart ?? 0;
+    const nextFormatted = autoFormatScholarlyText(body).slice(0, 8000);
+    setBody(nextFormatted);
+    const clampedPos = Math.min(prevCursor, nextFormatted.length);
+    restoreTextareaSelectionAndScroll(el, clampedPos, clampedPos, snapshot);
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -485,6 +552,7 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
           title: cleanTitle,
           body: cleanBody,
           tags: parsedTags,
+          bodyFontStyle,
           status: targetStatus,
         });
       } else if (readyImages.length === 1 || publishAsAlbum) {
@@ -495,6 +563,7 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
           tags: parsedTags,
           coverImage: orderedUrls[0],
           images: orderedUrls,
+          bodyFontStyle,
           status: targetStatus,
         });
       } else {
@@ -512,6 +581,8 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
               body: idx === 0 ? cleanBody : cleanBody || '',
               tags: parsedTags,
               coverImage: readyImages[idx].url,
+              images: [readyImages[idx].url],
+              bodyFontStyle,
               status: targetStatus,
             },
             { silent: true }
@@ -608,25 +679,65 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
           className="w-full rounded-lg border border-slate-200 bg-[#F8FAFC] px-3.5 py-2.5 text-sm font-semibold text-slate-900 placeholder:font-normal placeholder:text-slate-500 focus:border-[#1D4E89] focus:bg-white focus:outline-none"
         />
 
-        <textarea
-          rows={queuedImages.length > 0 ? 3 : 4}
-          maxLength={8000}
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          placeholder={
-            queuedImages.length > 0
-              ? tr(
-                  'Maelezo ya picha (hiari — unaweza kuchapisha picha pekee)...',
-                  'Photo caption (optional — you can post just the photos)...'
-                )
-              : tr(
-                  'Unawaza nini leo? Shiriki mawazo yako na wana Kijiweni...',
-                  "What's on your mind today? Share your thoughts with Kijiweni..."
-                )
-          }
-          aria-label={tr('Maelezo ya chapisho', 'Post body')}
-          className="w-full resize-y rounded-lg border border-slate-200 bg-[#F8FAFC] p-3.5 text-sm leading-relaxed text-slate-900 placeholder:text-slate-500 focus:border-[#1D4E89] focus:bg-white focus:outline-none"
-        />
+        <div>
+          <KijiweniDescriptionTools
+            fontStyle={bodyFontStyle}
+            onChangeFontStyle={setBodyFontStyle}
+            previewMode={bodyPreviewMode}
+            onTogglePreview={setBodyPreviewMode}
+            selectedWordCount={selectedWordCount}
+            onApplyFormat={handleApplyBodyFormat}
+            onAutoFormat={handleAutoFormatBody}
+          />
+
+          {bodyPreviewMode ? (
+            <div className="min-h-[120px] rounded-b-lg border border-slate-200 bg-white p-4">
+              {title.trim() && (
+                <h3 className="mb-2 border-b border-slate-100 pb-2 font-display text-lg font-bold leading-snug text-[#0E2640] [text-wrap:balance]">
+                  {title.trim()}
+                </h3>
+              )}
+              {body.trim() ? (
+                <RichText content={body} fontStyle={bodyFontStyle} scholarly />
+              ) : (
+                <p className="text-sm italic text-slate-400">
+                  {tr(
+                    'Andika maelezo ili uone muonekano wa kisomi hapa...',
+                    'Write your description to preview the scholarly layout here...'
+                  )}
+                </p>
+              )}
+            </div>
+          ) : (
+            <textarea
+              ref={bodyTextareaRef}
+              rows={queuedImages.length > 0 ? 4 : 5}
+              maxLength={8000}
+              value={body}
+              onChange={(e) => {
+                setBody(e.target.value);
+                setSelectedWordCount(0);
+              }}
+              onSelect={syncSelectionCount}
+              onKeyUp={syncSelectionCount}
+              onMouseUp={syncSelectionCount}
+              style={{ fontFamily: activeFontMeta.fontFamilyCss }}
+              placeholder={
+                queuedImages.length > 0
+                  ? tr(
+                      'Maelezo ya picha (hiari — chagua mwandiko hapo juu na panga kisomi)...',
+                      'Photo caption (optional — pick a font above & format cleanly)...'
+                    )
+                  : tr(
+                      'Unawaza nini leo? Andika hapa, chagua mwandiko wako, au tumia Panga Kisomi...',
+                      "What's on your mind today? Write here, choose your font, or use Auto-Format..."
+                    )
+              }
+              aria-label={tr('Maelezo ya chapisho', 'Post body')}
+              className={`w-full resize-y rounded-b-lg border border-slate-200 bg-[#F8FAFC] p-3.5 leading-[1.68] text-slate-900 placeholder:font-sans placeholder:text-sm placeholder:text-slate-500 focus:border-[#1D4E89] focus:bg-white focus:outline-none ${activeFontMeta.bodySizeClass}`}
+            />
+          )}
+        </div>
 
         {/* Hidden Multi-File Input */}
         <input
@@ -716,9 +827,9 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
               </button>
             </div>
 
-            {queuedImages.length > 1 && (
-              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-2">
-                <div className="flex flex-wrap items-center gap-1.5">
+            <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-2.5">
+              {queuedImages.length > 1 && (
+                <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-100 pb-2">
                   <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-600">
                     <ArrowUpDown className="h-3 w-3 text-[#1D4E89]" aria-hidden="true" />
                     <span>{tr('Panga:', 'Sort:')}</span>
@@ -752,20 +863,69 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
                     {tr('Geuza Mpangilio', 'Reverse')}
                   </button>
                 </div>
+              )}
 
-                <label className="inline-flex cursor-pointer items-center gap-1.5 text-[11px] font-semibold text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={publishAsAlbum}
-                    onChange={(e) => setPublishAsAlbum(e.target.checked)}
-                    className="h-3.5 w-3.5 rounded border-slate-300 text-[#1D4E89]"
-                  />
-                  <span>
-                    {tr('Unganisha kwenye post 1 (kwa mpangilio)', 'Keep together in 1 sorted post')}
-                  </span>
-                </label>
+              <div>
+                <p className="mb-1.5 text-[11px] font-bold text-[#0E2640]">
+                  {tr(
+                    `Chagua jinsi ya kuchapisha picha (${queuedImages.length}):`,
+                    `Choose how to publish (${queuedImages.length} photo${queuedImages.length === 1 ? '' : 's'}):`
+                  )}
+                </p>
+                <div
+                  role="radiogroup"
+                  aria-label={tr('Mtindo wa kuchapisha picha nyingi', 'Multi-photo publish mode')}
+                  className="grid grid-cols-1 gap-2 sm:grid-cols-2"
+                >
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={publishAsAlbum}
+                    onClick={() => setPublishAsAlbum(true)}
+                    className={`flex flex-col items-start rounded-lg border px-3 py-2 text-left transition-all ${
+                      publishAsAlbum
+                        ? 'border-[#1D4E89] bg-sky-50/90 ring-1 ring-[#1D4E89]'
+                        : 'border-slate-200 bg-slate-50/60 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span className="text-xs font-bold text-[#0E2640]">
+                      {tr('Zote Katika Post 1 (Auto-Slide)', 'All in 1 Post (Auto-Slide)')}
+                    </span>
+                    <span className="mt-0.5 text-[10.5px] leading-snug text-slate-600">
+                      {tr(
+                        `Picha zote ${queuedImages.length} zinaenda pamoja na kuslide zenyewe ili zisomeke kirahisi.`,
+                        `All ${queuedImages.length} photo(s) combine in 1 post with automatic slideshow.`
+                      )}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={!publishAsAlbum}
+                    onClick={() => setPublishAsAlbum(false)}
+                    className={`flex flex-col items-start rounded-lg border px-3 py-2 text-left transition-all ${
+                      !publishAsAlbum
+                        ? 'border-[#1D4E89] bg-sky-50/90 ring-1 ring-[#1D4E89]'
+                        : 'border-slate-200 bg-slate-50/60 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span className="text-xs font-bold text-[#0E2640]">
+                      {tr(
+                        `Kila Picha Iwe Post Yake (${queuedImages.length} Post)`,
+                        `Each Photo as Its Own Post (${queuedImages.length})`
+                      )}
+                    </span>
+                    <span className="mt-0.5 text-[10.5px] leading-snug text-slate-600">
+                      {tr(
+                        `Kila picha itachapishwa kama post yake tofauti Kijiweni kwa mpangilio wako.`,
+                        `Each photo publishes as its own individual post in Kijiweni in order.`
+                      )}
+                    </span>
+                  </button>
+                </div>
               </div>
-            )}
+            </div>
 
             <div
               className={`grid gap-2 ${
@@ -1005,10 +1165,15 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
                     : postAsPrivate
                       ? tr('Hifadhi (Akaunti Yangu Tu)', 'Save Privately')
                       : readyCount > 1
-                        ? tr(
-                            `Chapisha Picha ${readyCount}`,
-                            `Post ${readyCount} Photos`
-                          )
+                        ? publishAsAlbum
+                          ? tr(
+                              `Chapisha Post 1 (Picha ${readyCount})`,
+                              `Post 1 Album (${readyCount} Photos)`
+                            )
+                          : tr(
+                              `Chapisha Post ${readyCount} Tofauti`,
+                              `Publish ${readyCount} Separate Posts`
+                            )
                         : tr('Chapisha Kijiweni', 'Post to Kijiweni')}
               </span>
             </button>

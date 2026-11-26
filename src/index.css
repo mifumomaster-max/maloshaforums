@@ -292,6 +292,37 @@
   animation: malosha-logo-fade 3.2s ease-in-out infinite;
 }
 
+@keyframes bbc-cta-color-shift {
+  0%, 100% {
+    background-color: #B80000;
+    box-shadow: 0 2px 8px rgba(184, 0, 0, 0.28);
+  }
+  45% {
+    background-color: #820000;
+    box-shadow: 0 3px 10px rgba(130, 0, 0, 0.34);
+  }
+  75% {
+    background-color: #141414;
+    box-shadow: 0 3px 10px rgba(20, 20, 20, 0.3);
+  }
+}
+
+.bbc-read-more-btn {
+  background-color: #B80000;
+  color: #FFFFFF;
+  animation: bbc-cta-color-shift 4.2s ease-in-out infinite;
+  transition: transform 0.16s cubic-bezier(0.16, 1, 0.3, 1), filter 0.16s ease;
+}
+
+.bbc-read-more-btn:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+.bbc-read-more-btn:active {
+  transform: scale(0.98);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-malosha-spin,
   .animate-malosha-spin-rev,
@@ -312,7 +343,8 @@
   .animate-malosha-beam,
   .animate-malosha-globe-spin,
   .animate-malosha-globe-orbit,
-  .animate-malosha-logo-fade {
+  .animate-malosha-logo-fade,
+  .bbc-read-more-btn {
     animation: none;
   }
 }

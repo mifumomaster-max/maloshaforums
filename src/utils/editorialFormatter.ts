@@ -449,3 +449,158 @@ export function extractEditorialPreview(rawBody: string): {
 
   return { leadText, bulletHighlights, sectionCount };
 }
+
+function stripInlineFormattingForMeasure(text: string): string {
+  return text
+    .replace(/!\[[^\]]*\]\(https:\/\/[^\s)]+\)/gi, '')
+    .replace(/@\[video(?:\|[^\]]*)?\]\(https:\/\/[^\s)]+\)/gi, '')
+    .replace(/\[(?:color|bg)=#[0-9a-fA-F]{3,6}\]/gi, '')
+    .replace(/\[\/(?:color|bg|u)\]/gi, '')
+    .replace(/\[u\]/gi, '')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/^(?:#{1,4}|>|[-*•▪‣]|–|\d{1,2}[.)])\s+/gm, '')
+    .replace(/[*`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function sliceTaggedLineSafely(
+  line: string,
+  budget: number
+): { text: string; consumed: number; hitLimit: boolean } {
+  if (budget <= 0) return { text: '', consumed: 0, hitLimit: true };
+
+  const prefixMatch = line.match(/^((?:#{1,4}|>|[-*•▪‣]|–|\d{1,2}[.)])\s+)?(.*)$/);
+  const blockPrefix = prefixMatch?.[1] || '';
+  const bodyPart = prefixMatch?.[2] || line;
+
+  const tokenRegex =
+    /(\[color=#[0-9a-fA-F]{3,6}\].+?\[\/color\]|\[bg=#[0-9a-fA-F]{3,6}\].+?\[\/bg\]|\[u\].+?\[\/u\]|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|\S+)/gi;
+
+  let out = '';
+  let consumed = 0;
+  let hitLimit = false;
+  let match: RegExpExecArray | null;
+
+  while ((match = tokenRegex.exec(bodyPart)) !== null) {
+    const token = match[0];
+    const visible = stripInlineFormattingForMeasure(token);
+    if (!visible) continue;
+
+    const spaceCost = out ? 1 : 0;
+    if (consumed + spaceCost + visible.length <= budget) {
+      out += (out ? ' ' : '') + token;
+      consumed += spaceCost + visible.length;
+      continue;
+    }
+
+    const remaining = budget - consumed - spaceCost;
+    if (remaining >= 10) {
+      const cutWordSafe = (plain: string) => {
+        const sliced = plain.slice(0, remaining);
+        const lastSpace = sliced.lastIndexOf(' ');
+        return (lastSpace >= 8 ? sliced.slice(0, lastSpace) : sliced).trimEnd();
+      };
+
+      const colorMatch = token.match(/^(\[color=#[0-9a-fA-F]{3,6}\])(.+)\[\/color\]$/i);
+      const bgMatch = token.match(/^(\[bg=#[0-9a-fA-F]{3,6}\])(.+)\[\/bg\]$/i);
+      const uMatch = token.match(/^\[u\](.+)\[\/u\]$/i);
+
+      if (colorMatch) {
+        const snippet = cutWordSafe(stripInlineFormattingForMeasure(colorMatch[2]));
+        if (snippet) out += (out ? ' ' : '') + `${colorMatch[1]}${snippet}[/color]`;
+      } else if (bgMatch) {
+        const snippet = cutWordSafe(stripInlineFormattingForMeasure(bgMatch[2]));
+        if (snippet) out += (out ? ' ' : '') + `${bgMatch[1]}${snippet}[/bg]`;
+      } else if (uMatch) {
+        const snippet = cutWordSafe(stripInlineFormattingForMeasure(uMatch[1]));
+        if (snippet) out += (out ? ' ' : '') + `[u]${snippet}[/u]`;
+      } else if (token.startsWith('**') && token.endsWith('**')) {
+        const snippet = cutWordSafe(stripInlineFormattingForMeasure(token.slice(2, -2)));
+        if (snippet) out += (out ? ' ' : '') + `**${snippet}**`;
+      } else if (token.startsWith('*') && token.endsWith('*')) {
+        const snippet = cutWordSafe(stripInlineFormattingForMeasure(token.slice(1, -1)));
+        if (snippet) out += (out ? ' ' : '') + `*${snippet}*`;
+      } else if (token.startsWith('[') && token.includes('](') && token.endsWith(')')) {
+        // Keep short links intact only if there's minimal overflow, otherwise omit cleanly
+      } else {
+        const snippet = cutWordSafe(visible);
+        if (snippet) out += (out ? ' ' : '') + snippet;
+      }
+    }
+    hitLimit = true;
+    break;
+  }
+
+  return {
+    text: out ? `${blockPrefix}${out}` : '',
+    consumed,
+    hitLimit,
+  };
+}
+
+/**
+ * Builds a concise, tag-safe preview excerpt for Kijiweni feed cards so long
+ * descriptions stay brief (max ~2 lines / ~150 visible characters) until expanded
+ * with "Soma zaidi".
+ */
+export function buildKijiweniExcerpt(
+  rawBody: string,
+  maxChars = 150,
+  maxLines = 2
+): { isTruncated: boolean; previewText: string; visibleLength: number } {
+  const normalized = rawBody.replace(/\r\n/g, '\n').trim();
+  if (!normalized) {
+    return { isTruncated: false, previewText: '', visibleLength: 0 };
+  }
+
+  const lines = normalized
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && !/^(?:-{3,}|\*{3,}|_{3,})$/.test(l) && !parseStandaloneMediaToken(l));
+
+  const fullVisible = stripInlineFormattingForMeasure(normalized);
+  const visibleLength = fullVisible.length;
+
+  if (visibleLength <= maxChars && lines.length <= maxLines) {
+    return { isTruncated: false, previewText: rawBody, visibleLength };
+  }
+
+  const previewLines: string[] = [];
+  let remaining = maxChars;
+  let clipped = false;
+
+  for (let i = 0; i < Math.min(lines.length, maxLines); i++) {
+    const res = sliceTaggedLineSafely(lines[i], remaining);
+    if (res.text) {
+      previewLines.push(res.text);
+      remaining = Math.max(0, remaining - res.consumed - 1);
+    }
+    if (res.hitLimit) {
+      clipped = true;
+      break;
+    }
+  }
+
+  const hasMoreLines = lines.length > maxLines;
+  const isTruncated = clipped || hasMoreLines || visibleLength > maxChars;
+
+  if (previewLines.length === 0) {
+    const fallback = fullVisible.slice(0, maxChars).trimEnd();
+    return {
+      isTruncated: true,
+      previewText: fallback ? `${fallback}...` : '...',
+      visibleLength,
+    };
+  }
+
+  const lastIdx = previewLines.length - 1;
+  previewLines[lastIdx] = `${previewLines[lastIdx].replace(/[.…,;:]+$/, '').trimEnd()}...`;
+
+  return {
+    isTruncated,
+    previewText: previewLines.join('\n'),
+    visibleLength,
+  };
+}
+

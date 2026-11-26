@@ -115,7 +115,7 @@ import {
   prepareSharedImageFile,
   uploadImageToCloudinary,
 } from '../services/cloudinaryService';
-import { Avatar } from './Avatar';
+import { AuthorName, Avatar } from './Avatar';
 import { ImageResizeModal } from './ImageResizeModal';
 import { PollCommentsThread } from './PollCommentsThread';
 import { AuthorVerificationBadge } from './VerificationBadge';
@@ -5162,7 +5162,12 @@ const PollCard: React.FC<PollCardProps> = ({
         <div className="flex items-start justify-between gap-2.5">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="relative shrink-0">
-              <Avatar photoURL={poll.createdByPhoto} name={poll.createdByName} size="sm" />
+              <Avatar
+                photoURL={poll.createdByPhoto}
+                name={poll.createdByName}
+                uid={poll.createdBy}
+                size="sm"
+              />
               <span
                 className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-md ${themePalette.iconBgClass} flex items-center justify-center ring-2 ring-white`}
               >
@@ -5171,7 +5176,9 @@ const PollCard: React.FC<PollCardProps> = ({
             </div>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                <span className="font-bold text-[#0F172A] truncate">{poll.createdByName}</span>
+                <span className="font-bold text-[#0F172A] truncate">
+                  <AuthorName uid={poll.createdBy} fallback={poll.createdByName} />
+                </span>
                 <AuthorVerificationBadge uid={poll.createdBy} size="xs" />
                 <span className="text-slate-300">·</span>
                 <span className="text-slate-500 text-[11px]">

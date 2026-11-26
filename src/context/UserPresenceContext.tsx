@@ -22,6 +22,7 @@ interface UserPresenceContextValue {
   isUserOnline: (uid?: string | null) => boolean;
   typingUsersInMchart: UserPresence[];
   getDirectPartnerTyping: (partnerUid?: string | null, chatId?: string | null) => boolean;
+  getTopicCommentTypingUsers: (topicId?: string | null) => UserPresence[];
   setMchartTyping: (isTyping: boolean, replyingToName?: string, typingChatId?: string) => void;
   markOfflineNow: () => Promise<void>;
 }
@@ -32,6 +33,7 @@ const UserPresenceContext = createContext<UserPresenceContextValue>({
   isUserOnline: () => false,
   typingUsersInMchart: [],
   getDirectPartnerTyping: () => false,
+  getTopicCommentTypingUsers: () => [],
   setMchartTyping: () => {},
   markOfflineNow: async () => {},
 });
@@ -144,10 +146,14 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
         typingStateRef.current.typingChatId = '';
       }
 
+      const keepTopicTyping = typingStateRef.current.typingChatId.startsWith('topic:');
       void writeUserPresence(userUid, {
         displayName,
         isOnline: shouldBeOnline,
-        isTypingInMchart: shouldBeOnline && typingStateRef.current.active && activeArea === 'mchart',
+        isTypingInMchart:
+          shouldBeOnline &&
+          typingStateRef.current.active &&
+          (activeArea === 'mchart' || keepTopicTyping),
         typingChatId: shouldBeOnline ? typingStateRef.current.typingChatId : '',
         replyingToName: shouldBeOnline ? typingStateRef.current.replyingToName : '',
         activeArea,
@@ -316,6 +322,21 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
     [onlineUsers, nowMs]
   );
 
+  const getTopicCommentTypingUsers = useCallback(
+    (topicId?: string | null): UserPresence[] => {
+      if (!topicId) return [];
+      const expectedChatId = `topic:${topicId}`;
+      return onlineUsers.filter((p) => {
+        if (!p.isTypingInMchart) return false;
+        if (userUid && p.uid === userUid) return false;
+        if (p.typingChatId !== expectedChatId) return false;
+        const typedMs = p.typingUpdatedAt ? p.typingUpdatedAt.toMillis() : nowMs;
+        return nowMs - typedMs <= TYPING_TTL_MS;
+      });
+    },
+    [onlineUsers, userUid, nowMs]
+  );
+
   const value = useMemo<UserPresenceContextValue>(
     () => ({
       onlineUsers,
@@ -323,6 +344,7 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
       isUserOnline,
       typingUsersInMchart,
       getDirectPartnerTyping,
+      getTopicCommentTypingUsers,
       setMchartTyping,
       markOfflineNow,
     }),
@@ -332,6 +354,7 @@ export const UserPresenceProvider: React.FC<UserPresenceProviderProps> = ({
       isUserOnline,
       typingUsersInMchart,
       getDirectPartnerTyping,
+      getTopicCommentTypingUsers,
       setMchartTyping,
       markOfflineNow,
     ]

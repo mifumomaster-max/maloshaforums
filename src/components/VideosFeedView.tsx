@@ -101,7 +101,7 @@ import {
   VideoPost,
   findCommunityRule,
 } from '../types';
-import { Avatar } from './Avatar';
+import { AuthorName, Avatar } from './Avatar';
 import { AuthorVerificationBadge } from './VerificationBadge';
 
 interface VideosFeedViewProps {
@@ -3379,7 +3379,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                         }
                         className="text-sm font-extrabold text-white drop-shadow-[0_1px_6px_rgba(0,0,0,0.9)] hover:underline sm:text-[15px]"
                       >
-                        {video.authorName}
+                        <AuthorName uid={video.authorId} fallback={video.authorName} />
                       </button>
                       <AuthorVerificationBadge uid={video.authorId} size="sm" />
                       {video.autoReplyEnabled && (
@@ -3602,7 +3602,7 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-1.5">
                             <span className="truncate text-xs font-bold text-slate-900">
-                              {item.authorName}
+                              <AuthorName uid={item.authorId} fallback={item.authorName} />
                             </span>
                             <AuthorVerificationBadge uid={item.authorId} size="xs" />
                             {isPostCreator && (

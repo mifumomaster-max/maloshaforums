@@ -4,11 +4,14 @@ import {
   optimizeCloudinaryPhotoUrl,
   optimizeCloudinaryVideoPlaybackUrl,
 } from '../services/cloudinaryService';
+import { KijiweniFontStyle, getKijiweniFontMeta } from '../types';
 import { parseStandaloneMediaToken } from '../utils/editorialFormatter';
 
 interface RichTextProps {
   content: string;
   className?: string;
+  fontStyle?: KijiweniFontStyle;
+  scholarly?: boolean;
 }
 
 const INLINE_TOKEN_PATTERN =
@@ -183,17 +186,27 @@ export const LinkedText: React.FC<{ text: string; className?: string }> = ({
   className = '',
 }) => <span className={className}>{renderLinkedInline(text)}</span>;
 
-export const RichText: React.FC<RichTextProps> = ({ content, className = '' }) => {
+export const RichText: React.FC<RichTextProps> = ({
+  content,
+  className = '',
+  fontStyle,
+  scholarly = false,
+}) => {
+  const fontMeta = getKijiweniFontMeta(fontStyle);
   const lines = content.split('\n');
   const blocks: React.ReactNode[] = [];
   let listItems: string[] = [];
   let numberedItems: { num: string; text: string }[] = [];
   let quoteLines: string[] = [];
+  let dropCapApplied = false;
 
   const flushList = (keyPrefix: number) => {
     if (listItems.length === 0) return;
     blocks.push(
-      <ul key={`list-${keyPrefix}`} className="my-2.5 list-disc space-y-1.5 pl-5 text-slate-800">
+      <ul
+        key={`list-${keyPrefix}`}
+        className={`${scholarly ? 'my-3 space-y-2 leading-[1.72]' : 'my-2.5 space-y-1.5'} list-disc pl-5 text-slate-800`}
+      >
         {listItems.map((item, idx) => (
           <li key={idx}>{renderLinkedInline(item)}</li>
         ))}
@@ -205,7 +218,10 @@ export const RichText: React.FC<RichTextProps> = ({ content, className = '' }) =
   const flushNumbered = (keyPrefix: number) => {
     if (numberedItems.length === 0) return;
     blocks.push(
-      <ol key={`num-${keyPrefix}`} className="my-2.5 list-decimal space-y-1.5 pl-5 text-slate-800">
+      <ol
+        key={`num-${keyPrefix}`}
+        className={`${scholarly ? 'my-3 space-y-2 leading-[1.72]' : 'my-2.5 space-y-1.5'} list-decimal pl-5 text-slate-800`}
+      >
         {numberedItems.map((item, idx) => (
           <li key={idx}>{renderLinkedInline(item.text)}</li>
         ))}
@@ -219,7 +235,11 @@ export const RichText: React.FC<RichTextProps> = ({ content, className = '' }) =
     blocks.push(
       <blockquote
         key={`quote-${keyPrefix}`}
-        className="my-3.5 border-y border-slate-200 bg-slate-50 px-4 py-3 text-slate-700 italic"
+        className={
+          scholarly
+            ? 'my-4 border-y border-slate-200 bg-[#FAF8F5] px-5 py-3.5 text-[#0E2640] italic leading-[1.72]'
+            : 'my-3.5 border-y border-slate-200 bg-slate-50 px-4 py-3 text-slate-700 italic'
+        }
       >
         {quoteLines.map((q, idx) => (
           <p key={idx} className={idx > 0 ? 'mt-1.5' : ''}>
@@ -230,6 +250,8 @@ export const RichText: React.FC<RichTextProps> = ({ content, className = '' }) =
     );
     quoteLines = [];
   };
+
+  const keepAuthorFontOnHeadings = fontStyle === 'handwriting' || fontStyle === 'mono';
 
   lines.forEach((line, index) => {
     const trimmed = line.trim();
@@ -251,12 +273,24 @@ export const RichText: React.FC<RichTextProps> = ({ content, className = '' }) =
       const text = headingMatch[2].trim();
       blocks.push(
         level <= 2 ? (
-          <h3 key={`h2-${index}`} className="mt-4 mb-1.5 font-display text-lg font-bold text-slate-900">
-            {text}
+          <h3
+            key={`h2-${index}`}
+            className={`${
+              scholarly
+                ? 'mt-5 mb-2 border-b border-slate-200 pb-1 text-[19px] tracking-[-0.015em] text-[#0E2640]'
+                : 'mt-4 mb-1.5 text-lg text-slate-900'
+            } ${keepAuthorFontOnHeadings ? '' : 'font-display'} font-bold`}
+          >
+            {renderLinkedInline(text)}
           </h3>
         ) : (
-          <h4 key={`h3-${index}`} className="mt-3 mb-1 font-sans text-[15px] font-bold text-[#0E2640]">
-            {text}
+          <h4
+            key={`h3-${index}`}
+            className={`${
+              scholarly ? 'mt-4 mb-1.5 text-[16px] text-[#0E2640]' : 'mt-3 mb-1 text-[15px] text-[#0E2640]'
+            } ${keepAuthorFontOnHeadings ? '' : 'font-sans'} font-bold`}
+          >
+            {renderLinkedInline(text)}
           </h4>
         )
       );
@@ -279,11 +313,14 @@ export const RichText: React.FC<RichTextProps> = ({ content, className = '' }) =
       return;
     }
 
-    if (trimmed.startsWith('> ')) {
-      flushList(index);
-      flushNumbered(index);
-      quoteLines.push(trimmed.slice(2));
-      return;
+    if (trimmed.startsWith('>')) {
+      const qText = trimmed.replace(/^>\s*/, '').trim();
+      if (qText) {
+        flushList(index);
+        flushNumbered(index);
+        quoteLines.push(qText);
+        return;
+      }
     }
 
     flushList(index);
@@ -345,8 +382,27 @@ export const RichText: React.FC<RichTextProps> = ({ content, className = '' }) =
       return;
     }
 
+    const useDropCap =
+      scholarly &&
+      !dropCapApplied &&
+      fontStyle !== 'mono' &&
+      /^[A-Za-z]/.test(trimmed) &&
+      trimmed.length >= 75;
+    if (useDropCap) {
+      dropCapApplied = true;
+    }
+
     blocks.push(
-      <p key={`p-${index}`} className="my-2.5 leading-relaxed text-slate-800">
+      <p
+        key={`p-${index}`}
+        className={`${
+          scholarly ? 'my-3 leading-[1.75]' : 'my-2 leading-relaxed'
+        } text-slate-800 ${
+          useDropCap
+            ? 'first-letter:float-left first-letter:mr-2.5 first-letter:mt-1 first-letter:font-display first-letter:text-[2.45rem] first-letter:font-bold first-letter:leading-[0.82] first-letter:text-[#0E2640]'
+            : ''
+        }`}
+      >
         {renderLinkedInline(trimmed)}
       </p>
     );
@@ -356,5 +412,14 @@ export const RichText: React.FC<RichTextProps> = ({ content, className = '' }) =
   flushNumbered(lines.length);
   flushQuote(lines.length);
 
-  return <div className={`text-[15px] ${className}`}>{blocks}</div>;
+  return (
+    <div
+      style={fontStyle ? { fontFamily: fontMeta.fontFamilyCss } : undefined}
+      className={`${fontStyle ? fontMeta.bodySizeClass : 'text-[15px]'} ${
+        scholarly ? 'max-w-[68ch]' : ''
+      } ${className}`}
+    >
+      {blocks}
+    </div>
+  );
 };

@@ -22,7 +22,7 @@ import { optimizeCloudinaryUrl } from '../services/cloudinaryService';
 import { extractEditorialPreview } from '../utils/editorialFormatter';
 import { estimateReadMinutes } from '../utils/formatters';
 import { useLanguage } from '../context/LanguageContext';
-import { Avatar } from './Avatar';
+import { AuthorName, Avatar } from './Avatar';
 import { MakalaInlineComposer } from './MakalaInlineComposer';
 import { AuthorVerificationBadge } from './VerificationBadge';
 
@@ -328,17 +328,33 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
         </span>
       </div>
 
-      {/* BBC News Swahili Signature Crimson Masthead */}
-      <header className="overflow-hidden border border-slate-200 bg-white">
-        <div className="bg-[#B80000] px-3.5 py-3 text-white sm:px-6 sm:py-4">
-          <div className="flex items-center justify-between gap-2.5 sm:flex-wrap sm:gap-3">
-            <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
-              {/* Compact BBC emblem on mobile, full 7-block MALOSHA on tablet/PC */}
+      {/* BBC News Swahili Authoritative Editorial Masthead */}
+      <header className="-mx-3.5 overflow-hidden border-y border-slate-300 bg-white shadow-sm sm:mx-0 sm:border">
+        {/* Top Institutional Dark BBC Utility Ribbon */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-[#141414] px-3.5 py-2 text-[11px] text-white/90 sm:px-6">
+          <div className="flex items-center gap-2 font-sans font-bold tracking-wider uppercase">
+            <span className="inline-block h-2 w-2 bg-[#B80000]" aria-hidden="true" />
+            <span>{tr('DAWATI LA HABARI NA MAKALA', 'NEWS & EDITORIAL DESK')}</span>
+          </div>
+          <div className="flex items-center gap-2.5 text-[11px] text-slate-300 tabular-nums">
+            <span className="capitalize">{todayFormatted}</span>
+            <span aria-hidden="true" className="text-slate-600">|</span>
+            <span className="font-semibold text-white">
+              {tr(`Makala ${allMakalaCount}`, `${allMakalaCount} Articles`)}
+            </span>
+          </div>
+        </div>
+
+        {/* Signature BBC Crimson Masthead */}
+        <div className="relative bg-gradient-to-r from-[#8C0000] via-[#B80000] to-[#980000] px-3.5 py-4 text-white sm:px-6 sm:py-5">
+          <div className="flex items-center justify-between gap-3 sm:gap-4">
+            <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+              {/* Mobile & Desktop BBC-style Letter Blocks */}
               <div className="flex shrink-0 items-center gap-0.5 sm:hidden" aria-hidden="true">
                 {['M', 'L', 'S'].map((letter, idx) => (
                   <span
                     key={idx}
-                    className="inline-flex h-6 w-5 items-center justify-center bg-white font-sans text-xs font-black text-[#B80000]"
+                    className="inline-flex h-8 w-6 items-center justify-center bg-white font-sans text-sm font-black text-[#B80000] shadow-sm"
                   >
                     {letter}
                   </span>
@@ -348,17 +364,17 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                 {['M', 'A', 'L', 'O', 'S', 'H', 'A'].map((letter, idx) => (
                   <span
                     key={idx}
-                    className="inline-flex h-8 w-7 items-center justify-center bg-white font-sans text-base font-black text-[#B80000]"
+                    className="inline-flex h-9 w-8 items-center justify-center bg-white font-sans text-base font-black text-[#B80000] shadow-sm"
                   >
                     {letter}
                   </span>
                 ))}
               </div>
-              <div className="min-w-0 border-l border-white/30 pl-2.5 sm:pl-3">
-                <h1 className="truncate font-sans text-sm font-extrabold tracking-tight text-white sm:text-xl">
+              <div className="min-w-0 border-l border-white/30 pl-3 sm:pl-4">
+                <h1 className="truncate font-display text-lg font-extrabold tracking-tight text-white sm:text-2xl [text-wrap:balance]">
                   {tr('HABARI & MAKALA', 'NEWS & ARTICLES')}
                 </h1>
-                <p className="truncate text-[11px] text-white/90 sm:text-xs">
+                <p className="mt-0.5 line-clamp-1 text-xs text-white/90 sm:text-[13px]">
                   {tr(
                     'Uchambuzi wa kina, ripoti maalum, na habari za jamii',
                     'In-depth analysis, special reports, and community news'
@@ -370,7 +386,7 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
             <button
               type="button"
               onClick={handleOpenInlineWriter}
-              className="inline-flex min-h-[36px] shrink-0 items-center gap-1.5 bg-white px-3 py-1.5 text-xs font-bold text-[#B80000] transition-colors hover:bg-slate-100 whitespace-nowrap sm:min-h-[40px] sm:px-4 sm:py-2 sm:text-sm"
+              className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 border border-white/25 bg-white px-3.5 py-2 text-xs font-extrabold tracking-wide text-[#B80000] uppercase shadow-sm transition-colors hover:bg-[#141414] hover:text-white whitespace-nowrap sm:min-h-[42px] sm:px-4"
             >
               <PenSquare className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
               <span className="sm:hidden">{tr('Andika', 'Write')}</span>
@@ -382,15 +398,15 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
         {/* BBC Section Navigation Bar */}
         <nav
           aria-label={tr('Vitengo vya Makala', 'Article Sections')}
-          className="flex items-center gap-1 overflow-x-auto border-b border-slate-200 bg-white px-3 sm:px-5"
+          className="flex items-center gap-0.5 overflow-x-auto border-b border-slate-200 bg-white px-2.5 sm:px-5"
         >
           <button
             type="button"
             onClick={() => setSelectedSection('all')}
-            className={`min-h-[42px] border-b-[3px] px-3 py-2 text-xs font-bold transition-colors whitespace-nowrap shrink-0 ${
+            className={`min-h-[44px] border-b-[3px] px-3 py-2.5 text-xs font-extrabold tracking-wide transition-colors whitespace-nowrap shrink-0 ${
               selectedSection === 'all'
-                ? 'border-[#B80000] text-[#B80000]'
-                : 'border-transparent text-slate-700 hover:text-slate-950'
+                ? 'border-[#B80000] bg-rose-50/50 text-[#B80000]'
+                : 'border-transparent text-slate-700 hover:border-slate-300 hover:text-slate-950'
             }`}
           >
             {tr('Habari Zote', 'All News')} ({allMakalaCount})
@@ -401,10 +417,10 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
               setSelectedSection('recent');
               onChangeSort('newest');
             }}
-            className={`min-h-[42px] border-b-[3px] px-3 py-2 text-xs font-bold transition-colors whitespace-nowrap shrink-0 ${
+            className={`min-h-[44px] border-b-[3px] px-3 py-2.5 text-xs font-extrabold tracking-wide transition-colors whitespace-nowrap shrink-0 ${
               selectedSection === 'recent'
-                ? 'border-[#B80000] text-[#B80000]'
-                : 'border-transparent text-slate-700 hover:text-slate-950'
+                ? 'border-[#B80000] bg-rose-50/50 text-[#B80000]'
+                : 'border-transparent text-slate-700 hover:border-slate-300 hover:text-slate-950'
             }`}
           >
             {tr('Mpya Hivi Punde', 'Just In')} ({sectionCounts.recent ?? 0})
@@ -414,10 +430,10 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
               key={sec}
               type="button"
               onClick={() => setSelectedSection(sec)}
-              className={`min-h-[42px] border-b-[3px] px-3 py-2 text-xs font-bold transition-colors whitespace-nowrap shrink-0 ${
+              className={`min-h-[44px] border-b-[3px] px-3 py-2.5 text-xs font-extrabold tracking-wide transition-colors whitespace-nowrap shrink-0 ${
                 selectedSection === sec
-                  ? 'border-[#B80000] text-[#B80000]'
-                  : 'border-transparent text-slate-700 hover:text-slate-950'
+                  ? 'border-[#B80000] bg-rose-50/50 text-[#B80000]'
+                  : 'border-transparent text-slate-700 hover:border-slate-300 hover:text-slate-950'
               }`}
             >
               {getMakalaSectionLabel(sec)}
@@ -427,7 +443,7 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
         </nav>
 
         {/* Search & Quick Sort Toolbar */}
-        <div className="flex flex-col gap-2.5 bg-[#F6F6F6] px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+        <div className="flex flex-col gap-2.5 bg-[#F4F4F4] px-3.5 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
           <div className="relative flex-1">
             <Search
               className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400"
@@ -462,9 +478,9 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                 key={opt.id}
                 type="button"
                 onClick={() => onChangeSort(opt.id)}
-                className={`min-h-[34px] px-3 py-1 text-xs font-bold transition-colors whitespace-nowrap shrink-0 ${
+                className={`min-h-[36px] px-3 py-1 text-xs font-bold transition-colors whitespace-nowrap shrink-0 ${
                   sortMode === opt.id
-                    ? 'bg-[#B80000] text-white'
+                    ? 'bg-[#141414] text-white'
                     : 'text-slate-700 hover:text-slate-950'
                 }`}
               >
@@ -699,9 +715,12 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                           <Avatar
                             name={leadArticle.authorName}
                             photoURL={leadArticle.authorPhoto}
+                            uid={leadArticle.authorId}
                             size="sm"
                           />
-                          <span>{leadArticle.authorName}</span>
+                          <span>
+                            <AuthorName uid={leadArticle.authorId} fallback={leadArticle.authorName} />
+                          </span>
                           <AuthorVerificationBadge uid={leadArticle.authorId} size="xs" />
                         </button>
                         <span aria-hidden="true">·</span>
@@ -758,22 +777,25 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                             type="button"
                             onClick={() => onShareTopic(leadArticle)}
                             aria-label={tr(
-                              `Shiriki ${leadArticle.title}`,
-                              `Share ${leadArticle.title}`
+                              `Shiriki ${leadArticle.title} (${leadArticle.sharesCount ?? 0})`,
+                              `Share ${leadArticle.title} (${leadArticle.sharesCount ?? 0})`
                             )}
                             className="inline-flex min-h-[36px] items-center gap-1 border border-slate-200 bg-white px-2.5 py-1 font-semibold text-slate-700 hover:bg-slate-50"
                           >
                             <Share2 className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
+                            <span className="font-mono tabular-nums">
+                              {leadArticle.sharesCount ?? 0}
+                            </span>
                           </button>
                         </div>
 
                         <button
                           type="button"
                           onClick={() => onOpenTopic(leadArticle.id)}
-                          className="inline-flex min-h-[36px] items-center gap-1 bg-[#B80000] px-3.5 py-1 font-bold text-white transition-colors hover:bg-[#990000]"
+                          className="bbc-read-more-btn inline-flex min-h-[40px] items-center gap-1.5 px-4 py-2 text-xs font-extrabold tracking-wide uppercase whitespace-nowrap shrink-0"
                         >
-                          <span>{tr('Soma', 'Read')}</span>
-                          <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+                          <span>{tr('Soma Zaidi', 'Read More')}</span>
+                          <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
                         </button>
                       </div>
                     </div>
@@ -907,20 +929,26 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                               <button
                                 type="button"
                                 onClick={() => onShareTopic(article)}
-                                aria-label={tr(`Shiriki ${article.title}`, `Share ${article.title}`)}
+                                aria-label={tr(
+                                  `Shiriki ${article.title} (${article.sharesCount ?? 0})`,
+                                  `Share ${article.title} (${article.sharesCount ?? 0})`
+                                )}
                                 className="inline-flex min-h-[34px] items-center gap-1 border border-slate-200 px-2 py-1 text-slate-600 hover:bg-slate-50"
                               >
                                 <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
+                                <span className="font-mono tabular-nums">
+                                  {article.sharesCount ?? 0}
+                                </span>
                               </button>
                             </div>
 
                             <button
                               type="button"
                               onClick={() => onOpenTopic(article.id)}
-                              className="inline-flex min-h-[34px] items-center gap-1 font-bold text-[#B80000] hover:underline"
+                              className="bbc-read-more-btn inline-flex min-h-[38px] items-center gap-1 px-3.5 py-1.5 text-[11px] font-extrabold tracking-wide uppercase whitespace-nowrap shrink-0"
                             >
-                              <span>{tr('Soma', 'Read')}</span>
-                              <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+                              <span>{tr('Soma Zaidi', 'Read More')}</span>
+                              <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
                             </button>
                           </div>
                         </div>
@@ -931,65 +959,128 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
               </div>
             )}
 
-            {/* Tier 3: Compact BBC Lower News List */}
+            {/* Tier 3: Compact BBC Lower News List (Full Soma Zaidi & Actions on Mobile + Desktop) */}
             {archiveArticles.length > 0 && (
               <section aria-label={tr('Makala nyingine', 'More articles')}>
-                <div className="mb-3 border-b-2 border-slate-900 pb-1.5">
+                <div className="mb-3 flex items-center justify-between border-b-2 border-slate-900 pb-1.5">
                   <h2 className="font-sans text-sm font-black tracking-wide text-slate-900 uppercase">
                     {tr('Makala Zaidi', 'More Articles')}
                   </h2>
+                  <span className="text-xs font-semibold text-slate-500 tabular-nums">
+                    {archiveArticles.length}
+                  </span>
                 </div>
                 <div className="-mx-3.5 divide-y divide-slate-200 border-y border-slate-200 bg-white sm:mx-0 sm:border">
-                  {archiveArticles.map((art) => (
-                    <article
-                      key={art.id}
-                      className="group flex flex-col gap-3 py-4 transition-colors hover:bg-slate-50 sm:flex-row sm:items-start sm:px-4"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => onOpenTopic(art.id)}
-                        className="block w-full overflow-hidden bg-slate-100 text-left sm:w-48 shrink-0"
+                  {archiveArticles.map((art) => {
+                    const artVoted = votedTopicIds.has(art.id);
+                    const artReadMins = estimateReadMinutes(art.body);
+                    return (
+                      <article
+                        key={art.id}
+                        className="group flex flex-col gap-3 py-4 transition-colors hover:bg-slate-50 sm:flex-row sm:items-start sm:px-4"
                       >
-                        <BbcCoverImage
-                          src={art.coverImage}
-                          alt={art.title}
-                          wrapperClass="w-full bg-slate-100"
-                          imgClass="block h-auto w-full"
-                          widthHint={760}
-                        />
-                      </button>
-                      <div className="min-w-0 flex-1 px-3.5 sm:px-0">
-                        <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-slate-500">
-                          <span className="font-bold text-[#B80000] uppercase">
-                            {getMakalaSectionLabel(getMakalaSection(art.tags, art.title))}
-                          </span>
-                          <span aria-hidden="true">·</span>
-                          <span>{formatTime(art.createdAt)}</span>
-                          <span aria-hidden="true">·</span>
-                          <span>
-                            {tr(
-                              `Dakika ${estimateReadMinutes(art.body)}`,
-                              `${estimateReadMinutes(art.body)} min`
-                            )}
-                          </span>
-                          <span aria-hidden="true">·</span>
-                          <span className="tabular-nums">
-                            {tr('Penda', 'Likes')} {art.upvotesCount}
-                          </span>
-                        </div>
                         <button
                           type="button"
                           onClick={() => onOpenTopic(art.id)}
-                          className="mt-1 block text-left font-display text-base font-bold leading-snug text-slate-950 hover:text-[#B80000]"
+                          className="block w-full overflow-hidden bg-slate-100 text-left sm:w-48 shrink-0"
                         >
-                          {art.title}
+                          <BbcCoverImage
+                            src={art.coverImage}
+                            alt={art.title}
+                            wrapperClass="w-full bg-slate-100"
+                            imgClass="block h-auto w-full"
+                            widthHint={760}
+                          />
                         </button>
-                        <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-600">
-                          {getLeadPreviewText(art.body)}
-                        </p>
-                      </div>
-                    </article>
-                  ))}
+                        <div className="flex min-w-0 flex-1 flex-col justify-between px-3.5 sm:px-0">
+                          <div>
+                            <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-slate-500">
+                              <span className="font-bold text-[#B80000] uppercase">
+                                {getMakalaSectionLabel(getMakalaSection(art.tags, art.title))}
+                              </span>
+                              <span aria-hidden="true">·</span>
+                              <span>{formatTime(art.createdAt)}</span>
+                              <span aria-hidden="true">·</span>
+                              <span>
+                                {tr(`Dakika ${artReadMins}`, `${artReadMins} min`)}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => onOpenTopic(art.id)}
+                              className="mt-1 block w-full text-left font-display text-lg font-bold leading-snug text-slate-950 transition-colors hover:text-[#B80000] sm:text-base [text-wrap:balance]"
+                            >
+                              {art.title}
+                            </button>
+                            <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-slate-600">
+                              {getLeadPreviewText(art.body)}
+                            </p>
+                          </div>
+
+                          <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-2.5 text-xs">
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => onToggleVote(art)}
+                                aria-pressed={artVoted}
+                                aria-label={tr(`Penda ${art.title}`, `Like ${art.title}`)}
+                                className={`inline-flex min-h-[36px] items-center gap-1 border px-2 py-1 transition-colors ${
+                                  artVoted
+                                    ? 'border-rose-300 bg-rose-50 text-rose-700'
+                                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                                }`}
+                              >
+                                <Heart
+                                  className={`h-3.5 w-3.5 ${
+                                    artVoted ? 'fill-rose-600 text-rose-600' : ''
+                                  }`}
+                                  aria-hidden="true"
+                                />
+                                <span className="font-mono tabular-nums">{art.upvotesCount}</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => onOpenTopic(art.id)}
+                                aria-label={tr(
+                                  `Maoni kwenye ${art.title}`,
+                                  `Comments on ${art.title}`
+                                )}
+                                className="inline-flex min-h-[36px] items-center gap-1 border border-slate-200 bg-white px-2 py-1 text-slate-600 hover:bg-slate-50"
+                              >
+                                <MessageCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                                <span className="font-mono tabular-nums">{art.repliesCount}</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => onShareTopic(art)}
+                                aria-label={tr(
+                                  `Shiriki ${art.title} (${art.sharesCount ?? 0})`,
+                                  `Share ${art.title} (${art.sharesCount ?? 0})`
+                                )}
+                                className="inline-flex min-h-[36px] items-center gap-1 border border-slate-200 bg-white px-2 py-1 text-slate-600 hover:bg-slate-50"
+                              >
+                                <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
+                                <span className="font-mono tabular-nums">
+                                  {art.sharesCount ?? 0}
+                                </span>
+                              </button>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => onOpenTopic(art.id)}
+                              className="bbc-read-more-btn inline-flex min-h-[38px] items-center gap-1 px-3.5 py-1.5 text-[11px] font-extrabold tracking-wide uppercase whitespace-nowrap shrink-0"
+                            >
+                              <span>{tr('Soma Zaidi', 'Read More')}</span>
+                              <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
               </section>
             )}
@@ -1028,22 +1119,28 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                     key={item.id}
                     type="button"
                     onClick={() => onOpenTopic(item.id)}
-                    className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-[#F6F6F6]"
+                    className="group flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-[#F6F6F6]"
                   >
                     <span className="font-display text-xl font-black leading-none text-[#B80000] tabular-nums shrink-0">
                       {idx + 1}
                     </span>
                     <div className="min-w-0 flex-1">
-                      <p className="line-clamp-2 text-sm font-bold leading-snug text-slate-900 hover:text-[#B80000]">
+                      <p className="line-clamp-2 text-sm font-bold leading-snug text-slate-900 group-hover:text-[#B80000]">
                         {item.title}
                       </p>
-                      <p className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[11px] text-slate-500">
-                        <span className="font-semibold text-slate-700">
-                          {getMakalaSectionLabel(getMakalaSection(item.tags, item.title))}
+                      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+                        <span className="flex flex-wrap items-center gap-x-1.5">
+                          <span className="font-semibold text-slate-700">
+                            {getMakalaSectionLabel(getMakalaSection(item.tags, item.title))}
+                          </span>
+                          <span aria-hidden="true">·</span>
+                          <span>{formatTime(item.createdAt)}</span>
                         </span>
-                        <span aria-hidden="true">·</span>
-                        <span>{formatTime(item.createdAt)}</span>
-                      </p>
+                        <span className="bbc-read-more-btn inline-flex items-center gap-0.5 px-2 py-0.5 text-[10px] font-extrabold tracking-wide uppercase whitespace-nowrap shrink-0">
+                          <span>{tr('Soma Zaidi', 'Read More')}</span>
+                          <ChevronRight className="h-3 w-3" aria-hidden="true" />
+                        </span>
+                      </div>
                     </div>
                   </button>
                 ))}
@@ -1053,7 +1150,7 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
             {/* Zilizosomwa / Pendwa Zaidi Rail */}
             {popularMakala.length > 0 && (
               <div className="border border-slate-200 bg-white">
-                <div className="border-b-2 border-slate-900 bg-white px-4 py-2.5">
+                <div className="border-b-2 border-[#B80000] bg-white px-4 py-2.5">
                   <h2 className="text-xs font-black tracking-wider text-slate-900 uppercase">
                     {tr('Zilizovuma Kwenye Makala', 'Most Popular')}
                   </h2>
@@ -1064,19 +1161,25 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                       key={item.id}
                       type="button"
                       onClick={() => onOpenTopic(item.id)}
-                      className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-[#F6F6F6]"
+                      className="group flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-[#F6F6F6]"
                     >
                       <span className="font-mono text-sm font-bold text-slate-400 tabular-nums shrink-0">
                         0{idx + 1}
                       </span>
                       <div className="min-w-0 flex-1">
-                        <p className="line-clamp-2 text-xs font-bold leading-snug text-slate-900 hover:text-[#B80000]">
+                        <p className="line-clamp-2 text-xs font-bold leading-snug text-slate-900 group-hover:text-[#B80000]">
                           {item.title}
                         </p>
-                        <p className="mt-1 text-[11px] text-slate-500 tabular-nums">
-                          {tr('Penda', 'Likes')} {item.upvotesCount} · {tr('Maoni', 'Comments')}{' '}
-                          {item.repliesCount}
-                        </p>
+                        <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 tabular-nums">
+                          <span>
+                            {tr('Penda', 'Likes')} {item.upvotesCount} · {tr('Maoni', 'Comments')}{' '}
+                            {item.repliesCount}
+                          </span>
+                          <span className="bbc-read-more-btn inline-flex items-center gap-0.5 px-2 py-0.5 text-[10px] font-extrabold tracking-wide uppercase whitespace-nowrap shrink-0">
+                            <span>{tr('Soma Zaidi', 'Read More')}</span>
+                            <ChevronRight className="h-3 w-3" aria-hidden="true" />
+                          </span>
+                        </div>
                       </div>
                     </button>
                   ))}

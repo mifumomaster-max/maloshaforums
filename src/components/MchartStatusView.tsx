@@ -39,7 +39,7 @@ import {
   StatusPrivacyMode,
 } from '../types';
 import { useLanguage } from '../context/LanguageContext';
-import { Avatar } from './Avatar';
+import { AuthorName, Avatar } from './Avatar';
 import { ImageResizeModal } from './ImageResizeModal';
 import { AuthorVerificationBadge } from './VerificationBadge';
 
@@ -740,7 +740,12 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
                             />
                           ) : (
                             <div className="flex h-full w-full items-center justify-center">
-                              <Avatar name={group.authorName} photoURL={group.authorPhoto} size="md" />
+                              <Avatar
+                                name={group.authorName}
+                                photoURL={group.authorPhoto}
+                                uid={group.authorId}
+                                size="md"
+                              />
                             </div>
                           )}
                         </div>
@@ -752,7 +757,7 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
                       )}
                     </div>
                     <span className="mt-1 w-full truncate text-center text-[11px] font-semibold text-slate-700">
-                      {group.authorName}
+                      <AuthorName uid={group.authorId} fallback={group.authorName} />
                     </span>
                   </button>
                 );
@@ -936,14 +941,19 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
                           }`}
                         >
                           <div className="rounded-full bg-white p-0.5">
-                            <Avatar name={group.authorName} photoURL={group.authorPhoto} size="md" />
+                            <Avatar
+                              name={group.authorName}
+                              photoURL={group.authorPhoto}
+                              uid={group.authorId}
+                              size="md"
+                            />
                           </div>
                         </div>
 
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5">
                             <span className="truncate text-sm font-bold text-slate-900">
-                              {group.authorName}
+                              <AuthorName uid={group.authorId} fallback={group.authorName} />
                             </span>
                             <AuthorVerificationBadge uid={group.authorId} size="xs" />
                             {group.hasPrivate && (
@@ -1253,14 +1263,17 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
               <Avatar
                 name={activeGroup.authorName}
                 photoURL={activeGroup.authorPhoto}
+                uid={activeGroup.authorId}
                 size="sm"
               />
               <div className="min-w-0">
                 <div className="flex items-center gap-1.5">
                   <p className="truncate text-sm font-bold text-white">
-                    {user && activeGroup.authorId === user.uid
-                      ? tr('Status Yangu', 'My Status')
-                      : activeGroup.authorName}
+                    {user && activeGroup.authorId === user.uid ? (
+                      tr('Status Yangu', 'My Status')
+                    ) : (
+                      <AuthorName uid={activeGroup.authorId} fallback={activeGroup.authorName} />
+                    )}
                   </p>
                   <AuthorVerificationBadge uid={activeGroup.authorId} size="xs" />
                   {currentSlide.privacy === 'selected' && (

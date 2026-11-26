@@ -32,7 +32,7 @@ import {
 import { optimizeCloudinaryUrl } from '../services/cloudinaryService';
 import { estimateReadMinutes } from '../utils/formatters';
 import { useLanguage } from '../context/LanguageContext';
-import { Avatar, OnlineStatusPill } from './Avatar';
+import { AuthorName, Avatar, OnlineStatusPill } from './Avatar';
 import { MakalaArticleRenderer } from './MakalaArticleRenderer';
 import { LinkedText, RichText, extractFirstUrl } from './RichText';
 import { FacebookCommentsThread } from './FacebookCommentsThread';
@@ -286,7 +286,8 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                           size="sm"
                         />
                         <span className="truncate">
-                          {tr('Na', 'By')} {topic.authorName}
+                          {tr('Na', 'By')}{' '}
+                          <AuthorName uid={topic.authorId} fallback={topic.authorName} />
                         </span>
                         <AuthorVerificationBadge uid={topic.authorId} size="xs" />
                         <OnlineStatusPill uid={topic.authorId} />
@@ -308,11 +309,40 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                     <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                       <button
                         type="button"
+                        onClick={() => onToggleTopicVote(topic)}
+                        aria-pressed={hasVotedTopic}
+                        className={`inline-flex min-h-[32px] items-center gap-1 border px-2.5 py-1 font-semibold transition-colors sm:min-h-[34px] ${
+                          hasVotedTopic
+                            ? 'border-rose-300 bg-rose-50 text-rose-700'
+                            : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <Heart
+                          className={`h-3.5 w-3.5 ${hasVotedTopic ? 'fill-rose-600 text-rose-600' : ''}`}
+                          aria-hidden="true"
+                        />
+                        <span className="font-mono tabular-nums">{topic.upvotesCount}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          document
+                            .getElementById('comments-thread')
+                            ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                        }}
+                        className="inline-flex min-h-[32px] items-center gap-1 border border-slate-200 bg-white px-2.5 py-1 font-semibold text-slate-700 hover:bg-slate-50 sm:min-h-[34px]"
+                      >
+                        <MessageCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span className="font-mono tabular-nums">{topic.repliesCount}</span>
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => onShareTopic(topic)}
                         className="inline-flex min-h-[32px] items-center gap-1 border border-slate-200 bg-white px-2.5 py-1 font-semibold text-slate-700 hover:bg-slate-50 sm:min-h-[34px]"
                       >
                         <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
                         <span>{tr('Shiriki', 'Share')}</span>
+                        <span className="font-mono tabular-nums">{topic.sharesCount ?? 0}</span>
                       </button>
                       {canManageTopic && (!isSuspended || isAdmin) && (
                         <button
@@ -384,7 +414,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                   )}
 
                   <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4 text-xs">
-                    <div className="flex items-center gap-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
                         onClick={() => onToggleTopicVote(topic)}
@@ -400,7 +430,21 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                           aria-hidden="true"
                         />
                         <span>{tr('Penda', 'Like')}</span>
-                        <span className="font-mono tabular-nums">({topic.upvotesCount})</span>
+                        <span className="font-mono tabular-nums">{topic.upvotesCount}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          document
+                            .getElementById('comments-thread')
+                            ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                        }}
+                        className="inline-flex min-h-[40px] items-center gap-1.5 border border-slate-300 bg-white px-3.5 py-1.5 font-semibold text-slate-800 hover:bg-slate-50"
+                      >
+                        <MessageCircle className="h-4 w-4" aria-hidden="true" />
+                        <span>{tr('Maoni', 'Comments')}</span>
+                        <span className="font-mono tabular-nums">{topic.repliesCount}</span>
                       </button>
 
                       <button
@@ -410,6 +454,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                       >
                         <Share2 className="h-4 w-4" aria-hidden="true" />
                         <span>{tr('Shiriki Makala', 'Share Article')}</span>
+                        <span className="font-mono tabular-nums">{topic.sharesCount ?? 0}</span>
                       </button>
                     </div>
 
@@ -493,10 +538,10 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
           </div>
         </div>
       ) : isKijiweni ? (
-        /* ── KIJIWENI: Clean Facebook-Style Standalone Post Card ───────────────── */
+        /* ── KIJIWENI: Scholarly Editorial Standalone Post Card ───────────────── */
         <article className="-mx-3.5 overflow-hidden border-y border-slate-200 bg-white sm:mx-0 sm:rounded-lg sm:border">
-          <div className="p-4 sm:p-6">
-            <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="p-5 sm:p-7">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-4">
               <div className="flex items-center gap-3">
                 <button
                   type="button"
@@ -531,7 +576,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                       }
                       className="text-left text-[15px] font-bold text-slate-900 hover:text-[#1D4E89] hover:underline"
                     >
-                      {topic.authorName}
+                      <AuthorName uid={topic.authorId} fallback={topic.authorName} />
                     </button>
                     <AuthorVerificationBadge uid={topic.authorId} size="sm" />
                     <OnlineStatusPill uid={topic.authorId} />
@@ -664,19 +709,19 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
             </div>
 
             {topic.title.trim() && (
-              <h1 className="mt-4 font-sans text-xl font-bold leading-snug text-slate-900 sm:text-2xl [text-wrap:balance]">
+              <h1 className="mt-5 font-display text-[22px] font-bold leading-[1.24] tracking-[-0.02em] text-[#0E2640] sm:text-[26px] [text-wrap:balance]">
                 {topic.title}
               </h1>
             )}
 
             {topic.body.trim() && (
-              <div className={topic.title.trim() ? 'mt-2.5' : 'mt-4'}>
-                <RichText content={topic.body} />
+              <div className={topic.title.trim() ? 'mt-3.5' : 'mt-5'}>
+                <RichText content={topic.body} fontStyle={topic.bodyFontStyle} scholarly />
               </div>
             )}
 
             {albumImages.length > 0 && (
-              <div className="mt-4">
+              <div className="mt-5">
                 <OrderedPhotoAlbum
                   images={albumImages}
                   altBase={topic.title.trim() || tr('Picha iliyochapishwa Kijiweni', 'Kijiweni photo post')}
@@ -685,52 +730,31 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
             )}
 
             {topic.tags.length > 0 && (
-              <p className="mt-3 text-xs text-slate-400">
-                {topic.tags.map((t) => `#${t}`).join(' ')}
+              <p className="mt-4 text-xs tracking-wide text-slate-400">
+                {topic.tags.map((t) => `#${t}`).join('  ·  ')}
               </p>
             )}
-
-            <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-xs text-slate-500">
-              <span className="inline-flex items-center gap-1.5 tabular-nums">
-                <Heart
-                  className={`h-3.5 w-3.5 ${
-                    topic.upvotesCount > 0 ? 'fill-rose-600 text-rose-600' : 'text-slate-400'
-                  }`}
-                  aria-hidden="true"
-                />
-                <span>
-                  {topic.upvotesCount === 0
-                    ? tr('Kuwa wa kwanza kupenda', 'Be the first to like')
-                    : topic.upvotesCount === 1
-                      ? tr('Mtu 1 amependa', '1 person liked this')
-                      : tr(
-                          `Watu ${topic.upvotesCount} wamependa`,
-                          `${topic.upvotesCount} people liked this`
-                        )}
-                </span>
-              </span>
-              <span className="tabular-nums">
-                {tr(`Maoni ${topic.repliesCount}`, `${topic.repliesCount} comments`)}
-              </span>
-            </div>
           </div>
 
-          <div className="grid grid-cols-3 border-t border-slate-100 px-3 py-1 text-xs">
+          <div className="mt-3 grid grid-cols-3 border-t border-slate-100 px-3 py-1 text-xs">
             <button
               type="button"
               onClick={() => onToggleTopicVote(topic)}
               aria-pressed={hasVotedTopic}
-              className={`inline-flex min-h-[42px] items-center justify-center gap-2 rounded-lg font-semibold transition-colors ${
+              className={`inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg font-semibold transition-colors ${
                 hasVotedTopic
                   ? 'text-rose-600 hover:bg-rose-50/70'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
               }`}
             >
               <Heart
-                className={`h-4 w-4 ${hasVotedTopic ? 'fill-rose-600 text-rose-600' : ''}`}
+                className={`h-4 w-4 shrink-0 ${hasVotedTopic ? 'fill-rose-600 text-rose-600' : ''}`}
                 aria-hidden="true"
               />
               <span>{tr('Penda', 'Like')}</span>
+              <span className="font-mono text-[11px] font-bold tabular-nums opacity-90">
+                {topic.upvotesCount}
+              </span>
             </button>
 
             <button
@@ -740,19 +764,25 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                   .getElementById('comments-thread')
                   ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
               }}
-              className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-lg font-semibold text-[#1D4E89] hover:bg-sky-50"
+              className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg font-semibold text-[#1D4E89] hover:bg-sky-50"
             >
-              <MessageCircle className="h-4 w-4" aria-hidden="true" />
+              <MessageCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
               <span>{tr('Maoni', 'Comments')}</span>
+              <span className="font-mono text-[11px] font-bold tabular-nums opacity-90">
+                {topic.repliesCount}
+              </span>
             </button>
 
             <button
               type="button"
               onClick={() => onShareTopic(topic)}
-              className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-lg font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
+              className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
             >
-              <Share2 className="h-4 w-4" aria-hidden="true" />
+              <Share2 className="h-4 w-4 shrink-0" aria-hidden="true" />
               <span>{tr('Shiriki', 'Share')}</span>
+              <span className="font-mono text-[11px] font-bold tabular-nums opacity-90">
+                {topic.sharesCount ?? 0}
+              </span>
             </button>
           </div>
         </article>
@@ -816,7 +846,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                   <span>
                     {tr('Mchapishaji:', 'Posted by:')}{' '}
                     <strong className="text-slate-800 hover:text-[#1D4E89]">
-                      {topic.authorName}
+                      <AuthorName uid={topic.authorId} fallback={topic.authorName} />
                     </strong>
                   </span>
                   <AuthorVerificationBadge uid={topic.authorId} size="xs" />
@@ -1024,7 +1054,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
             )}
 
             <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3 text-xs">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={() => onToggleTopicVote(topic)}
@@ -1040,7 +1070,21 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                     aria-hidden="true"
                   />
                   <span>{tr('Penda', 'Like')}</span>
-                  <span className="font-mono tabular-nums">({topic.upvotesCount})</span>
+                  <span className="font-mono tabular-nums">{topic.upvotesCount}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    document
+                      .getElementById('comments-thread')
+                      ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                  }}
+                  className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-1.5 font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  <MessageCircle className="h-4 w-4" aria-hidden="true" />
+                  <span>{tr('Maoni', 'Comments')}</span>
+                  <span className="font-mono tabular-nums">{topic.repliesCount}</span>
                 </button>
 
                 <button
@@ -1050,6 +1094,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                 >
                   <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
                   <span>{tr('Shiriki', 'Share')}</span>
+                  <span className="font-mono tabular-nums">{topic.sharesCount ?? 0}</span>
                 </button>
               </div>
 

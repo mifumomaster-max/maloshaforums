@@ -39,7 +39,9 @@ service cloud.firestore {
         (
           'email' in request.auth.token &&
           request.auth.token.email is string &&
-          request.auth.token.email.lower() == 'mifumomaster@gmail.com'
+          request.auth.token.email.lower() == 'mifumomaster@gmail.com' &&
+          'email_verified' in request.auth.token &&
+          request.auth.token.email_verified == true
         ) ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
@@ -195,7 +197,9 @@ service cloud.firestore {
           existing().authorId == request.auth.uid ||
           incoming().diff(existing()).affectedKeys().hasOnly(['repliesCount', 'lastActivityAt', 'updatedAt']) ||
           incoming().diff(existing()).affectedKeys().hasOnly(['upvotesCount', 'updatedAt']) ||
-          incoming().diff(existing()).affectedKeys().hasOnly(['upvotesCount'])
+          incoming().diff(existing()).affectedKeys().hasOnly(['upvotesCount']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['sharesCount', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['sharesCount'])
         );
 
       allow delete: if isSignedIn()
@@ -445,19 +449,23 @@ service cloud.firestore {
 
     // 14. Owner Specimen ID Cards, Certificates & Private Photo Vault
     match /owner_id_cards/{cardId} {
-      allow get, list, create, update, delete: if isAdmin() && isValidId(cardId);
+      allow list: if isAdmin();
+      allow get, create, update, delete: if isAdmin() && isValidId(cardId);
     }
 
     match /training_certificates/{certId} {
-      allow get, list, create, update, delete: if isAdmin() && isValidId(certId);
+      allow list: if isAdmin();
+      allow get, create, update, delete: if isAdmin() && isValidId(certId);
     }
 
     match /owner_private_photos/{photoId} {
-      allow get, list, create, update, delete: if isAdmin() && isValidId(photoId);
+      allow list: if isAdmin();
+      allow get, create, update, delete: if isAdmin() && isValidId(photoId);
     }
 
     match /owner_photo_folders/{folderId} {
-      allow get, list, create, update, delete: if isAdmin() && isValidId(folderId);
+      allow list: if isAdmin();
+      allow get, create, update, delete: if isAdmin() && isValidId(folderId);
     }
 
     // 15. Community Polls & Voting
@@ -485,7 +493,8 @@ service cloud.firestore {
         && (isAdmin() || ('createdBy' in existing() && existing().createdBy == request.auth.uid));
 
       match /tallies/{optionId} {
-        allow get, list: if isValidId(pollId) && isValidId(optionId);
+        allow list: if isValidId(pollId);
+        allow get: if isValidId(pollId) && isValidId(optionId);
         allow create, update: if isSignedIn() && isValidId(pollId) && isValidId(optionId);
         allow delete: if isSignedIn() && isValidId(pollId) && isValidId(optionId) && (
           isAdmin() ||

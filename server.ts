@@ -1,5 +1,7 @@
-import express, { Request, Response } from 'express';
+import express from 'express';
+import type { Request, Response } from 'express';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ViteDevServer } from 'vite';
@@ -27,7 +29,13 @@ interface PublicTopicRecord {
 }
 
 const PORT = Number(process.env.PORT) || 3000;
-const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const distDir = path.join(__dirname, 'dist');
+const distIndexHtmlPath = path.join(distDir, 'index.html');
+const isTsxRuntime = process.execArgv.some((arg) => arg.includes('tsx'));
+const IS_PRODUCTION =
+  process.env.NODE_ENV === 'production' ||
+  process.env.npm_lifecycle_event === 'start' ||
+  (!isTsxRuntime && fs.existsSync(distIndexHtmlPath));
 
 const BUILTIN_COVER_FILES = [
   'makala_tech_africa_1794671923666.jpg',
@@ -39,10 +47,16 @@ const BUILTIN_COVER_FILES = [
 const TOPIC_CACHE_TTL_MS = 45_000;
 const topicCache = new Map<string, { expiresAt: number; data: PublicTopicRecord | null }>();
 
-function loadFirebaseConfig(): FirebaseAppletConfig {
-  const cfgPath = path.join(__dirname, 'firebase-applet-config.json');
-  const raw = fs.readFileSync(cfgPath, 'utf8');
-  return JSON.parse(raw) as FirebaseAppletConfig;
+function loadFirebaseConfig(): FirebaseAppletConfig | null {
+  try {
+    const cfgPath = path.join(__dirname, 'firebase-applet-config.json');
+    if (!fs.existsSync(cfgPath)) return null;
+    const raw = fs.readFileSync(cfgPath, 'utf8');
+    return JSON.parse(raw) as FirebaseAppletConfig;
+  } catch (err) {
+    console.warn('Could not load firebase-applet-config.json:', err);
+    return null;
+  }
 }
 
 const firebaseCfg = loadFirebaseConfig();
@@ -73,6 +87,9 @@ function decodeFirestoreValue(val: unknown): unknown {
 
 async function fetchPublicTopicById(topicId: string): Promise<PublicTopicRecord | null> {
   if (!/^[a-zA-Z0-9_-]{2,128}$/.test(topicId)) return null;
+  if (!firebaseCfg?.projectId || !firebaseCfg?.firestoreDatabaseId || !firebaseCfg?.apiKey) {
+    return null;
+  }
 
   const cached = topicCache.get(topicId);
   if (cached && cached.expiresAt > Date.now()) {
@@ -384,20 +401,26 @@ function applySocialMetaToHtml(
 async function startServer() {
   const app = express();
   app.set('trust proxy', true);
+  const httpServer = http.createServer(app);
 
   let vite: ViteDevServer | null = null;
   if (!IS_PRODUCTION) {
-    const { createServer } = await import('vite');
-    vite = await createServer({
-      server: {
-        middlewareMode: true,
-        hmr: process.env.DISABLE_HMR !== 'true',
-      },
-      appType: 'custom',
-    });
+    try {
+      const { createServer } = await import('vite');
+      vite = await createServer({
+        server: {
+          middlewareMode: { server: httpServer },
+          ws: { server: httpServer },
+          hmr: false,
+          watch: null,
+          allowedHosts: true,
+        },
+        appType: 'custom',
+      });
+    } catch (err) {
+      console.warn('Vite dev server unavailable, falling back to static dist:', err);
+    }
   }
-
-  const distDir = path.join(__dirname, 'dist');
 
   async function renderHtmlWithSocialMeta(
     req: Request,
@@ -406,12 +429,18 @@ async function startServer() {
   ) {
     try {
       const origin = getRequestOrigin(req);
-      const htmlFilePath = IS_PRODUCTION
-        ? path.join(distDir, 'index.html')
+      const useDist = (IS_PRODUCTION || !vite) && fs.existsSync(distIndexHtmlPath);
+      const htmlFilePath = useDist
+        ? distIndexHtmlPath
         : path.join(__dirname, 'index.html');
 
+      if (!fs.existsSync(htmlFilePath)) {
+        res.status(503).send('Application build not found');
+        return;
+      }
+
       let rawHtml = fs.readFileSync(htmlFilePath, 'utf8');
-      if (!IS_PRODUCTION && vite) {
+      if (!useDist && vite) {
         rawHtml = await vite.transformIndexHtml(req.originalUrl, rawHtml);
       }
 
@@ -494,9 +523,13 @@ async function startServer() {
     await renderHtmlWithSocialMeta(req, res, queryTopicId);
   });
 
+  app.get('/healthz', (_req, res) => {
+    res.status(200).json({ ok: true });
+  });
+
   if (!IS_PRODUCTION && vite) {
     app.use(vite.middlewares);
-  } else {
+  } else if (fs.existsSync(distDir)) {
     app.use(express.static(distDir, { index: false }));
   }
 
@@ -514,7 +547,7 @@ async function startServer() {
     await renderHtmlWithSocialMeta(req, res, queryTopicId);
   });
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Malosha Forums server running on http://0.0.0.0:${PORT}`);
   });
 }

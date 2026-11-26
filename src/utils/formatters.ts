@@ -67,7 +67,7 @@ export async function shareTopic(
   topic: Topic,
   onResult: (message: string) => void,
   lang: 'sw' | 'en' = 'sw'
-): Promise<void> {
+): Promise<boolean> {
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const payload = buildMakalaSocialPayload(topic, origin, lang);
 
@@ -91,7 +91,7 @@ export async function shareTopic(
             url: payload.shareUrl,
           });
           onResult(lang === 'en' ? 'Shared with photo!' : 'Umeshiriki pamoja na picha!');
-          return;
+          return true;
         }
       }
 
@@ -101,9 +101,9 @@ export async function shareTopic(
         url: payload.shareUrl,
       });
       onResult(lang === 'en' ? 'Shared successfully!' : 'Umeshiriki chapisho hili!');
-      return;
+      return true;
     } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return;
+      if (err instanceof DOMException && err.name === 'AbortError') return false;
     }
   }
 
@@ -114,11 +114,13 @@ export async function shareTopic(
         ? 'Complete post & link copied!'
         : 'Chapisho kamili na kiungo vimenakiliwa!'
     );
+    return true;
   } catch {
     onResult(
       lang === 'en'
         ? 'Link ready: copy the URL from your browser address bar.'
         : 'Kiungo tayari: tumia anwani ya kivinjari chako kushiriki.'
     );
+    return true;
   }
 }

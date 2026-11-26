@@ -30,6 +30,7 @@ import {
   ContentRetentionPeriod,
   ContentRetentionSettings,
   DirectChatThread,
+  KijiweniFontStyle,
   MchartGroupReadCursor,
   MchartGroupSettings,
   MchartNote,
@@ -55,6 +56,7 @@ import {
   findCommunityRule,
   normalizeAccountStatus,
   normalizeBoardCategory,
+  normalizeKijiweniFontStyle,
   normalizeVerificationBadge,
 } from './types';
 import {
@@ -69,8 +71,10 @@ import {
   ensureDirectChatThread,
   fetchPlatformUsersCount,
   getPrivateUserInfo,
+  incrementTopicShareCount,
   markAllUserNotificationsRead,
   markUserNotificationRead,
+  propagateUserIdentityAcrossAccount,
   runKijiweniRetentionCleanup,
   runVideoRetentionCleanup,
   seedStarterTopics,
@@ -105,7 +109,7 @@ import { ReportModal } from './components/ReportModal';
 import { SafetyGuidelinesView } from './components/SafetyGuidelinesView';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { LanguageProvider, useLanguage } from './context/LanguageContext';
-import { UserBadgesProvider } from './context/UserBadgesContext';
+import { UserBadgesProvider, useUserBadges } from './context/UserBadgesContext';
 import { UserPresenceProvider } from './context/UserPresenceContext';
 import { AppLaunchLoader } from './components/AppLaunchLoader';
 import { PWAInstallBanner } from './components/PWAInstallBanner';
@@ -145,6 +149,7 @@ function getStartOfTodayBoundaryMs(): number {
 
 function ForumShell() {
   const { lang, setLang, tr } = useLanguage();
+  const { setLocalUserIdentity } = useUserBadges();
   const [authReady, setAuthReady] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
@@ -582,14 +587,18 @@ function ForumShell() {
       (snap) => {
         if (!snap.exists()) return;
         const d = snap.data();
+        const badge = normalizeVerificationBadge(d.verificationBadge);
+        const status = normalizeAccountStatus(d.accountStatus);
+        const resolvedName = String(d.displayName || '');
+        const resolvedPhoto = String(d.photoURL || '');
         setUserProfile({
           uid: d.uid,
-          displayName: d.displayName,
-          photoURL: d.photoURL || '',
+          displayName: resolvedName,
+          photoURL: resolvedPhoto,
           bio: d.bio || '',
           role: d.role || 'member',
-          verificationBadge: normalizeVerificationBadge(d.verificationBadge),
-          accountStatus: normalizeAccountStatus(d.accountStatus),
+          verificationBadge: badge,
+          accountStatus: status,
           suspendedReason: typeof d.suspendedReason === 'string' ? d.suspendedReason : '',
           suspendedRuleNumber: Number(d.suspendedRuleNumber || 0),
           topicsCount: Number(d.topicsCount || 0),
@@ -598,6 +607,12 @@ function ForumShell() {
           createdAt: d.createdAt || null,
           updatedAt: d.updatedAt || null,
         });
+        setLocalUserIdentity(d.uid || user.uid, {
+          displayName: resolvedName,
+          photoURL: resolvedPhoto,
+          verificationBadge: badge,
+          accountStatus: status,
+        });
       },
       (error) => {
         handleFirestoreError(error, OperationType.GET, path);
@@ -605,7 +620,7 @@ function ForumShell() {
     );
 
     return () => unsub();
-  }, [authReady, user]);
+  }, [authReady, user, setLocalUserIdentity]);
 
   useEffect(() => {
     if (!authReady) return;
@@ -626,6 +641,7 @@ function ForumShell() {
         isPinned: Boolean(data.isPinned),
         repliesCount: Number(data.repliesCount || 0),
         upvotesCount: Number(data.upvotesCount || 0),
+        sharesCount: Number(data.sharesCount || 0),
         acceptedReplyId: String(data.acceptedReplyId || ''),
         company: String(data.company || ''),
         location: String(data.location || ''),
@@ -634,6 +650,7 @@ function ForumShell() {
         applyInfo: String(data.applyInfo || ''),
         coverImage: String(data.coverImage || ''),
         images: Array.isArray(data.images) ? data.images.map(String).filter(Boolean) : [],
+        bodyFontStyle: normalizeKijiweniFontStyle(data.bodyFontStyle),
         createdAt: (data.createdAt as Topic['createdAt']) || null,
         updatedAt: (data.updatedAt as Topic['updatedAt']) || null,
         lastActivityAt: ((data.lastActivityAt || data.createdAt) as Topic['lastActivityAt']) || null,
@@ -2178,28 +2195,8 @@ function ForumShell() {
           return;
         }
 
-        const newlyRegistered = list.filter(
-          (u) => !knownAdminSignupIdsRef.current.has(u.uid) && u.uid !== user.uid
-        );
+        // Keep new member registration notifications exclusively in the Header Notification Bell (no popup/toast)
         list.forEach((u) => knownAdminSignupIdsRef.current.add(u.uid));
-
-        if (newlyRegistered.length > 0) {
-          const newest = newlyRegistered[0];
-          const alertTitle = tr('Mwanachama Mpya Amejisajili', 'New Member Registered');
-          const alertBody = tr(
-            `${newest.displayName} amejiunga na Malosha Forums sasa hivi.`,
-            `${newest.displayName} just registered on Malosha Forums.`
-          );
-          if (typeof document !== 'undefined' && !document.hidden) {
-            showToast(`${alertTitle}: ${newest.displayName}`);
-          }
-          void sendPhoneNotification({
-            title: alertTitle,
-            body: alertBody,
-            url: '/?tab=safety',
-            tag: `malosha-signup-${newest.uid}`,
-          });
-        }
       },
       () => {
         // Non-fatal fallback
@@ -2207,7 +2204,7 @@ function ForumShell() {
     );
 
     return () => unsub();
-  }, [authReady, user, isAdmin, showToast, tr]);
+  }, [authReady, user, isAdmin]);
 
   // Real-time Facebook-style reply & comment notifications for the signed-in user
   useEffect(() => {
@@ -2562,6 +2559,7 @@ function ForumShell() {
           isPinned: Boolean(data.isPinned),
           repliesCount: Number(data.repliesCount || 0),
           upvotesCount: Number(data.upvotesCount || 0),
+          sharesCount: Number(data.sharesCount || 0),
           acceptedReplyId: data.acceptedReplyId || '',
           company: data.company || '',
           location: data.location || '',
@@ -2570,6 +2568,7 @@ function ForumShell() {
           applyInfo: data.applyInfo || '',
           coverImage: data.coverImage || '',
           images: Array.isArray(data.images) ? data.images.map(String).filter(Boolean) : [],
+          bodyFontStyle: normalizeKijiweniFontStyle(data.bodyFontStyle),
           createdAt: data.createdAt || null,
           updatedAt: data.updatedAt || null,
           lastActivityAt: data.lastActivityAt || data.createdAt || null,
@@ -2649,7 +2648,11 @@ function ForumShell() {
         setShareModalTopic(t);
         return;
       }
-      void shareTopic(t, (msg) => showToast(msg), lang);
+      void shareTopic(t, (msg) => showToast(msg), lang).then((sharedOk) => {
+        if (sharedOk) {
+          void incrementTopicShareCount(t.id);
+        }
+      });
     },
     [lang, showToast]
   );
@@ -3079,31 +3082,41 @@ function ForumShell() {
     setComposerOpen(true);
   };
 
-  const handleSaveTopic = async (data: {
-    title: string;
-    body: string;
-    category: TopicCategory;
-    tags: string[];
-    company?: string;
-    location?: string;
-    jobType?: string;
-    deadline?: string;
-    applyInfo?: string;
-    coverImage?: string;
-    images?: string[];
-  }) => {
+  const handleSaveTopic = async (
+    data: {
+      title: string;
+      body: string;
+      category: TopicCategory;
+      tags: string[];
+      company?: string;
+      location?: string;
+      jobType?: string;
+      deadline?: string;
+      applyInfo?: string;
+      coverImage?: string;
+      images?: string[];
+      bodyFontStyle?: KijiweniFontStyle;
+    },
+    options?: { silent?: boolean; stayOnFeed?: boolean }
+  ) => {
     if (!user || blockIfSuspended()) return;
     if (editingTopic) {
       await editTopic(editingTopic.id, data);
-      showToast(tr('Mabadiliko yamehifadhiwa.', 'Changes saved.'));
+      if (!options?.silent) {
+        showToast(tr('Mabadiliko yamehifadhiwa.', 'Changes saved.'));
+      }
     } else {
       const newId = await createTopic(
         user,
         userProfile?.displayName || user.displayName || 'Mwanachama',
         data
       );
-      setSelectedTopicId(newId);
-      showToast(tr('Chapisho lako jipya limewekwa hewani!', 'Your new post is now live!'));
+      if (!options?.silent) {
+        if (!options?.stayOnFeed) {
+          setSelectedTopicId(newId);
+        }
+        showToast(tr('Chapisho lako jipya limewekwa hewani!', 'Your new post is now live!'));
+      }
     }
   };
 
@@ -3114,6 +3127,7 @@ function ForumShell() {
       tags: string[];
       coverImage?: string;
       images?: string[];
+      bodyFontStyle?: KijiweniFontStyle;
       status?: 'open' | 'private';
     },
     options?: { silent?: boolean }
@@ -3140,6 +3154,7 @@ function ForumShell() {
         tags: data.tags,
         ...(data.coverImage ? { coverImage: data.coverImage } : {}),
         ...(data.images && data.images.length > 0 ? { images: data.images } : {}),
+        ...(data.bodyFontStyle ? { bodyFontStyle: data.bodyFontStyle } : {}),
         ...(data.status === 'private' ? { status: 'private' } : {}),
       }
     );
@@ -3388,11 +3403,17 @@ function ForumShell() {
     phoneNumber?: string
   ) => {
     if (!user || blockIfSuspended()) return;
-    await updateUserProfile(user.uid, displayName, bio);
+    const cleanName = await updateUserProfile(user.uid, displayName, bio);
+    setUserProfile((prev) =>
+      prev ? { ...prev, displayName: cleanName, bio: bio.trim() } : prev
+    );
+    setLocalUserIdentity(user.uid, { displayName: cleanName });
+    await updateProfile(user, { displayName: cleanName }).catch(() => {});
     if (phoneNumber !== undefined) {
       await updatePrivatePhoneNumber(user.uid, phoneNumber);
       setUserPhone(phoneNumber.trim());
     }
+    await propagateUserIdentityAcrossAccount(user.uid, { displayName: cleanName }).catch(() => {});
   };
 
   const handleUpdateProfilePhoto = async (photoURL: string) => {
@@ -3402,7 +3423,10 @@ function ForumShell() {
       photoURL,
       userProfile?.displayName || user.displayName || 'Mwanachama'
     );
+    setUserProfile((prev) => (prev ? { ...prev, photoURL: cleanUrl } : prev));
+    setLocalUserIdentity(user.uid, { photoURL: cleanUrl });
     await updateProfile(user, { photoURL: cleanUrl || null }).catch(() => {});
+    await propagateUserIdentityAcrossAccount(user.uid, { photoURL: cleanUrl }).catch(() => {});
   };
 
   const composerDefaultCategory: TopicCategory | 'all' =
@@ -3490,8 +3514,8 @@ function ForumShell() {
             topics={topics}
             userUid={user?.uid || null}
             userProfile={userProfile}
-            userDisplayName={user?.displayName || 'Mwanachama'}
-            userPhoto={user?.photoURL || ''}
+            userDisplayName={userProfile?.displayName || user?.displayName || 'Mwanachama'}
+            userPhoto={userProfile ? userProfile.photoURL : user?.photoURL || ''}
             isAdmin={isAdmin}
             isSuspended={isSuspended}
             onSignIn={handleSignIn}
@@ -3575,7 +3599,7 @@ function ForumShell() {
             onOpenTopic={openTopicFromFeed}
             userUid={user?.uid || null}
             userDisplayName={userProfile?.displayName || user?.displayName || 'Mwanachama'}
-            userPhoto={userProfile?.photoURL || user?.photoURL || ''}
+            userPhoto={userProfile ? userProfile.photoURL : user?.photoURL || ''}
             isAdmin={isAdmin}
             isSuspended={isSuspended}
             hasVotedTopic={votedTopicIds.has(selectedTopic.id)}
@@ -3762,7 +3786,7 @@ function ForumShell() {
             onChangeActiveDirectChatId={setActiveDirectChatId}
             user={user}
             userDisplayName={userProfile?.displayName || user?.displayName || 'Mwanachama'}
-            userPhoto={userProfile?.photoURL || user?.photoURL || ''}
+            userPhoto={userProfile ? userProfile.photoURL : user?.photoURL || ''}
             isAdmin={isAdmin}
             isSuspended={isSuspended}
             keyboardOpen={isMchartView && mobileKeyboardOpen}
@@ -3783,7 +3807,7 @@ function ForumShell() {
             likedVideoIds={likedVideoIds}
             user={user}
             userDisplayName={userProfile?.displayName || user?.displayName || 'Mwanachama'}
-            userPhoto={userProfile?.photoURL || user?.photoURL || ''}
+            userPhoto={userProfile ? userProfile.photoURL : user?.photoURL || ''}
             isAdmin={isAdmin}
             isSuspended={isSuspended}
             initialVideoId={initialVideoId}
@@ -3803,7 +3827,7 @@ function ForumShell() {
             }}
             user={user}
             userDisplayName={userProfile?.displayName || user?.displayName || 'Mwanachama'}
-            userPhoto={userProfile?.photoURL || user?.photoURL || ''}
+            userPhoto={userProfile ? userProfile.photoURL : user?.photoURL || ''}
             isAdmin={isAdmin}
             isSuspended={isSuspended}
             hideCreateForUsers={hideCreateMpollForCurrentUser}
@@ -3832,7 +3856,7 @@ function ForumShell() {
             onToggleOnlyMine={() => setOnlyMine((prev) => !prev)}
             userUid={user?.uid || null}
             userDisplayName={userProfile?.displayName || user?.displayName || 'Mwanachama'}
-            userPhoto={userProfile?.photoURL || user?.photoURL || ''}
+            userPhoto={userProfile ? userProfile.photoURL : user?.photoURL || ''}
             isAdmin={isAdmin}
             isSuspended={isSuspended}
             votedTopicIds={votedTopicIds}
@@ -3997,6 +4021,7 @@ function ForumShell() {
         topic={shareModalTopic}
         onClose={() => setShareModalTopic(null)}
         onToast={(msg, kind) => showToast(msg, kind)}
+        onShared={(t) => void incrementTopicShareCount(t.id)}
       />
 
       <TopicComposerModal
@@ -4036,9 +4061,10 @@ function ForumShell() {
         fallbackPhoto={profileModalTarget?.photoURL}
         currentUser={user}
         currentUserDisplayName={userProfile?.displayName || user?.displayName || 'Mwanachama'}
-        currentUserPhoto={userProfile?.photoURL || user?.photoURL || ''}
+        currentUserPhoto={userProfile ? userProfile.photoURL : user?.photoURL || ''}
         topics={topics}
         videos={videos}
+        isAdmin={isAdmin}
         isSuspended={isSuspended}
         onClose={() => setProfileModalTarget(null)}
         onSignIn={handleSignIn}

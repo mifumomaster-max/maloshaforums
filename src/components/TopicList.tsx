@@ -16,6 +16,7 @@ import {
   AuthPromptReason,
   FORUM_BOARDS,
   JOB_TYPES,
+  KijiweniFontStyle,
   NavTab,
   NavUnreadCounts,
   PrimaryBoard,
@@ -26,7 +27,7 @@ import {
   normalizeBoardCategory,
 } from '../types';
 import { useLanguage } from '../context/LanguageContext';
-import { Avatar } from './Avatar';
+import { AuthorName, Avatar } from './Avatar';
 import { FursaInlineComposer } from './FursaInlineComposer';
 import { FursaPostCard } from './FursaPostCard';
 import { KijiweniPostCard } from './KijiweniPostCard';
@@ -66,6 +67,7 @@ interface TopicListProps {
       tags: string[];
       coverImage?: string;
       images?: string[];
+      bodyFontStyle?: KijiweniFontStyle;
       status?: 'open' | 'private';
     },
     options?: { silent?: boolean }
@@ -1028,9 +1030,14 @@ export const TopicList: React.FC<TopicListProps> = ({
                             }
                             className="flex min-w-0 items-center gap-1.5 hover:underline"
                           >
-                            <Avatar name={topic.authorName} photoURL={topic.authorPhoto} size="sm" />
+                            <Avatar
+                              name={topic.authorName}
+                              photoURL={topic.authorPhoto}
+                              uid={topic.authorId}
+                              size="sm"
+                            />
                             <span className="truncate font-semibold text-slate-800 hover:text-[#1D4E89]">
-                              {topic.authorName}
+                              <AuthorName uid={topic.authorId} fallback={topic.authorName} />
                             </span>
                             <AuthorVerificationBadge uid={topic.authorId} size="xs" />
                           </button>
@@ -1064,7 +1071,12 @@ export const TopicList: React.FC<TopicListProps> = ({
                           aria-label={tr(`Tazama wasifu wa ${topic.authorName}`, `View ${topic.authorName}'s profile`)}
                           className="hidden pt-0.5 md:block shrink-0 rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1D4E89]"
                         >
-                          <Avatar name={topic.authorName} photoURL={topic.authorPhoto} size="md" />
+                          <Avatar
+                            name={topic.authorName}
+                            photoURL={topic.authorPhoto}
+                            uid={topic.authorId}
+                            size="md"
+                          />
                         </button>
 
                         <div className="min-w-0 flex-1">
@@ -1127,7 +1139,9 @@ export const TopicList: React.FC<TopicListProps> = ({
                               }
                               className="inline-flex items-center gap-1 font-medium text-slate-700 hover:text-[#1D4E89] hover:underline"
                             >
-                              <span>{topic.authorName}</span>
+                              <span>
+                                <AuthorName uid={topic.authorId} fallback={topic.authorName} />
+                              </span>
                               <AuthorVerificationBadge uid={topic.authorId} size="xs" />
                             </button>
                             <span aria-hidden="true">·</span>
@@ -1188,10 +1202,11 @@ export const TopicList: React.FC<TopicListProps> = ({
                           <button
                             type="button"
                             onClick={() => onOpenTopic(topic.id)}
+                            aria-label={tr(`Maoni (${topic.repliesCount})`, `Comments (${topic.repliesCount})`)}
                             className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg px-2 font-mono tabular-nums text-slate-600 hover:text-slate-900 md:order-1 md:min-h-0 md:w-16 md:justify-end md:px-0"
                           >
                             <MessageCircle
-                              className="h-4 w-4 text-slate-400 md:hidden"
+                              className="h-4 w-4 text-slate-400 md:h-3.5 md:w-3.5"
                               aria-hidden="true"
                             />
                             <span className="font-semibold text-slate-800">{topic.repliesCount}</span>
@@ -1203,10 +1218,16 @@ export const TopicList: React.FC<TopicListProps> = ({
                           <button
                             type="button"
                             onClick={() => onShareTopic(topic)}
-                            aria-label={tr(`Shiriki ${topic.title}`, `Share ${topic.title}`)}
+                            aria-label={tr(
+                              `Shiriki ${topic.title} (${topic.sharesCount ?? 0})`,
+                              `Share ${topic.title} (${topic.sharesCount ?? 0})`
+                            )}
                             className="inline-flex min-h-[38px] items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-slate-600 hover:bg-slate-50 hover:text-slate-900 md:order-3 md:min-h-0 md:w-16 md:border-0 md:bg-transparent md:px-1"
                           >
                             <Share2 className="h-4 w-4 md:h-3.5 md:w-3.5" aria-hidden="true" />
+                            <span className="font-mono font-semibold text-slate-800 tabular-nums">
+                              {topic.sharesCount ?? 0}
+                            </span>
                             <span className="font-sans md:hidden">{tr('Shiriki', 'Share')}</span>
                           </button>
                         </div>
@@ -1218,9 +1239,17 @@ export const TopicList: React.FC<TopicListProps> = ({
                         <button
                           type="button"
                           onClick={() => onOpenTopic(topic.id)}
-                          className="inline-flex min-h-[38px] items-center gap-1 text-xs font-semibold text-[#1D4E89] md:hidden"
+                          className={
+                            boardLabel === 'Makala'
+                              ? 'bbc-read-more-btn inline-flex min-h-[38px] items-center gap-1 px-3 py-1.5 text-[11px] font-extrabold tracking-wide uppercase whitespace-nowrap shrink-0 md:hidden'
+                              : 'inline-flex min-h-[38px] items-center gap-1 text-xs font-semibold text-[#1D4E89] md:hidden'
+                          }
                         >
-                          <span>{tr('Fungua', 'Open')}</span>
+                          <span>
+                            {boardLabel === 'Makala'
+                              ? tr('Soma Zaidi', 'Read More')
+                              : tr('Fungua', 'Open')}
+                          </span>
                           <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
                         </button>
                       </div>

@@ -61,7 +61,7 @@ import {
 } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 import { useUserPresence } from '../context/UserPresenceContext';
-import { Avatar, OnlineStatusPill } from './Avatar';
+import { AuthorName, Avatar, OnlineStatusPill } from './Avatar';
 import { ImageResizeModal } from './ImageResizeModal';
 import { MchartDirectInbox, MchartDirectRoom } from './MchartDirectChatView';
 import {
@@ -1500,7 +1500,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                                   msg.senderId
                                 )}`}
                               >
-                                {msg.senderName}
+                                <AuthorName uid={msg.senderId} fallback={msg.senderName} />
                               </button>
                               <AuthorVerificationBadge uid={msg.senderId} size="xs" />
                               <OnlineStatusPill uid={msg.senderId} />

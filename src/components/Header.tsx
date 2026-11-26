@@ -41,7 +41,7 @@ import {
   sendPhoneNotification,
   setPhoneAlertsEnabled,
 } from '../services/notificationService';
-import { Avatar, OnlineStatusPill } from './Avatar';
+import { AuthorName, Avatar, OnlineStatusPill } from './Avatar';
 import { NavIconSection, NavSectionIcon } from './NavIcons';
 import { AuthorVerificationBadge, VerificationBadge } from './VerificationBadge';
 
@@ -1120,7 +1120,7 @@ export const Header: React.FC<HeaderProps> = ({
                         );
                       })
                     )
-                  ) : visibleNewsOrTopics.length === 0 ? (
+                  ) : visibleNewsOrTopics.length === 0 && !(notifFilter === 'all' && isAdmin && recentSignups.length > 0) ? (
                     <div className="px-5 py-9 text-center">
                       <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-slate-100 text-slate-400">
                         <Bell className="h-5 w-5" aria-hidden="true" />
@@ -1136,7 +1136,72 @@ export const Header: React.FC<HeaderProps> = ({
                       </p>
                     </div>
                   ) : (
-                    visibleNewsOrTopics.map((item) => {
+                    <>
+                      {notifFilter === 'all' &&
+                        isAdmin &&
+                        recentSignups.slice(0, 6).map((member) => {
+                          const createdMs = member.createdAt ? member.createdAt.toMillis() : 0;
+                          const isUnreadSignup =
+                            member.uid !== userUid && createdMs > signupLastSeenMs;
+                          return (
+                            <button
+                              key={`all-signup-${member.uid}`}
+                              type="button"
+                              onClick={() => {
+                                onMarkSignupsSeen?.();
+                                setNotifOpen(false);
+                                onOpenAdminMembers?.();
+                              }}
+                              className={`flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 ${
+                                isUnreadSignup ? 'bg-emerald-50/75' : 'bg-white'
+                              }`}
+                            >
+                              <div className="relative shrink-0">
+                                <Avatar
+                                  name={member.displayName}
+                                  photoURL={member.photoURL}
+                                  size="md"
+                                  uid={member.uid}
+                                />
+                                <span
+                                  className="absolute -right-1 -bottom-1 flex h-5 w-5 items-center justify-center rounded-full bg-emerald-600 text-white ring-2 ring-white"
+                                  aria-hidden="true"
+                                >
+                                  <UserPlus className="h-2.5 w-2.5" />
+                                </span>
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span className="truncate text-[13px] font-bold text-slate-900">
+                                    {member.displayName}
+                                  </span>
+                                  <VerificationBadge badge={member.verificationBadge} size="xs" />
+                                  <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800">
+                                    {tr('Usajili Mpya', 'New Signup')}
+                                  </span>
+                                </div>
+                                <p className="mt-0.5 text-xs text-slate-600">
+                                  {tr(
+                                    'Amejisajili kwenye Malosha Forums · Gusa kumhakiki.',
+                                    'Registered on Malosha Forums · Tap to inspect profile.'
+                                  )}
+                                </p>
+                                <p className="mt-1 text-[11px] font-semibold text-emerald-700">
+                                  {member.createdAt
+                                    ? formatTime(member.createdAt)
+                                    : tr('Sasa hivi', 'Just now')}
+                                </p>
+                              </div>
+                              {isUnreadSignup && (
+                                <span
+                                  aria-label={tr('Haijasomwa', 'Unread')}
+                                  className="mt-2 h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-600"
+                                />
+                              )}
+                            </button>
+                          );
+                        })}
+                      {visibleNewsOrTopics.map((item) => {
                       const board = normalizeBoardCategory(item.category);
                       const isNews = board === 'Makala';
                       const unread = isUnread(item);
@@ -1200,7 +1265,9 @@ export const Header: React.FC<HeaderProps> = ({
                               {item.title.trim() || tr('Chapisho jipya la picha', 'New photo post')}
                             </p>
                             <div className="mt-1 flex items-center gap-1 text-[11px] text-slate-500">
-                              <span className="truncate font-medium">{item.authorName}</span>
+                              <span className="truncate font-medium">
+                                <AuthorName uid={item.authorId} fallback={item.authorName} />
+                              </span>
                               <AuthorVerificationBadge uid={item.authorId} size="xs" />
                             </div>
                           </div>
@@ -1213,7 +1280,8 @@ export const Header: React.FC<HeaderProps> = ({
                           )}
                         </button>
                       );
-                    })
+                    })}
+                    </>
                   )}
                 </div>
 

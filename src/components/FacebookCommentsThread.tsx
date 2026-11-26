@@ -27,7 +27,8 @@ import {
 } from '../services/forumService';
 import { AuthPromptReason, Reply, Topic } from '../types';
 import { useLanguage } from '../context/LanguageContext';
-import { Avatar, OnlineStatusPill } from './Avatar';
+import { useUserPresence } from '../context/UserPresenceContext';
+import { AuthorName, Avatar, OnlineStatusPill } from './Avatar';
 import { renderLinkedInline } from './RichText';
 import { AuthorVerificationBadge } from './VerificationBadge';
 
@@ -87,10 +88,11 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
   onRequestConfirm,
 }) => {
   const { tr, formatTime } = useLanguage();
+  const { setMchartTyping, getTopicCommentTypingUsers } = useUserPresence();
   const [replies, setReplies] = useState<Reply[]>([]);
   const [loadingReplies, setLoadingReplies] = useState(true);
   const [votedReplyIds, setVotedReplyIds] = useState<Set<string>>(new Set());
-  const [sortMode, setSortMode] = useState<'newest' | 'top' | 'oldest'>('newest');
+  const [sortMode, setSortMode] = useState<'newest' | 'top' | 'oldest'>('oldest');
 
   // Top-level comment composer
   const [newComment, setNewComment] = useState('');
@@ -102,6 +104,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
   const [activeReplyThreadId, setActiveReplyThreadId] = useState<string | null>(null);
   const [activeReplyTarget, setActiveReplyTarget] = useState<{
     targetAuthorId: string;
+    targetAuthorName: string;
     rootAuthorId: string;
   } | null>(null);
   const [replyMentionPrefix, setReplyMentionPrefix] = useState('');
@@ -120,6 +123,46 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
   const [lastSubmitAt, setLastSubmitAt] = useState(0);
   const threadScrollRef = useRef<HTMLDivElement>(null);
   const [showScrollTopBtn, setShowScrollTopBtn] = useState(false);
+  const didInitialScrollRef = useRef(false);
+  const prevReplyCountRef = useRef(0);
+  const typingIdleTimerRef = useRef<number | null>(null);
+
+  const typingChatId = `topic:${topic.id}`;
+  const typingUsers = getTopicCommentTypingUsers(topic.id);
+
+  const clearTypingNow = () => {
+    if (typingIdleTimerRef.current !== null) {
+      window.clearTimeout(typingIdleTimerRef.current);
+      typingIdleTimerRef.current = null;
+    }
+    setMchartTyping(false, '', typingChatId);
+  };
+
+  const pulseTyping = (hasText: boolean, replyingToName = '') => {
+    if (!userUid || isSuspended || topic.status !== 'open') return;
+    if (!hasText) {
+      clearTypingNow();
+      return;
+    }
+    setMchartTyping(true, replyingToName, typingChatId);
+    if (typingIdleTimerRef.current !== null) {
+      window.clearTimeout(typingIdleTimerRef.current);
+    }
+    typingIdleTimerRef.current = window.setTimeout(() => {
+      typingIdleTimerRef.current = null;
+      setMchartTyping(false, '', typingChatId);
+    }, 3200);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (typingIdleTimerRef.current !== null) {
+        window.clearTimeout(typingIdleTimerRef.current);
+        typingIdleTimerRef.current = null;
+      }
+      setMchartTyping(false, '', typingChatId);
+    };
+  }, [setMchartTyping, typingChatId]);
 
   const handleThreadScroll = () => {
     const el = threadScrollRef.current;
@@ -144,6 +187,11 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
       return () => window.clearTimeout(timer);
     }
   }, [activeReplyThreadId]);
+
+  useEffect(() => {
+    didInitialScrollRef.current = false;
+    prevReplyCountRef.current = 0;
+  }, [topic.id]);
 
   // Listen to replies for this topic
   useEffect(() => {
@@ -285,6 +333,25 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
     return { rootComments: roots, childrenByRoot: childMap };
   }, [replies, sortMode]);
 
+  // Keep latest message visible right above the bottom input in chronological mode
+  useEffect(() => {
+    if (loadingReplies) return;
+    const el = threadScrollRef.current;
+    if (!el) return;
+
+    const countIncreased = replies.length > prevReplyCountRef.current;
+    prevReplyCountRef.current = replies.length;
+
+    if (sortMode === 'oldest' && (!didInitialScrollRef.current || countIncreased)) {
+      didInitialScrollRef.current = true;
+      window.requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight;
+      });
+    } else if (!didInitialScrollRef.current) {
+      didInitialScrollRef.current = true;
+    }
+  }, [loadingReplies, replies.length, sortMode]);
+
   const handleSubmitMainComment = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!userUid) {
@@ -335,6 +402,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
         topicAuthorId: topic.authorId,
         replyActorPhoto: userPhoto,
       });
+      clearTypingNow();
       setNewComment('');
       setLastSubmitAt(Date.now());
       window.requestAnimationFrame(() => {
@@ -417,6 +485,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
         next.add(activeReplyThreadId);
         return next;
       });
+      clearTypingNow();
       setNestedReplyText('');
       setReplyMentionPrefix('');
       setActiveReplyThreadId(null);
@@ -457,6 +526,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
     setActiveReplyThreadId(rootId);
     setActiveReplyTarget({
       targetAuthorId: targetReply.authorId,
+      targetAuthorName: targetReply.authorName,
       rootAuthorId: rootComment?.authorId || targetReply.authorId,
     });
     setReplyMentionPrefix(isChild ? `@${targetReply.authorName}` : '');
@@ -626,7 +696,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
                 >
                   <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                     <span className={`text-[13px] font-bold ${nameColor}`}>
-                      {reply.authorName}
+                      <AuthorName uid={reply.authorId} fallback={reply.authorName} />
                     </span>
                     <AuthorVerificationBadge uid={reply.authorId} size="xs" />
                     <OnlineStatusPill uid={reply.authorId} />
@@ -747,9 +817,9 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
           <div className="inline-flex items-center gap-1 rounded-lg bg-slate-100 p-0.5">
             {(
               [
-                { id: 'newest', label: tr('Mpya Zaidi', 'Newest') },
+                { id: 'oldest', label: tr('Mpya Chini', 'Latest Below') },
+                { id: 'newest', label: tr('Mpya Juu', 'Newest Top') },
                 { id: 'top', label: tr('Pendwa Zaidi', 'Top') },
-                { id: 'oldest', label: tr('Ya Kwanza', 'Oldest') },
               ] as const
             ).map((opt) => (
               <button
@@ -769,88 +839,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
         </div>
       )}
 
-      {/* Main Facebook-style Inline Comment Input */}
-      {topic.status !== 'open' ? (
-        <p className="rounded-lg bg-slate-100 px-3.5 py-2.5 text-xs text-slate-600">
-          {tr(
-            'Mjadala huu umefungwa na haupokei maoni mapya.',
-            'This discussion is locked and not accepting new comments.'
-          )}
-        </p>
-      ) : isSuspended ? (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs font-medium text-red-800">
-          {tr(
-            'Akaunti yako imefungwa na msimamizi — huwezi kuandika maoni, kujibu, au kupenda.',
-            'Your account is suspended by the platform owner — you cannot comment, reply, or like.'
-          )}
-        </p>
-      ) : !userUid ? (
-        <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-slate-200 bg-[#F8FAFC] px-3.5 py-2.5">
-          <span className="text-xs text-slate-700">
-            {tr(
-              'Tengeneza akaunti (kwa Google au Jisajili kawaida) ili uandike maoni, ujibu, au kupenda.',
-              'Create an account (with Google or standard registration) to comment, reply, or like.'
-            )}
-          </span>
-          <button
-            type="button"
-            onClick={() => onSignIn('comment')}
-            className="min-h-[38px] rounded-lg bg-[#1D4E89] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#163A5F] whitespace-nowrap"
-          >
-            {tr('Jisajili / Ingia', 'Register / Sign In')}
-          </button>
-        </div>
-      ) : (
-        <form onSubmit={handleSubmitMainComment} className="flex items-start gap-2.5">
-          <div className="pt-0.5 shrink-0">
-            <Avatar
-              name={userDisplayName}
-              photoURL={userPhoto}
-              uid={userUid}
-              showOnlineIndicator
-              size="sm"
-            />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-[#F0F2F5] px-3.5 py-2 focus-within:border-[#1D4E89] focus-within:bg-white">
-              <textarea
-                ref={mainInputRef}
-                rows={1}
-                maxLength={4000}
-                value={newComment}
-                onChange={(e) => {
-                  setNewComment(e.target.value);
-                  if (mainError) setMainError('');
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    void handleSubmitMainComment();
-                  }
-                }}
-                placeholder={tr('Andika maoni yako...', 'Write a comment...')}
-                aria-label={tr('Andika maoni yako', 'Write a comment')}
-                className="max-h-28 min-h-[24px] w-full resize-none bg-transparent text-sm leading-snug text-slate-900 placeholder:text-slate-500 focus:outline-none"
-              />
-              <button
-                type="submit"
-                disabled={submittingMain || newComment.trim().length < 2}
-                aria-label={tr('Tuma maoni', 'Send comment')}
-                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#1D4E89] text-white transition-colors hover:bg-[#163A5F] disabled:bg-slate-300 disabled:text-slate-500"
-              >
-                <Send className="h-3.5 w-3.5" aria-hidden="true" />
-              </button>
-            </div>
-            {mainError && (
-              <p role="alert" className="mt-1 px-2 text-xs text-red-600">
-                {mainError}
-              </p>
-            )}
-          </div>
-        </form>
-      )}
-
-      {/* Self-Contained Mchart-Style Scrollable Thread Viewport (never stretches or shakes outer page) */}
+      {/* Self-Contained Mchart-Style Scrollable Thread Viewport (messages stay above the bottom input) */}
       <div className="relative">
         <div
           ref={threadScrollRef}
@@ -1023,12 +1012,21 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
                             rows={1}
                             maxLength={3900}
                             value={nestedReplyText}
-                            onChange={(e) => setNestedReplyText(e.target.value)}
+                            onChange={(e) => {
+                              const nextVal = e.target.value;
+                              setNestedReplyText(nextVal);
+                              pulseTyping(
+                                nextVal.trim().length > 0,
+                                activeReplyTarget?.targetAuthorName || root.authorName
+                              );
+                            }}
+                            onBlur={() => clearTypingNow()}
                             onKeyDown={(e) => {
                               if (e.key === 'Enter' && !e.shiftKey) {
                                 e.preventDefault();
                                 void handleSubmitNestedReply();
                               } else if (e.key === 'Escape') {
+                                clearTypingNow();
                                 setActiveReplyThreadId(null);
                               }
                             }}
@@ -1040,7 +1038,10 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
                           />
                           <button
                             type="button"
-                            onClick={() => setActiveReplyThreadId(null)}
+                            onClick={() => {
+                              clearTypingNow();
+                              setActiveReplyThreadId(null);
+                            }}
                             aria-label={tr('Funga sanduku la kujibu', 'Close reply box')}
                             className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-slate-500 hover:bg-slate-200 hover:text-slate-800"
                           >
@@ -1078,6 +1079,125 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
           </button>
         )}
       </div>
+
+      {/* WhatsApp-Style Real-Time Comment Typing Indicator */}
+      {typingUsers.length > 0 && (
+        <div
+          aria-live="polite"
+          className="flex items-center gap-2 rounded-lg border border-emerald-200/80 bg-emerald-50/90 px-3 py-1.5 text-xs font-medium text-emerald-900"
+        >
+          <span className="inline-flex items-center gap-0.5 shrink-0" aria-hidden="true">
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-600 [animation-delay:-0.25s]" />
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-600 [animation-delay:-0.12s]" />
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-600" />
+          </span>
+          <span className="truncate">
+            {typingUsers.length === 1
+              ? typingUsers[0].replyingToName
+                ? tr(
+                    `${typingUsers[0].displayName} anamjibu ${typingUsers[0].replyingToName}...`,
+                    `${typingUsers[0].displayName} is replying to ${typingUsers[0].replyingToName}...`
+                  )
+                : tr(
+                    `${typingUsers[0].displayName} anaandika maoni...`,
+                    `${typingUsers[0].displayName} is typing a comment...`
+                  )
+              : typingUsers.length === 2
+                ? tr(
+                    `${typingUsers[0].displayName} na ${typingUsers[1].displayName} wanaandika...`,
+                    `${typingUsers[0].displayName} and ${typingUsers[1].displayName} are typing...`
+                  )
+                : tr(
+                    `${typingUsers[0].displayName} na wengine ${typingUsers.length - 1} wanaandika...`,
+                    `${typingUsers[0].displayName} and ${typingUsers.length - 1} others are typing...`
+                  )}
+          </span>
+        </div>
+      )}
+
+      {/* Bottom Comment Input (Latest message stays directly above typing bar) */}
+      {topic.status !== 'open' ? (
+        <p className="rounded-lg bg-slate-100 px-3.5 py-2.5 text-xs text-slate-600">
+          {tr(
+            'Mjadala huu umefungwa na haupokei maoni mapya.',
+            'This discussion is locked and not accepting new comments.'
+          )}
+        </p>
+      ) : isSuspended ? (
+        <p className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs font-medium text-red-800">
+          {tr(
+            'Akaunti yako imefungwa na msimamizi — huwezi kuandika maoni, kujibu, au kupenda.',
+            'Your account is suspended by the platform owner — you cannot comment, reply, or like.'
+          )}
+        </p>
+      ) : !userUid ? (
+        <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-slate-200 bg-[#F8FAFC] px-3.5 py-2.5">
+          <span className="text-xs text-slate-700">
+            {tr(
+              'Tengeneza akaunti (kwa Google au Jisajili kawaida) ili uandike maoni, ujibu, au kupenda.',
+              'Create an account (with Google or standard registration) to comment, reply, or like.'
+            )}
+          </span>
+          <button
+            type="button"
+            onClick={() => onSignIn('comment')}
+            className="min-h-[38px] rounded-lg bg-[#1D4E89] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#163A5F] whitespace-nowrap"
+          >
+            {tr('Jisajili / Ingia', 'Register / Sign In')}
+          </button>
+        </div>
+      ) : (
+        <form onSubmit={handleSubmitMainComment} className="flex items-start gap-2.5">
+          <div className="pt-0.5 shrink-0">
+            <Avatar
+              name={userDisplayName}
+              photoURL={userPhoto}
+              uid={userUid}
+              showOnlineIndicator
+              size="sm"
+            />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-[#F0F2F5] px-3.5 py-2 focus-within:border-[#1D4E89] focus-within:bg-white">
+              <textarea
+                ref={mainInputRef}
+                rows={1}
+                maxLength={4000}
+                value={newComment}
+                onChange={(e) => {
+                  const nextVal = e.target.value;
+                  setNewComment(nextVal);
+                  if (mainError) setMainError('');
+                  pulseTyping(nextVal.trim().length > 0, '');
+                }}
+                onBlur={() => clearTypingNow()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    void handleSubmitMainComment();
+                  }
+                }}
+                placeholder={tr('Andika maoni yako...', 'Write a comment...')}
+                aria-label={tr('Andika maoni yako', 'Write a comment')}
+                className="max-h-28 min-h-[24px] w-full resize-none bg-transparent text-sm leading-snug text-slate-900 placeholder:text-slate-500 focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={submittingMain || newComment.trim().length < 2}
+                aria-label={tr('Tuma maoni', 'Send comment')}
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#1D4E89] text-white transition-colors hover:bg-[#163A5F] disabled:bg-slate-300 disabled:text-slate-500"
+              >
+                <Send className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </div>
+            {mainError && (
+              <p role="alert" className="mt-1 px-2 text-xs text-red-600">
+                {mainError}
+              </p>
+            )}
+          </div>
+        </form>
+      )}
     </div>
   );
 };

@@ -1,5 +1,6 @@
 import { User } from 'firebase/auth';
 import {
+  DocumentReference,
   Timestamp,
   collection,
   deleteDoc,
@@ -25,6 +26,7 @@ import {
   ContentRetentionPeriod,
   ContentRetentionSettings,
   DirectChatThread,
+  KijiweniFontStyle,
   MAKALA_COVERS,
   MchartGroupReadCursor,
   MchartGroupSettings,
@@ -53,6 +55,7 @@ import {
   formatMemberCode,
   normalizeAccountStatus,
   normalizeBoardCategory,
+  normalizeKijiweniFontStyle,
   normalizeVerificationBadge,
 } from '../types';
 import { sanitizeTextInput } from '../utils/formatters';
@@ -170,6 +173,14 @@ async function runSyncUserProfile(
   } else {
     const existingData = snap.data();
     isSuspendedAccount = existingData.accountStatus === 'suspended';
+    const hasExplicitDisplayName = Boolean(extra?.displayName || pendingMeta?.displayName);
+    const hasExplicitPhoto = Boolean(extra?.photoURL || pendingMeta?.photoURL);
+    const existingName =
+      typeof existingData.displayName === 'string' ? existingData.displayName.trim() : '';
+    const existingPhoto =
+      typeof existingData.photoURL === 'string' ? existingData.photoURL.trim() : '';
+    const wasPhotoCleared = existingData.photoCleared === true;
+
     const updates: Record<string, unknown> = {};
     if (
       isPlatformOwner &&
@@ -177,15 +188,21 @@ async function runSyncUserProfile(
     ) {
       updates.verificationBadge = 'owner';
     }
-    if (!isSuspendedAccount && effectiveDisplayName && existingData.displayName !== safeName) {
+    if (
+      !isSuspendedAccount &&
+      effectiveDisplayName &&
+      existingName !== safeName &&
+      (hasExplicitDisplayName || !existingName || existingName === 'Mwanachama')
+    ) {
       updates.displayName = safeName;
     }
     if (
       !isSuspendedAccount &&
       safePhoto &&
-      (!existingData.photoURL || String(existingData.photoURL).trim() === '')
+      (hasExplicitPhoto || (!wasPhotoCleared && !existingPhoto))
     ) {
       updates.photoURL = safePhoto;
+      updates.photoCleared = false;
     }
     if (Object.keys(updates).length > 0) {
       updates.updatedAt = serverTimestamp();
@@ -310,7 +327,7 @@ export async function updateUserProfile(
   uid: string,
   displayName: string,
   bio: string
-): Promise<void> {
+): Promise<string> {
   const path = `users/${uid}`;
   const cleanName = sanitizeTextInput(displayName, 80);
   const cleanBio = sanitizeTextInput(bio, 300);
@@ -325,14 +342,43 @@ export async function updateUserProfile(
       bio: cleanBio,
       updatedAt: serverTimestamp(),
     });
-    const dirRef = doc(db, 'member_directory', uid);
-    const dirSnap = await getDoc(dirRef).catch(() => null);
-    if (dirSnap && dirSnap.exists()) {
-      await updateDoc(dirRef, {
-        displayName: cleanName,
-        updatedAt: serverTimestamp(),
-      }).catch(() => {});
+
+    const cardId = formatMemberCode(uid);
+    const [idSnap, dirSnap] = await Promise.all([
+      getDoc(doc(db, 'member_ids', cardId)).catch(() => null),
+      getDoc(doc(db, 'member_directory', uid)).catch(() => null),
+    ]);
+
+    const mirrorWrites: Promise<unknown>[] = [];
+    if (idSnap && idSnap.exists()) {
+      mirrorWrites.push(
+        updateDoc(doc(db, 'member_ids', cardId), {
+          displayName: cleanName,
+          updatedAt: serverTimestamp(),
+        }).catch(() => {})
+      );
     }
+    if (dirSnap && dirSnap.exists()) {
+      mirrorWrites.push(
+        updateDoc(doc(db, 'member_directory', uid), {
+          displayName: cleanName,
+          updatedAt: serverTimestamp(),
+        }).catch(() => {})
+      );
+    }
+    mirrorWrites.push(
+      setDoc(
+        doc(db, 'user_presence', uid),
+        {
+          uid,
+          displayName: cleanName,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      ).catch(() => {})
+    );
+    await Promise.all(mirrorWrites);
+    return cleanName;
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -352,39 +398,173 @@ export async function updateUserProfilePhoto(
   try {
     await updateDoc(doc(db, 'users', uid), {
       photoURL: cleanPhoto,
+      photoCleared: cleanPhoto === '',
       updatedAt: serverTimestamp(),
     });
 
     const cardId = formatMemberCode(uid);
-    const idSnap = await getDoc(doc(db, 'member_ids', cardId)).catch(() => null);
+    const [idSnap, dirSnap] = await Promise.all([
+      getDoc(doc(db, 'member_ids', cardId)).catch(() => null),
+      getDoc(doc(db, 'member_directory', uid)).catch(() => null),
+    ]);
+
+    const cleanName = displayName ? sanitizeTextInput(displayName, 80) : '';
+    const mirrorWrites: Promise<unknown>[] = [];
+
     if (idSnap && idSnap.exists()) {
       const updates: Record<string, unknown> = {
         photoURL: cleanPhoto,
         updatedAt: serverTimestamp(),
       };
-      if (displayName && sanitizeTextInput(displayName, 80)) {
-        updates.displayName = sanitizeTextInput(displayName, 80);
-      }
-      await updateDoc(doc(db, 'member_ids', cardId), updates).catch(() => {});
+      if (cleanName) updates.displayName = cleanName;
+      mirrorWrites.push(updateDoc(doc(db, 'member_ids', cardId), updates).catch(() => {}));
     }
 
-    const dirRef = doc(db, 'member_directory', uid);
-    const dirSnap = await getDoc(dirRef).catch(() => null);
     if (dirSnap && dirSnap.exists()) {
       const dirUpdates: Record<string, unknown> = {
         photoURL: cleanPhoto,
         updatedAt: serverTimestamp(),
       };
-      if (displayName && sanitizeTextInput(displayName, 80)) {
-        dirUpdates.displayName = sanitizeTextInput(displayName, 80);
-      }
-      await updateDoc(dirRef, dirUpdates).catch(() => {});
+      if (cleanName) dirUpdates.displayName = cleanName;
+      mirrorWrites.push(updateDoc(doc(db, 'member_directory', uid), dirUpdates).catch(() => {}));
     }
 
+    mirrorWrites.push(
+      setDoc(
+        doc(db, 'user_presence', uid),
+        {
+          uid,
+          ...(cleanName ? { displayName: cleanName } : {}),
+          photoURL: cleanPhoto,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      ).catch(() => {})
+    );
+
+    await Promise.all(mirrorWrites);
     return cleanPhoto;
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
+}
+
+async function commitBatchedDocUpdates(
+  targets: Array<{ ref: DocumentReference; data: Record<string, unknown> }>
+): Promise<void> {
+  if (targets.length === 0) return;
+  const CHUNK_SIZE = 350;
+  for (let i = 0; i < targets.length; i += CHUNK_SIZE) {
+    const slice = targets.slice(i, i + CHUNK_SIZE);
+    const batch = writeBatch(db);
+    slice.forEach((item) => {
+      batch.update(item.ref, item.data);
+    });
+    try {
+      await batch.commit();
+    } catch {
+      // Fallback per-doc update if any legacy record hits a constraint
+      await Promise.all(slice.map((item) => updateDoc(item.ref, item.data).catch(() => {})));
+    }
+  }
+}
+
+export async function propagateUserIdentityAcrossAccount(
+  uid: string,
+  patch: { displayName?: string; photoURL?: string }
+): Promise<void> {
+  if (!uid || !/^[a-zA-Z0-9_-]{1,128}$/.test(uid)) return;
+
+  const hasName = patch.displayName !== undefined;
+  const hasPhoto = patch.photoURL !== undefined;
+  if (!hasName && !hasPhoto) return;
+
+  const cleanName = hasName ? sanitizeTextInput(patch.displayName || '', 80) : '';
+  const cleanPhoto = hasPhoto ? sanitizeTextInput(patch.photoURL || '', 500) : '';
+  if (hasName && !cleanName) return;
+
+  const updateTargets: Array<{ ref: DocumentReference; data: Record<string, unknown> }> = [];
+
+  const [topicsSnap, videosSnap, chatSnap, statusSnap, pollsSnap, directChatsSnap] =
+    await Promise.all([
+      getDocs(query(collection(db, 'topics'), where('authorId', '==', uid))).catch(() => null),
+      getDocs(query(collection(db, 'videos'), where('authorId', '==', uid))).catch(() => null),
+      getDocs(query(collection(db, 'forum_chat_messages'), where('senderId', '==', uid))).catch(
+        () => null
+      ),
+      getDocs(query(collection(db, 'mchart_statuses'), where('authorId', '==', uid))).catch(
+        () => null
+      ),
+      getDocs(query(collection(db, 'polls'), where('createdBy', '==', uid))).catch(() => null),
+      getDocs(
+        query(collection(db, 'direct_chats'), where('participants', 'array-contains', uid))
+      ).catch(() => null),
+    ]);
+
+  if (topicsSnap) {
+    const data: Record<string, unknown> = { updatedAt: serverTimestamp() };
+    if (hasName) data.authorName = cleanName;
+    if (hasPhoto) data.authorPhoto = cleanPhoto;
+    topicsSnap.forEach((d) => {
+      updateTargets.push({ ref: d.ref, data });
+    });
+  }
+
+  if (videosSnap) {
+    const data: Record<string, unknown> = { updatedAt: serverTimestamp() };
+    if (hasName) data.authorName = cleanName;
+    if (hasPhoto) data.authorPhoto = cleanPhoto;
+    videosSnap.forEach((d) => {
+      updateTargets.push({ ref: d.ref, data });
+    });
+  }
+
+  if (chatSnap) {
+    const data: Record<string, unknown> = { updatedAt: serverTimestamp() };
+    if (hasName) data.senderName = cleanName;
+    if (hasPhoto) data.senderPhoto = cleanPhoto;
+    chatSnap.forEach((d) => {
+      updateTargets.push({ ref: d.ref, data });
+    });
+  }
+
+  if (statusSnap) {
+    const data: Record<string, unknown> = {};
+    if (hasName) data.authorName = cleanName;
+    if (hasPhoto) data.authorPhoto = cleanPhoto;
+    statusSnap.forEach((d) => {
+      updateTargets.push({ ref: d.ref, data });
+    });
+  }
+
+  if (pollsSnap) {
+    const data: Record<string, unknown> = { updatedAt: serverTimestamp() };
+    if (hasName) data.createdByName = cleanName;
+    if (hasPhoto) data.createdByPhoto = cleanPhoto;
+    pollsSnap.forEach((d) => {
+      updateTargets.push({ ref: d.ref, data });
+    });
+  }
+
+  if (directChatsSnap) {
+    directChatsSnap.forEach((d) => {
+      const raw = d.data();
+      const data: Record<string, unknown> = { updatedAt: serverTimestamp() };
+      if (raw.participantA === uid) {
+        if (hasName) data.participantAName = cleanName;
+        if (hasPhoto) data.participantAPhoto = cleanPhoto;
+      }
+      if (raw.participantB === uid) {
+        if (hasName) data.participantBName = cleanName;
+        if (hasPhoto) data.participantBPhoto = cleanPhoto;
+      }
+      if (Object.keys(data).length > 1) {
+        updateTargets.push({ ref: d.ref, data });
+      }
+    });
+  }
+
+  await commitBatchedDocUpdates(updateTargets);
 }
 
 export async function updateUserVerificationBadge(
@@ -545,6 +725,7 @@ export interface CreateTopicInput {
   applyInfo?: string;
   coverImage?: string;
   images?: string[];
+  bodyFontStyle?: KijiweniFontStyle;
   status?: 'open' | 'private';
 }
 
@@ -590,6 +771,7 @@ export async function createTopic(
     isPinned: false,
     repliesCount: 0,
     upvotesCount: 0,
+    sharesCount: 0,
     acceptedReplyId: '',
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -603,6 +785,9 @@ export async function createTopic(
   if (input.applyInfo) payload.applyInfo = sanitizeTextInput(input.applyInfo, 300);
   if (coverImage) payload.coverImage = coverImage;
   if (cleanImages.length > 0) payload.images = cleanImages;
+  if (input.bodyFontStyle !== undefined) {
+    payload.bodyFontStyle = normalizeKijiweniFontStyle(input.bodyFontStyle);
+  }
 
   try {
     const batch = writeBatch(db);
@@ -661,6 +846,9 @@ export async function editTopic(
   if (input.applyInfo !== undefined) updatePayload.applyInfo = sanitizeTextInput(input.applyInfo, 300);
   if (rawCover !== undefined) updatePayload.coverImage = rawCover;
   if (cleanImages !== undefined) updatePayload.images = cleanImages;
+  if (input.bodyFontStyle !== undefined) {
+    updatePayload.bodyFontStyle = normalizeKijiweniFontStyle(input.bodyFontStyle);
+  }
 
   const path = `topics/${topicId}`;
   try {
@@ -1053,6 +1241,19 @@ export async function toggleReplyVote(
     await batch.commit();
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function incrementTopicShareCount(topicId: string): Promise<void> {
+  if (!topicId) return;
+  if (!auth.currentUser || auth.currentUser.isAnonymous) return;
+  const topicRef = doc(db, 'topics', topicId);
+  try {
+    await updateDoc(topicRef, {
+      sharesCount: increment(1),
+    });
+  } catch {
+    // Non-fatal: share action already succeeded locally
   }
 }
 
@@ -4184,6 +4385,7 @@ export async function saveOwnerCustomIdCard(
 }
 
 export async function listTrainingCertificates(): Promise<TrainingCertificateData[]> {
+  if (!auth.currentUser) return [];
   const path = 'training_certificates';
   try {
     const snap = await getDocs(collection(db, 'training_certificates'));
@@ -4380,6 +4582,7 @@ export function ownerPhotoIdFromHash(fileHash: string): string {
 }
 
 export async function listOwnerPrivatePhotos(): Promise<OwnerPrivatePhoto[]> {
+  if (!auth.currentUser) return [];
   const path = 'owner_private_photos';
   try {
     const snap = await getDocs(collection(db, 'owner_private_photos'));
@@ -4543,6 +4746,7 @@ export async function deleteOwnerPrivatePhoto(photoId: string): Promise<void> {
 }
 
 export async function listOwnerPhotoFolders(): Promise<OwnerPhotoFolder[]> {
+  if (!auth.currentUser) return [];
   const path = 'owner_photo_folders';
   try {
     const snap = await getDocs(collection(db, 'owner_photo_folders'));

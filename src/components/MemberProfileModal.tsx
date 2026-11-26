@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Award,
+  Banknote,
   CheckCircle2,
   Circle,
   ExternalLink,
@@ -26,6 +27,7 @@ import {
 } from '../services/forumService';
 import {
   AuthPromptReason,
+  MONETIZATION_PAYOUT_RATES,
   MONETIZATION_REQUIREMENTS,
   Topic,
   UserProfile,
@@ -46,6 +48,7 @@ interface MemberProfileModalProps {
   currentUserPhoto: string;
   topics: Topic[];
   videos?: VideoPost[];
+  isAdmin?: boolean;
   isSuspended?: boolean;
   onClose: () => void;
   onSignIn: (reason?: AuthPromptReason) => void;
@@ -67,6 +70,7 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
   currentUserPhoto,
   topics,
   videos = [],
+  isAdmin = false,
   isSuspended = false,
   onClose,
   onSignIn,
@@ -121,9 +125,16 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
   const metrics = useMemo(
     () =>
       memberUid
-        ? computeAuthorMetrics(topics, memberUid, effectiveFollowersCount, videos, 0)
+        ? computeAuthorMetrics(topics, memberUid, effectiveFollowersCount, videos, 0, {
+            repliesGivenCount: profile?.repliesCount || 0,
+            accountCreatedAt: profile?.createdAt || null,
+            verificationBadge: profile?.verificationBadge || 'none',
+            accountStatus: profile?.accountStatus || 'active',
+            hasProfilePhoto: Boolean(effectivePhoto),
+            bioLength: (profile?.bio || '').trim().length,
+          })
         : computeAuthorMetrics([], '', 0, [], 0),
-    [topics, videos, memberUid, effectiveFollowersCount]
+    [topics, videos, memberUid, effectiveFollowersCount, profile, effectivePhoto]
   );
 
   const isSelf = currentUser?.uid === memberUid;
@@ -232,39 +243,79 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
   const criteriaItems = [
     {
       label: tr('Wafuasi (Followers)', 'Followers'),
-      current: metrics.followersCount,
-      target: MONETIZATION_REQUIREMENTS.minFollowers,
+      currentText: metrics.followersCount.toLocaleString(),
+      targetText: MONETIZATION_REQUIREMENTS.minFollowers.toLocaleString(),
       met: metrics.followersCount >= MONETIZATION_REQUIREMENTS.minFollowers,
     },
     {
       label: tr('Marafiki (Friends)', 'Friends'),
-      current: metrics.friendsCount,
-      target: MONETIZATION_REQUIREMENTS.minFriends,
+      currentText: metrics.friendsCount.toLocaleString(),
+      targetText: MONETIZATION_REQUIREMENTS.minFriends.toLocaleString(),
       met: metrics.friendsCount >= MONETIZATION_REQUIREMENTS.minFriends,
     },
     {
-      label: tr('Video zilizopakiwa', 'Videos Posted'),
-      current: metrics.videosCount,
-      target: MONETIZATION_REQUIREMENTS.minVideos,
-      met: metrics.videosCount >= MONETIZATION_REQUIREMENTS.minVideos,
-    },
-    {
-      label: tr('Machapisho (Posts)', 'Posts'),
-      current: metrics.postsCount,
-      target: MONETIZATION_REQUIREMENTS.minPosts,
+      label: tr('Machapisho Yote (Posts)', 'Total Posts'),
+      currentText: metrics.postsCount.toLocaleString(),
+      targetText: MONETIZATION_REQUIREMENTS.minPosts.toLocaleString(),
       met: metrics.postsCount >= MONETIZATION_REQUIREMENTS.minPosts,
     },
     {
-      label: tr('Likes zilizopokelewa', 'Likes Received'),
-      current: metrics.totalLikesReceived,
-      target: MONETIZATION_REQUIREMENTS.minLikes,
+      label: tr('Makala za Kina', 'Makala Articles'),
+      currentText: metrics.articlesCount.toLocaleString(),
+      targetText: MONETIZATION_REQUIREMENTS.minArticles.toLocaleString(),
+      met: metrics.articlesCount >= MONETIZATION_REQUIREMENTS.minArticles,
+    },
+    {
+      label: tr('Video Zilizopakiwa', 'Videos Posted'),
+      currentText: metrics.videosCount.toLocaleString(),
+      targetText: MONETIZATION_REQUIREMENTS.minVideos.toLocaleString(),
+      met: metrics.videosCount >= MONETIZATION_REQUIREMENTS.minVideos,
+    },
+    {
+      label: tr('Likes Zilizopokelewa', 'Likes Received'),
+      currentText: metrics.totalLikesReceived.toLocaleString(),
+      targetText: MONETIZATION_REQUIREMENTS.minLikes.toLocaleString(),
       met: metrics.totalLikesReceived >= MONETIZATION_REQUIREMENTS.minLikes,
     },
     {
-      label: tr('Maoni yaliyopokelewa', 'Comments Received'),
-      current: metrics.totalCommentsReceived,
-      target: MONETIZATION_REQUIREMENTS.minComments,
+      label: tr('Maoni Yaliyopokelewa', 'Comments Received'),
+      currentText: metrics.totalCommentsReceived.toLocaleString(),
+      targetText: MONETIZATION_REQUIREMENTS.minComments.toLocaleString(),
       met: metrics.totalCommentsReceived >= MONETIZATION_REQUIREMENTS.minComments,
+    },
+    {
+      label: tr('Shares Zilizopokelewa', 'Shares Received'),
+      currentText: metrics.totalSharesReceived.toLocaleString(),
+      targetText: MONETIZATION_REQUIREMENTS.minShares.toLocaleString(),
+      met: metrics.totalSharesReceived >= MONETIZATION_REQUIREMENTS.minShares,
+    },
+    {
+      label: tr('Majibu Aliyoandika', 'Replies Written'),
+      currentText: metrics.repliesGivenCount.toLocaleString(),
+      targetText: MONETIZATION_REQUIREMENTS.minRepliesGiven.toLocaleString(),
+      met: metrics.repliesGivenCount >= MONETIZATION_REQUIREMENTS.minRepliesGiven,
+    },
+    {
+      label: tr('Umri wa Akaunti (Siku)', 'Account Age (Days)'),
+      currentText: `${metrics.accountAgeDays.toLocaleString()} ${tr('siku', 'd')}`,
+      targetText: `${MONETIZATION_REQUIREMENTS.minAccountDays.toLocaleString()} ${tr('siku', 'd')}`,
+      met: metrics.accountAgeDays >= MONETIZATION_REQUIREMENTS.minAccountDays,
+    },
+    {
+      label: tr('Beji ya Uthibitisho', 'Verification Badge'),
+      currentText: metrics.hasVerificationBadge
+        ? getBadgeLabel(profile?.verificationBadge || 'none', true)
+        : tr('Hana', 'None'),
+      targetText: tr('Lazima', 'Required'),
+      met: metrics.hasVerificationBadge,
+    },
+    {
+      label: tr('Wasifu Kamili & Rekodi Safi', 'Complete Profile & Clean Standing'),
+      currentText: metrics.hasCleanVerifiedAccount
+        ? tr('Safi', 'Clean')
+        : tr('Bado', 'Incomplete'),
+      targetText: tr('Kamili', '100%'),
+      met: metrics.hasCleanVerifiedAccount,
     },
   ];
 
@@ -460,7 +511,7 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
               <div className="flex items-center gap-2">
                 <Award className="h-4 w-4 text-amber-700 shrink-0" aria-hidden="true" />
                 <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wide">
-                  {tr('Masharti ya Kuanza Kulipwa', 'Creator Monetization Criteria')}
+                  {tr('Masharti 12 Magumu ya Kulipwa', '12 Strict Payout Criteria')}
                 </h3>
               </div>
               <span
@@ -471,8 +522,8 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
                 }`}
               >
                 {metrics.isEligibleForMonetization
-                  ? tr('Amekidhi Masharti Yote!', 'Eligible for Payouts!')
-                  : `${metrics.progressPercent}% ${tr('imefikiwa', 'complete')}`}
+                  ? tr('Amekidhi 12/12!', 'Eligible 12/12!')
+                  : `${metrics.metCriteriaCount}/${metrics.totalCriteriaCount} · ${metrics.progressPercent}%`}
               </span>
             </div>
 
@@ -489,9 +540,9 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
               {criteriaItems.map((item) => (
                 <div
                   key={item.label}
-                  className="flex items-center justify-between rounded-lg border border-slate-200/80 bg-white px-2.5 py-1.5 text-xs"
+                  className="flex items-center justify-between gap-2 rounded-lg border border-slate-200/80 bg-white px-2.5 py-1.5 text-xs"
                 >
-                  <span className="flex items-center gap-1.5 text-slate-700">
+                  <span className="flex min-w-0 items-center gap-1.5 text-slate-700">
                     {item.met ? (
                       <CheckCircle2
                         className="h-3.5 w-3.5 shrink-0 text-emerald-600"
@@ -505,11 +556,69 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
                     )}
                     <span className="truncate">{item.label}</span>
                   </span>
-                  <span className="font-mono text-[11px] font-bold text-slate-900 tabular-nums">
-                    {item.current.toLocaleString()}/{item.target.toLocaleString()}
+                  <span className="shrink-0 font-mono text-[11px] font-bold text-slate-900 tabular-nums">
+                    {item.currentText}/{item.targetText}
                   </span>
                 </div>
               ))}
+            </div>
+
+            {/* Monthly Payout Amount Section: Unlocked only at 12/12 or for Owner */}
+            <div className="mt-3.5 rounded-lg border border-slate-200 bg-white p-3">
+              {isAdmin || metrics.isEligibleForMonetization ? (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-900 uppercase">
+                      <Banknote className="h-3.5 w-3.5 text-emerald-700" aria-hidden="true" />
+                      <span>
+                        {isAdmin && !metrics.isEligibleForMonetization
+                          ? tr(
+                              'Muonekano wa Mmiliki — Makadirio ya Malipo (Kabla Hajafuzu)',
+                              'Owner View — Monthly Payout Estimate (Pre-Qualification)'
+                            )
+                          : tr('Malipo ya Mwezi Huu (TZS)', 'Monthly Payout (TZS)')}
+                      </span>
+                    </span>
+                    <span className="font-mono text-xs font-extrabold text-emerald-800 tabular-nums">
+                      TZS{' '}
+                      {(metrics.isEligibleForMonetization
+                        ? metrics.monthlyTotalPayoutTzs
+                        : metrics.projectedMonthlyWithBaseTzs
+                      ).toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-[10.5px] text-slate-600 tabular-nums">
+                    <div>
+                      <span className="block text-slate-400">{tr('Shughuli Mwezi Huu', 'This Month')}</span>
+                      <strong className="font-mono text-slate-900">
+                        TZS {metrics.monthlyEngagementPayoutTzs.toLocaleString()}
+                      </strong>
+                    </div>
+                    <div>
+                      <span className="block text-slate-400">{tr('Posho ya Mwezi', 'Monthly Base')}</span>
+                      <strong className="font-mono text-slate-900">
+                        TZS {MONETIZATION_PAYOUT_RATES.monthlyBaseAllowanceTzs.toLocaleString()}
+                      </strong>
+                    </div>
+                    <div>
+                      <span className="block text-slate-400">{tr('Thamani Yote', 'Lifetime Est.')}</span>
+                      <strong className="font-mono text-[#1D4E89]">
+                        TZS {metrics.lifetimeEstimatedValueTzs.toLocaleString()}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-[11px] text-slate-600">
+                  <Lock className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden="true" />
+                  <span>
+                    {tr(
+                      `Malipo ya mwezi (Posho TZS ${MONETIZATION_PAYOUT_RATES.monthlyBaseAllowanceTzs.toLocaleString()}+ na shughuli) yamefungwa mpaka vigezo vyote 12 vitimie.`,
+                      `Monthly payouts (TZS ${MONETIZATION_PAYOUT_RATES.monthlyBaseAllowanceTzs.toLocaleString()}+ base & activity) unlock only after all 12 criteria are met.`
+                    )}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 

@@ -219,7 +219,13 @@ export type VerificationBadgeType =
   | 'owner'
   | 'journalist'
   | 'educator'
-  | 'creator';
+  | 'creator'
+  | 'black'
+  | 'white'
+  | 'gray'
+  | 'gold'
+  | 'silver'
+  | 'copper';
 
 export interface VerificationBadgeMeta {
   id: VerificationBadgeType;
@@ -227,6 +233,8 @@ export interface VerificationBadgeMeta {
   shortLabel: string;
   description: string;
   fillHex: string;
+  strokeHex?: string;
+  checkHex?: string;
   textClass: string;
   softBgClass: string;
   borderClass: string;
@@ -313,6 +321,78 @@ export const VERIFICATION_BADGE_META: Record<VerificationBadgeType, Verification
     softBgClass: 'bg-amber-50',
     borderClass: 'border-amber-300',
   },
+  black: {
+    id: 'black',
+    label: 'Daraja la Juu (Black / Nyeusi)',
+    shortLabel: 'Black',
+    description: 'Beji Nyeusi ya heshima ya kipekee kwa wanachama na viongozi mashuhuri wa jukwaa',
+    fillHex: '#111827',
+    strokeHex: '#030712',
+    checkHex: '#FFFFFF',
+    textClass: 'text-slate-900',
+    softBgClass: 'bg-slate-100',
+    borderClass: 'border-slate-300',
+  },
+  white: {
+    id: 'white',
+    label: 'Utambulisho Safi (White / Nyeupe)',
+    shortLabel: 'White',
+    description: 'Beji Nyeupe ya uwazi, uadilifu na uthibitisho kamili wa utambulisho',
+    fillHex: '#FFFFFF',
+    strokeHex: '#334155',
+    checkHex: '#0F172A',
+    textClass: 'text-slate-800',
+    softBgClass: 'bg-white',
+    borderClass: 'border-slate-300',
+  },
+  gray: {
+    id: 'gray',
+    label: 'Mtaalamu & Mhakiki (Kijivu / Gray)',
+    shortLabel: 'Kijivu',
+    description: 'Beji ya Kijivu kwa wakaguzi wa maudhui, wachambuzi wa mifumo na washauri',
+    fillHex: '#6B7280',
+    strokeHex: '#4B5563',
+    checkHex: '#FFFFFF',
+    textClass: 'text-gray-700',
+    softBgClass: 'bg-gray-100',
+    borderClass: 'border-gray-300',
+  },
+  gold: {
+    id: 'gold',
+    label: 'Daraja la Dhahabu (Gold)',
+    shortLabel: 'Gold',
+    description: 'Beji ya Dhahabu kwa wabunifu waliotimiza vigezo vya juu vya ubora na mapato',
+    fillHex: '#EAB308',
+    strokeHex: '#A16207',
+    checkHex: '#FFFFFF',
+    textClass: 'text-amber-700',
+    softBgClass: 'bg-amber-50',
+    borderClass: 'border-amber-300',
+  },
+  silver: {
+    id: 'silver',
+    label: 'Daraja la Fedha (Silver)',
+    shortLabel: 'Silver',
+    description: 'Beji ya Fedha kwa wachangiaji wakubwa wenye rekodi thabiti ya mijadala',
+    fillHex: '#CBD5E1',
+    strokeHex: '#475569',
+    checkHex: '#0F172A',
+    textClass: 'text-slate-700',
+    softBgClass: 'bg-slate-50',
+    borderClass: 'border-slate-300',
+  },
+  copper: {
+    id: 'copper',
+    label: 'Daraja la Shaba (Copper)',
+    shortLabel: 'Copper',
+    description: 'Beji ya Shaba kwa wabunifu wanaokua kwa kasi na kuongeza ushiriki wa jamii',
+    fillHex: '#B87333',
+    strokeHex: '#7C2D12',
+    checkHex: '#FFFFFF',
+    textClass: 'text-[#9A4E1A]',
+    softBgClass: 'bg-orange-50',
+    borderClass: 'border-orange-300',
+  },
 };
 
 export const VERIFICATION_BADGE_TIERS: VerificationBadgeType[] = [
@@ -323,10 +403,17 @@ export const VERIFICATION_BADGE_TIERS: VerificationBadgeType[] = [
   'journalist',
   'educator',
   'creator',
+  'black',
+  'white',
+  'gray',
+  'gold',
+  'silver',
+  'copper',
   'owner',
 ];
 
 export function normalizeVerificationBadge(val: unknown): VerificationBadgeType {
+  if (val === 'kijivu') return 'gray';
   if (
     val === 'individual' ||
     val === 'organization' ||
@@ -334,7 +421,13 @@ export function normalizeVerificationBadge(val: unknown): VerificationBadgeType 
     val === 'owner' ||
     val === 'journalist' ||
     val === 'educator' ||
-    val === 'creator'
+    val === 'creator' ||
+    val === 'black' ||
+    val === 'white' ||
+    val === 'gray' ||
+    val === 'gold' ||
+    val === 'silver' ||
+    val === 'copper'
   ) {
     return val;
   }
@@ -500,21 +593,66 @@ export function findCommunityRule(ruleNumber?: number | null): CommunitySafetyRu
 }
 
 export const MONETIZATION_REQUIREMENTS = {
-  minFollowers: 1000,
-  minFriends: 5000,
-  minVideos: 1000,
-  minPosts: 8000,
-  minLikes: 10000,
-  minComments: 15000,
+  minFollowers: 100_000,
+  minFriends: 10_000,
+  minPosts: 25_000,
+  minArticles: 1_500,
+  minVideos: 5_000,
+  minLikes: 1_000_000,
+  minComments: 250_000,
+  minShares: 100_000,
+  minRepliesGiven: 10_000,
+  minAccountDays: 365,
+  requireVerificationBadge: true,
+  requireCleanVerifiedAccount: true,
 } as const;
+
+export const MONETIZATION_PAYOUT_RATES = {
+  currency: 'TZS',
+  monthlyBaseAllowanceTzs: 250_000,
+  perArticleTzs: 5_000,
+  perVideoTzs: 2_500,
+  perPostTzs: 500,
+  perLikeTzs: 5,
+  perCommentTzs: 25,
+  perShareTzs: 50,
+  minWithdrawalTzs: 50_000,
+} as const;
+
+export interface AuthorMetricsOptions {
+  repliesGivenCount?: number;
+  accountCreatedAt?: Timestamp | null;
+  verificationBadge?: VerificationBadgeType;
+  accountStatus?: AccountStatus;
+  emailVerified?: boolean;
+  hasProfilePhoto?: boolean;
+  bioLength?: number;
+}
 
 export interface AuthorMetricsSummary {
   followersCount: number;
   friendsCount: number;
   videosCount: number;
   postsCount: number;
+  articlesCount: number;
   totalLikesReceived: number;
   totalCommentsReceived: number;
+  totalSharesReceived: number;
+  repliesGivenCount: number;
+  accountAgeDays: number;
+  hasVerificationBadge: boolean;
+  hasCleanVerifiedAccount: boolean;
+  monthlyPostsCount: number;
+  monthlyArticlesCount: number;
+  monthlyVideosCount: number;
+  monthlyLikesReceived: number;
+  monthlyCommentsReceived: number;
+  monthlySharesReceived: number;
+  monthlyBasePayoutTzs: number;
+  monthlyEngagementPayoutTzs: number;
+  monthlyTotalPayoutTzs: number;
+  projectedMonthlyWithBaseTzs: number;
+  lifetimeEstimatedValueTzs: number;
   metCriteriaCount: number;
   totalCriteriaCount: number;
   progressPercent: number;
@@ -522,65 +660,172 @@ export interface AuthorMetricsSummary {
 }
 
 export function computeAuthorMetrics(
-  topics: Pick<Topic, 'authorId' | 'upvotesCount' | 'repliesCount' | 'status'>[],
+  topics: Pick<Topic, 'authorId' | 'category' | 'upvotesCount' | 'repliesCount' | 'sharesCount' | 'status' | 'createdAt'>[],
   authorUid: string,
   followersCount = 0,
-  videos: Pick<VideoPost, 'authorId' | 'likesCount' | 'commentsCount' | 'isArchived'>[] = [],
-  friendsCount = 0
+  videos: Pick<VideoPost, 'authorId' | 'likesCount' | 'commentsCount' | 'sharesCount' | 'isArchived' | 'createdAt'>[] = [],
+  friendsCount = 0,
+  options: AuthorMetricsOptions = {}
 ): AuthorMetricsSummary {
   let postsCount = 0;
+  let articlesCount = 0;
   let videosCount = 0;
   let totalLikesReceived = 0;
   let totalCommentsReceived = 0;
+  let totalSharesReceived = 0;
+
+  let monthlyPostsCount = 0;
+  let monthlyArticlesCount = 0;
+  let monthlyVideosCount = 0;
+  let monthlyLikesReceived = 0;
+  let monthlyCommentsReceived = 0;
+  let monthlySharesReceived = 0;
+
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth();
+  const isCurrentMonth = (ts?: Timestamp | null) => {
+    if (!ts) return false;
+    const d = ts.toDate();
+    return d.getFullYear() === currentYear && d.getMonth() === currentMonth;
+  };
 
   for (const t of topics) {
     if (t.authorId === authorUid && t.status !== 'archived' && t.status !== 'private') {
+      const likes = Math.max(0, Number(t.upvotesCount || 0));
+      const comments = Math.max(0, Number(t.repliesCount || 0));
+      const shares = Math.max(0, Number(t.sharesCount || 0));
+      const isArticle = normalizeBoardCategory(String(t.category || 'Kijiweni')) === 'Makala';
+
       postsCount += 1;
-      totalLikesReceived += Math.max(0, Number(t.upvotesCount || 0));
-      totalCommentsReceived += Math.max(0, Number(t.repliesCount || 0));
+      if (isArticle) articlesCount += 1;
+      totalLikesReceived += likes;
+      totalCommentsReceived += comments;
+      totalSharesReceived += shares;
+
+      if (isCurrentMonth(t.createdAt)) {
+        monthlyPostsCount += 1;
+        if (isArticle) monthlyArticlesCount += 1;
+        monthlyLikesReceived += likes;
+        monthlyCommentsReceived += comments;
+        monthlySharesReceived += shares;
+      }
     }
   }
 
   for (const v of videos) {
     if (v.authorId === authorUid && !v.isArchived) {
+      const likes = Math.max(0, Number(v.likesCount || 0));
+      const comments = Math.max(0, Number(v.commentsCount || 0));
+      const shares = Math.max(0, Number(v.sharesCount || 0));
+
       videosCount += 1;
-      totalLikesReceived += Math.max(0, Number(v.likesCount || 0));
-      totalCommentsReceived += Math.max(0, Number(v.commentsCount || 0));
+      totalLikesReceived += likes;
+      totalCommentsReceived += comments;
+      totalSharesReceived += shares;
+
+      if (isCurrentMonth(v.createdAt)) {
+        monthlyVideosCount += 1;
+        monthlyLikesReceived += likes;
+        monthlyCommentsReceived += comments;
+        monthlySharesReceived += shares;
+      }
     }
   }
 
   const cleanFollowers = Math.max(0, Number(followersCount || 0));
   const cleanFriends = Math.max(0, Number(friendsCount || 0));
-  const fRatio = Math.min(1, cleanFollowers / MONETIZATION_REQUIREMENTS.minFollowers);
-  const frRatio = Math.min(1, cleanFriends / MONETIZATION_REQUIREMENTS.minFriends);
-  const vRatio = Math.min(1, videosCount / MONETIZATION_REQUIREMENTS.minVideos);
-  const pRatio = Math.min(1, postsCount / MONETIZATION_REQUIREMENTS.minPosts);
-  const lRatio = Math.min(1, totalLikesReceived / MONETIZATION_REQUIREMENTS.minLikes);
-  const cRatio = Math.min(1, totalCommentsReceived / MONETIZATION_REQUIREMENTS.minComments);
-
-  const met = [
-    fRatio >= 1,
-    frRatio >= 1,
-    vRatio >= 1,
-    pRatio >= 1,
-    lRatio >= 1,
-    cRatio >= 1,
-  ].filter(Boolean).length;
-  const progressPercent = Math.round(
-    ((fRatio + frRatio + vRatio + pRatio + lRatio + cRatio) / 6) * 100
+  const cleanRepliesGiven = Math.max(0, Number(options.repliesGivenCount || 0));
+  const accountAgeDays = options.accountCreatedAt
+    ? Math.max(0, Math.floor((Date.now() - options.accountCreatedAt.toMillis()) / 86_400_000))
+    : 0;
+  const hasVerificationBadge = Boolean(
+    options.verificationBadge && options.verificationBadge !== 'none'
   );
+  const notSuspended = options.accountStatus !== 'suspended';
+  const emailOk = options.emailVerified === undefined ? true : Boolean(options.emailVerified);
+  const profileOk =
+    (options.hasProfilePhoto === undefined ? true : Boolean(options.hasProfilePhoto)) &&
+    (options.bioLength === undefined ? true : options.bioLength >= 20);
+  const hasCleanVerifiedAccount = notSuspended && emailOk && profileOk;
+
+  const ratios = [
+    Math.min(1, cleanFollowers / MONETIZATION_REQUIREMENTS.minFollowers),
+    Math.min(1, cleanFriends / MONETIZATION_REQUIREMENTS.minFriends),
+    Math.min(1, postsCount / MONETIZATION_REQUIREMENTS.minPosts),
+    Math.min(1, articlesCount / MONETIZATION_REQUIREMENTS.minArticles),
+    Math.min(1, videosCount / MONETIZATION_REQUIREMENTS.minVideos),
+    Math.min(1, totalLikesReceived / MONETIZATION_REQUIREMENTS.minLikes),
+    Math.min(1, totalCommentsReceived / MONETIZATION_REQUIREMENTS.minComments),
+    Math.min(1, totalSharesReceived / MONETIZATION_REQUIREMENTS.minShares),
+    Math.min(1, cleanRepliesGiven / MONETIZATION_REQUIREMENTS.minRepliesGiven),
+    Math.min(1, accountAgeDays / MONETIZATION_REQUIREMENTS.minAccountDays),
+    hasVerificationBadge ? 1 : 0,
+    hasCleanVerifiedAccount ? 1 : 0,
+  ];
+
+  const met = ratios.filter((r) => r >= 1).length;
+  const totalCriteriaCount = ratios.length;
+  const isEligibleForMonetization = met === totalCriteriaCount;
+  const progressPercent = Math.round(
+    (ratios.reduce((sum, r) => sum + r, 0) / totalCriteriaCount) * 100
+  );
+
+  const regularMonthlyPosts = Math.max(0, monthlyPostsCount - monthlyArticlesCount);
+  const monthlyEngagementPayoutTzs =
+    regularMonthlyPosts * MONETIZATION_PAYOUT_RATES.perPostTzs +
+    monthlyArticlesCount * MONETIZATION_PAYOUT_RATES.perArticleTzs +
+    monthlyVideosCount * MONETIZATION_PAYOUT_RATES.perVideoTzs +
+    monthlyLikesReceived * MONETIZATION_PAYOUT_RATES.perLikeTzs +
+    monthlyCommentsReceived * MONETIZATION_PAYOUT_RATES.perCommentTzs +
+    monthlySharesReceived * MONETIZATION_PAYOUT_RATES.perShareTzs;
+
+  const monthlyBasePayoutTzs = isEligibleForMonetization
+    ? MONETIZATION_PAYOUT_RATES.monthlyBaseAllowanceTzs
+    : 0;
+  const monthlyTotalPayoutTzs = isEligibleForMonetization
+    ? monthlyBasePayoutTzs + monthlyEngagementPayoutTzs
+    : 0;
+  const projectedMonthlyWithBaseTzs =
+    MONETIZATION_PAYOUT_RATES.monthlyBaseAllowanceTzs + monthlyEngagementPayoutTzs;
+
+  const regularTotalPosts = Math.max(0, postsCount - articlesCount);
+  const lifetimeEstimatedValueTzs =
+    regularTotalPosts * MONETIZATION_PAYOUT_RATES.perPostTzs +
+    articlesCount * MONETIZATION_PAYOUT_RATES.perArticleTzs +
+    videosCount * MONETIZATION_PAYOUT_RATES.perVideoTzs +
+    totalLikesReceived * MONETIZATION_PAYOUT_RATES.perLikeTzs +
+    totalCommentsReceived * MONETIZATION_PAYOUT_RATES.perCommentTzs +
+    totalSharesReceived * MONETIZATION_PAYOUT_RATES.perShareTzs;
 
   return {
     followersCount: cleanFollowers,
     friendsCount: cleanFriends,
     videosCount,
     postsCount,
+    articlesCount,
     totalLikesReceived,
     totalCommentsReceived,
+    totalSharesReceived,
+    repliesGivenCount: cleanRepliesGiven,
+    accountAgeDays,
+    hasVerificationBadge,
+    hasCleanVerifiedAccount,
+    monthlyPostsCount,
+    monthlyArticlesCount,
+    monthlyVideosCount,
+    monthlyLikesReceived,
+    monthlyCommentsReceived,
+    monthlySharesReceived,
+    monthlyBasePayoutTzs,
+    monthlyEngagementPayoutTzs,
+    monthlyTotalPayoutTzs,
+    projectedMonthlyWithBaseTzs,
+    lifetimeEstimatedValueTzs,
     metCriteriaCount: met,
-    totalCriteriaCount: 6,
+    totalCriteriaCount,
     progressPercent,
-    isEligibleForMonetization: met === 6,
+    isEligibleForMonetization,
   };
 }
 
@@ -641,6 +886,85 @@ export function computeMemberControlSerial(uid: string): string {
   return `00${String(combined).padStart(6, '0')}`;
 }
 
+export type KijiweniFontStyle =
+  | 'sans'
+  | 'scholarly'
+  | 'classic'
+  | 'editorial'
+  | 'handwriting'
+  | 'mono';
+
+export interface KijiweniFontOption {
+  id: KijiweniFontStyle;
+  labelSw: string;
+  labelEn: string;
+  fontFamilyCss: string;
+  bodySizeClass: string;
+}
+
+export const KIJIWENI_FONT_STYLES: readonly KijiweniFontOption[] = [
+  {
+    id: 'sans',
+    labelSw: 'Kisasa (Safi)',
+    labelEn: 'Modern Sans',
+    fontFamilyCss: "'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif",
+    bodySizeClass: 'text-[15px]',
+  },
+  {
+    id: 'scholarly',
+    labelSw: 'Kisomi (Lora)',
+    labelEn: 'Scholarly Book',
+    fontFamilyCss: "'Lora', 'Fraunces', Georgia, serif",
+    bodySizeClass: 'text-[15.5px]',
+  },
+  {
+    id: 'classic',
+    labelSw: 'Klasiki (Garamond)',
+    labelEn: 'Classic Serif',
+    fontFamilyCss: "'Cormorant Garamond', Georgia, serif",
+    bodySizeClass: 'text-[17.5px]',
+  },
+  {
+    id: 'editorial',
+    labelSw: 'Jarida (Playfair)',
+    labelEn: 'Editorial Print',
+    fontFamilyCss: "'Playfair Display', Georgia, serif",
+    bodySizeClass: 'text-[15.5px]',
+  },
+  {
+    id: 'handwriting',
+    labelSw: 'Mkono (Mwandiko)',
+    labelEn: 'Handwriting',
+    fontFamilyCss: "'Caveat', cursive",
+    bodySizeClass: 'text-[19px]',
+  },
+  {
+    id: 'mono',
+    labelSw: 'Taipu (Mono)',
+    labelEn: 'Typewriter',
+    fontFamilyCss: "'JetBrains Mono', ui-monospace, monospace",
+    bodySizeClass: 'text-[13.5px]',
+  },
+];
+
+export function normalizeKijiweniFontStyle(value: unknown): KijiweniFontStyle {
+  if (
+    value === 'scholarly' ||
+    value === 'classic' ||
+    value === 'editorial' ||
+    value === 'handwriting' ||
+    value === 'mono'
+  ) {
+    return value;
+  }
+  return 'sans';
+}
+
+export function getKijiweniFontMeta(value: unknown): KijiweniFontOption {
+  const id = normalizeKijiweniFontStyle(value);
+  return KIJIWENI_FONT_STYLES.find((opt) => opt.id === id) || KIJIWENI_FONT_STYLES[0];
+}
+
 export interface Topic {
   id: string;
   title: string;
@@ -654,6 +978,7 @@ export interface Topic {
   isPinned: boolean;
   repliesCount: number;
   upvotesCount: number;
+  sharesCount?: number;
   acceptedReplyId: string;
   company?: string;
   location?: string;
@@ -662,6 +987,7 @@ export interface Topic {
   applyInfo?: string;
   coverImage?: string;
   images?: string[];
+  bodyFontStyle?: KijiweniFontStyle;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
   lastActivityAt: Timestamp | null;

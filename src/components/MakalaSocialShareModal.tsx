@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Check,
   Copy,
@@ -20,12 +20,14 @@ interface MakalaSocialShareModalProps {
   topic: Topic | null;
   onClose: () => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
+  onShared?: (topic: Topic) => void;
 }
 
 export const MakalaSocialShareModal: React.FC<MakalaSocialShareModalProps> = ({
   topic,
   onClose,
   onToast,
+  onShared,
 }) => {
   const { tr, lang } = useLanguage();
   const [captionText, setCaptionText] = useState('');
@@ -33,6 +35,8 @@ export const MakalaSocialShareModal: React.FC<MakalaSocialShareModalProps> = ({
   const [sharingNative, setSharingNative] = useState(false);
   const [downloadingImage, setDownloadingImage] = useState(false);
   const [previewImgError, setPreviewImgError] = useState(false);
+
+  const countedShareRef = useRef(false);
 
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
 
@@ -46,6 +50,7 @@ export const MakalaSocialShareModal: React.FC<MakalaSocialShareModalProps> = ({
     setCaptionText(payload.fullCaption);
     setCopiedKey(null);
     setPreviewImgError(false);
+    countedShareRef.current = false;
   }, [payload?.shareUrl]);
 
   useEffect(() => {
@@ -61,11 +66,18 @@ export const MakalaSocialShareModal: React.FC<MakalaSocialShareModalProps> = ({
 
   const activeCaption = captionText.trim() || payload.fullCaption;
 
+  const recordSharedOnce = () => {
+    if (countedShareRef.current) return;
+    countedShareRef.current = true;
+    onShared?.(topic);
+  };
+
   const copyToClipboard = async (text: string, key: 'caption' | 'link', msg: string) => {
     try {
       await navigator.clipboard.writeText(text);
       setCopiedKey(key);
       window.setTimeout(() => setCopiedKey(null), 2200);
+      recordSharedOnce();
       onToast(msg);
     } catch {
       onToast(tr('Imeshindwa kunakili moja kwa moja.', 'Could not copy automatically.'), 'error');
@@ -76,6 +88,7 @@ export const MakalaSocialShareModal: React.FC<MakalaSocialShareModalProps> = ({
     if (navigator.clipboard?.writeText) {
       void navigator.clipboard.writeText(activeCaption).catch(() => {});
     }
+    recordSharedOnce();
     onToast(
       tr(
         `Chapisho kamili limenakiliwa — fungua ${platformName} na ubonyeze Post!`,
@@ -105,6 +118,7 @@ export const MakalaSocialShareModal: React.FC<MakalaSocialShareModalProps> = ({
             text: activeCaption,
             url: payload.shareUrl,
           });
+          recordSharedOnce();
           onToast(
             tr(
               'Picha na maelezo yametumwa! Kama maelezo hayakutokea, bandika (Paste) na upost.',
@@ -119,12 +133,14 @@ export const MakalaSocialShareModal: React.FC<MakalaSocialShareModalProps> = ({
           text: activeCaption,
           url: payload.shareUrl,
         });
+        recordSharedOnce();
         onToast(tr('Makala imeshirikiwa kikamilifu!', 'Article shared successfully!'));
         return;
       }
 
       await navigator.clipboard.writeText(activeCaption);
       setCopiedKey('caption');
+      recordSharedOnce();
       onToast(
         tr(
           'Chapisho kamili limenakiliwa! Bandika moja kwa moja kwenye mtandao wowote wa kijamii.',

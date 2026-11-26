@@ -107,6 +107,36 @@ const BADGE_EN: Record<
     shortLabel: 'Owner',
     description: 'Official founder and owner of Malosha Forums',
   },
+  black: {
+    label: 'Executive Tier (Black)',
+    shortLabel: 'Black',
+    description: 'Exclusive black verification badge for senior community leaders and top contributors',
+  },
+  white: {
+    label: 'Pure Identity (White)',
+    shortLabel: 'White',
+    description: 'White verification badge representing transparency and full identity assurance',
+  },
+  gray: {
+    label: 'Specialist & Reviewer (Gray)',
+    shortLabel: 'Gray',
+    description: 'Gray verification badge for technical analysts, fact-checkers, and internal reviewers',
+  },
+  gold: {
+    label: 'Gold Tier (Gold)',
+    shortLabel: 'Gold',
+    description: 'Gold verification badge for creators meeting top quality and monetization milestones',
+  },
+  silver: {
+    label: 'Silver Tier (Silver)',
+    shortLabel: 'Silver',
+    description: 'Silver verification badge for established contributors with sustained community engagement',
+  },
+  copper: {
+    label: 'Copper Tier (Copper)',
+    shortLabel: 'Copper',
+    description: 'Copper verification badge for fast-rising creators building active discussions',
+  },
 };
 
 export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {

@@ -1,8 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  Award,
+  Banknote,
   Calendar,
   Check,
+  CheckCircle2,
+  Circle,
   Clock,
   ExternalLink,
   Eye,
@@ -38,9 +42,12 @@ import {
 } from '../services/forumService';
 import {
   AccountStatus,
+  AuthorMetricsSummary,
   COMMUNITY_SAFETY_RULES,
   ContentRetentionPeriod,
   ContentRetentionSettings,
+  MONETIZATION_PAYOUT_RATES,
+  MONETIZATION_REQUIREMENTS,
   Report,
   Topic,
   UserProfile,
@@ -48,6 +55,7 @@ import {
   VERIFICATION_BADGE_TIERS,
   VerificationBadgeType,
   VideoPost,
+  computeAuthorMetrics,
   computeMemberControlSerial,
   findCommunityRule,
   formatMemberCode,
@@ -89,6 +97,7 @@ interface ModerationViewProps {
   }) => Promise<void>;
   onRunRetentionNow?: (target: 'kijiweni' | 'video' | 'both') => void;
   signupLastSeenMs?: number;
+  openPayoutsSignal?: number;
 }
 
 const RETENTION_DURATION_OPTIONS: Array<{
@@ -104,8 +113,9 @@ const RETENTION_DURATION_OPTIONS: Array<{
   { value: '10y', labelSw: 'Miaka 10', labelEn: '10 Years' },
 ];
 
-type AdminSection = 'members' | 'verify_id' | 'posts' | 'videos' | 'reports';
+type AdminSection = 'members' | 'payouts' | 'verify_id' | 'posts' | 'videos' | 'reports';
 type MemberFilter = 'all' | 'active' | 'suspended';
+type PayoutFilter = 'all' | 'eligible' | 'locked';
 type PostFilter = 'all' | 'open' | 'locked' | 'archived';
 type VideoFilter = 'all' | 'live' | 'blocked';
 
@@ -126,6 +136,7 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
   onUpdateRetentionSettings,
   onRunRetentionNow,
   signupLastSeenMs = 0,
+  openPayoutsSignal = 0,
 }) => {
   const {
     tr,
@@ -147,6 +158,9 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
   const [memberSearch, setMemberSearch] = useState('');
   const [memberFilter, setMemberFilter] = useState<MemberFilter>('all');
   const [memberSortNewest, setMemberSortNewest] = useState(true);
+  const [payoutSearch, setPayoutSearch] = useState('');
+  const [payoutFilter, setPayoutFilter] = useState<PayoutFilter>('all');
+  const [expandedPayoutUid, setExpandedPayoutUid] = useState<string | null>(null);
   const [updatingUid, setUpdatingUid] = useState<string | null>(null);
   const [lockPromptUid, setLockPromptUid] = useState<string | null>(null);
   const [lockRuleNumber, setLockRuleNumber] = useState<number>(1);
@@ -170,6 +184,12 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
   const [confirmDeleteVideoId, setConfirmDeleteVideoId] = useState<string | null>(null);
 
   const pendingCount = reports.filter((r) => r.status === 'pending').length;
+
+  useEffect(() => {
+    if (openPayoutsSignal > 0) {
+      setSection('payouts');
+    }
+  }, [openPayoutsSignal]);
 
   useEffect(() => {
     setLoadingMembers(true);
@@ -202,20 +222,32 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
             switch (badge) {
               case 'owner':
                 return 0;
-              case 'government':
+              case 'black':
                 return 1;
-              case 'organization':
+              case 'gold':
                 return 2;
-              case 'journalist':
+              case 'silver':
                 return 3;
-              case 'educator':
+              case 'copper':
                 return 4;
-              case 'creator':
+              case 'gray':
                 return 5;
-              case 'individual':
+              case 'white':
                 return 6;
-              default:
+              case 'government':
                 return 7;
+              case 'organization':
+                return 8;
+              case 'journalist':
+                return 9;
+              case 'educator':
+                return 10;
+              case 'creator':
+                return 11;
+              case 'individual':
+                return 12;
+              default:
+                return 13;
             }
           };
           const diff = rank(a.verificationBadge) - rank(b.verificationBadge);
@@ -283,6 +315,7 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
             isPinned: Boolean(data.isPinned),
             repliesCount: Number(data.repliesCount || 0),
             upvotesCount: Number(data.upvotesCount || 0),
+            sharesCount: Number(data.sharesCount || 0),
             acceptedReplyId: data.acceptedReplyId || '',
             company: data.company || '',
             location: data.location || '',
@@ -414,6 +447,84 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
     }
     return filtered;
   }, [members, memberSearch, memberFilter, memberSortNewest, privateDetails, getBadgeLabel]);
+
+  const memberMetricsMap = useMemo(() => {
+    const map = new Map<string, AuthorMetricsSummary>();
+    for (const member of members) {
+      map.set(
+        member.uid,
+        computeAuthorMetrics(allTopics, member.uid, member.followersCount || 0, allVideos, 0, {
+          repliesGivenCount: member.repliesCount || 0,
+          accountCreatedAt: member.createdAt,
+          verificationBadge: member.verificationBadge,
+          accountStatus: member.accountStatus,
+          hasProfilePhoto: Boolean(member.photoURL),
+          bioLength: (member.bio || '').trim().length,
+        })
+      );
+    }
+    return map;
+  }, [members, allTopics, allVideos]);
+
+  const payoutOverview = useMemo(() => {
+    let eligibleCount = 0;
+    let lockedCount = 0;
+    let totalProjectedEngagementTzs = 0;
+    let totalUnlockedDueTzs = 0;
+
+    for (const member of members) {
+      const m = memberMetricsMap.get(member.uid);
+      if (!m) continue;
+      totalProjectedEngagementTzs += m.monthlyEngagementPayoutTzs;
+      if (m.isEligibleForMonetization) {
+        eligibleCount += 1;
+        totalUnlockedDueTzs += m.monthlyTotalPayoutTzs;
+      } else {
+        lockedCount += 1;
+      }
+    }
+
+    return {
+      eligibleCount,
+      lockedCount,
+      totalProjectedEngagementTzs,
+      totalUnlockedDueTzs,
+    };
+  }, [members, memberMetricsMap]);
+
+  const filteredPayoutMembers = useMemo(() => {
+    const q = payoutSearch.trim().toLowerCase();
+    const list = members.filter((m) => {
+      const metrics = memberMetricsMap.get(m.uid);
+      if (!metrics) return false;
+      if (payoutFilter === 'eligible' && !metrics.isEligibleForMonetization) return false;
+      if (payoutFilter === 'locked' && metrics.isEligibleForMonetization) return false;
+      if (!q) return true;
+      const priv = privateDetails[m.uid];
+      return (
+        m.displayName.toLowerCase().includes(q) ||
+        m.uid.toLowerCase().includes(q) ||
+        formatMemberCode(m.uid).toLowerCase().includes(q) ||
+        (priv?.email || '').toLowerCase().includes(q) ||
+        (priv?.phoneNumber || '').toLowerCase().includes(q) ||
+        getBadgeLabel(m.verificationBadge).toLowerCase().includes(q)
+      );
+    });
+
+    return [...list].sort((a, b) => {
+      const ma = memberMetricsMap.get(a.uid);
+      const mb = memberMetricsMap.get(b.uid);
+      const eligibleDiff =
+        Number(mb?.isEligibleForMonetization || false) -
+        Number(ma?.isEligibleForMonetization || false);
+      if (eligibleDiff !== 0) return eligibleDiff;
+      const valueDiff = (mb?.monthlyEngagementPayoutTzs || 0) - (ma?.monthlyEngagementPayoutTzs || 0);
+      if (valueDiff !== 0) return valueDiff;
+      const criteriaDiff = (mb?.metCriteriaCount || 0) - (ma?.metCriteriaCount || 0);
+      if (criteriaDiff !== 0) return criteriaDiff;
+      return a.displayName.localeCompare(b.displayName);
+    });
+  }, [members, memberMetricsMap, payoutSearch, payoutFilter, privateDetails, getBadgeLabel]);
 
   const filteredTopics = useMemo(() => {
     const q = postSearch.trim().toLowerCase();
@@ -716,6 +827,19 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
             <span>
               {tr('Wanachama', 'Members')} ({members.length})
             </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSection('payouts')}
+            className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
+              section === 'payouts'
+                ? 'bg-[#1D4E89] text-white'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Banknote className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>{tr('Malipo & Vigezo', 'Payouts & Criteria')}</span>
           </button>
 
           <button
@@ -1202,13 +1326,386 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
         <div className="mt-6">
           <MemberIdVerifier />
         </div>
+      ) : section === 'payouts' ? (
+        <div className="mt-6 space-y-5">
+          {/* Owner Payout Ledger Header Banner */}
+          <div className="rounded-xl border border-emerald-200 bg-gradient-to-br from-emerald-50/80 via-white to-amber-50/50 p-4 sm:p-5">
+            <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+              <div>
+                <h3 className="flex items-center gap-2 font-display text-base font-bold text-slate-900 sm:text-lg">
+                  <Banknote className="h-5 w-5 text-emerald-700" aria-hidden="true" />
+                  <span>
+                    {tr(
+                      'Mfuatiliaji Kamili wa Malipo & Vigezo 12 (Mmiliki Pekee)',
+                      'Owner Complete Payout & 12-Criteria Ledger'
+                    )}
+                  </span>
+                </h3>
+                <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                  {tr(
+                    'Mmiliki anaona kila hesabu ya wanachama wote hata kama bado hawajatimiza masharti yote 12. Watumiaji wa kawaida hawawezi kuona malipo ya mwezi mpaka wafikie 12/12 (100%).',
+                    'Owner sees every member payout calculation regardless of progress. Regular members see monthly earnings locked until they reach 12/12 (100%).'
+                  )}
+                </p>
+              </div>
+              <span className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-900 tabular-nums">
+                <Award className="h-4 w-4 text-amber-700" aria-hidden="true" />
+                <span>
+                  {tr('Posho ya Kufuzu:', 'Base Upon 12/12:')}{' '}
+                  TZS {MONETIZATION_PAYOUT_RATES.monthlyBaseAllowanceTzs.toLocaleString()}
+                </span>
+              </span>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <div className="rounded-lg border border-slate-200 bg-white p-3">
+                <p className="text-[11px] font-semibold text-slate-500">
+                  {tr('Waliofuzu 12/12 (Malipo Wazi)', 'Eligible 12/12 (Unlocked)')}
+                </p>
+                <p className="mt-1 font-mono text-xl font-extrabold text-emerald-700 tabular-nums">
+                  {loadingMembers ? '—' : payoutOverview.eligibleCount}
+                </p>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-white p-3">
+                <p className="text-[11px] font-semibold text-slate-500">
+                  {tr('Bado Hawajafuzu (<12/12)', 'Locked for Users (<12/12)')}
+                </p>
+                <p className="mt-1 font-mono text-xl font-extrabold text-amber-700 tabular-nums">
+                  {loadingMembers ? '—' : payoutOverview.lockedCount}
+                </p>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-white p-3">
+                <p className="text-[11px] font-semibold text-slate-500">
+                  {tr('Thamani ya Shughuli za Mwezi (Wote)', 'All Members Activity Value (Mo)')}
+                </p>
+                <p className="mt-1 font-mono text-base font-extrabold text-slate-900 tabular-nums sm:text-lg">
+                  TZS {payoutOverview.totalProjectedEngagementTzs.toLocaleString()}
+                </p>
+              </div>
+
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-3">
+                <p className="text-[11px] font-semibold text-emerald-900">
+                  {tr('Malipo Halisi Yaliyoiva Mwezi Huu', 'Unlocked Payouts Due This Month')}
+                </p>
+                <p className="mt-1 font-mono text-base font-extrabold text-emerald-800 tabular-nums sm:text-lg">
+                  TZS {payoutOverview.totalUnlockedDueTzs.toLocaleString()}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Payout Search & Filter */}
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="relative flex-1">
+              <Search
+                className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400"
+                aria-hidden="true"
+              />
+              <input
+                type="search"
+                value={payoutSearch}
+                onChange={(e) => setPayoutSearch(e.target.value)}
+                placeholder={tr(
+                  'Tafuta mwanachama kuona malipo & vigezo vyake 12...',
+                  'Search any member to inspect payouts & 12 criteria...'
+                )}
+                aria-label={tr('Tafuta malipo ya wanachama', 'Search member payouts')}
+                className="min-h-[42px] w-full rounded-lg border border-slate-300 bg-white py-2 pr-4 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#1D4E89] focus:outline-none"
+              />
+            </div>
+
+            <div
+              role="group"
+              aria-label={tr('Chuja hali ya kufuzu malipo', 'Filter payout eligibility')}
+              className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-slate-300 bg-white p-1 shrink-0"
+            >
+              {(
+                [
+                  { id: 'all', label: tr('Wote', 'All') },
+                  { id: 'eligible', label: tr('Waliofuzu 12/12', 'Eligible 12/12') },
+                  { id: 'locked', label: tr('Waliofungwa', 'Locked') },
+                ] as { id: PayoutFilter; label: string }[]
+              ).map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setPayoutFilter(f.id)}
+                  className={`min-h-[34px] rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
+                    payoutFilter === f.id
+                      ? 'bg-[#0E2640] text-white'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Payout Ledger Rows */}
+          {loadingMembers || loadingTopics || loadingVideos ? (
+            <div className="rounded-xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-500">
+              {tr('Inapakia hesabu za malipo...', 'Calculating payout ledger...')}
+            </div>
+          ) : filteredPayoutMembers.length === 0 ? (
+            <div className="rounded-xl border border-slate-200 bg-white px-6 py-12 text-center text-sm text-slate-600">
+              <Banknote className="mx-auto mb-2 h-6 w-6 text-slate-400" aria-hidden="true" />
+              {tr('Hakuna mwanachama aliyelingana na kichujio hiki.', 'No members matched this filter.')}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {filteredPayoutMembers.map((member) => {
+                const metrics = memberMetricsMap.get(member.uid);
+                if (!metrics) return null;
+                const priv = privateDetails[member.uid];
+                const isExpanded = expandedPayoutUid === member.uid;
+
+                const memberCriteria = [
+                  {
+                    label: tr('Wafuasi (Followers)', 'Followers'),
+                    currentText: metrics.followersCount.toLocaleString(),
+                    targetText: MONETIZATION_REQUIREMENTS.minFollowers.toLocaleString(),
+                    met: metrics.followersCount >= MONETIZATION_REQUIREMENTS.minFollowers,
+                  },
+                  {
+                    label: tr('Marafiki (Friends / DM)', 'Friends / Contacts'),
+                    currentText: metrics.friendsCount.toLocaleString(),
+                    targetText: MONETIZATION_REQUIREMENTS.minFriends.toLocaleString(),
+                    met: metrics.friendsCount >= MONETIZATION_REQUIREMENTS.minFriends,
+                  },
+                  {
+                    label: tr('Machapisho Yote (Posts)', 'Total Posts'),
+                    currentText: metrics.postsCount.toLocaleString(),
+                    targetText: MONETIZATION_REQUIREMENTS.minPosts.toLocaleString(),
+                    met: metrics.postsCount >= MONETIZATION_REQUIREMENTS.minPosts,
+                  },
+                  {
+                    label: tr('Makala za Kina (Articles)', 'In-Depth Articles'),
+                    currentText: metrics.articlesCount.toLocaleString(),
+                    targetText: MONETIZATION_REQUIREMENTS.minArticles.toLocaleString(),
+                    met: metrics.articlesCount >= MONETIZATION_REQUIREMENTS.minArticles,
+                  },
+                  {
+                    label: tr('Video Zilizopakiwa', 'Videos Posted'),
+                    currentText: metrics.videosCount.toLocaleString(),
+                    targetText: MONETIZATION_REQUIREMENTS.minVideos.toLocaleString(),
+                    met: metrics.videosCount >= MONETIZATION_REQUIREMENTS.minVideos,
+                  },
+                  {
+                    label: tr('Likes Zilizopokelewa', 'Likes Received'),
+                    currentText: metrics.totalLikesReceived.toLocaleString(),
+                    targetText: MONETIZATION_REQUIREMENTS.minLikes.toLocaleString(),
+                    met: metrics.totalLikesReceived >= MONETIZATION_REQUIREMENTS.minLikes,
+                  },
+                  {
+                    label: tr('Maoni Yaliyopokelewa', 'Comments Received'),
+                    currentText: metrics.totalCommentsReceived.toLocaleString(),
+                    targetText: MONETIZATION_REQUIREMENTS.minComments.toLocaleString(),
+                    met: metrics.totalCommentsReceived >= MONETIZATION_REQUIREMENTS.minComments,
+                  },
+                  {
+                    label: tr('Shares / Kushirikiwa', 'Shares Received'),
+                    currentText: metrics.totalSharesReceived.toLocaleString(),
+                    targetText: MONETIZATION_REQUIREMENTS.minShares.toLocaleString(),
+                    met: metrics.totalSharesReceived >= MONETIZATION_REQUIREMENTS.minShares,
+                  },
+                  {
+                    label: tr('Majibu Aliyoandika', 'Replies Written'),
+                    currentText: metrics.repliesGivenCount.toLocaleString(),
+                    targetText: MONETIZATION_REQUIREMENTS.minRepliesGiven.toLocaleString(),
+                    met: metrics.repliesGivenCount >= MONETIZATION_REQUIREMENTS.minRepliesGiven,
+                  },
+                  {
+                    label: tr('Umri wa Akaunti (Siku)', 'Account Age (Days)'),
+                    currentText: `${metrics.accountAgeDays.toLocaleString()} ${tr('siku', 'd')}`,
+                    targetText: `${MONETIZATION_REQUIREMENTS.minAccountDays.toLocaleString()} ${tr('siku', 'd')}`,
+                    met: metrics.accountAgeDays >= MONETIZATION_REQUIREMENTS.minAccountDays,
+                  },
+                  {
+                    label: tr('Beji Rasmi ya Uthibitisho', 'Verification Badge'),
+                    currentText: metrics.hasVerificationBadge
+                      ? getBadgeLabel(member.verificationBadge, true)
+                      : tr('Hana', 'None'),
+                    targetText: tr('Inahitajika', 'Required'),
+                    met: metrics.hasVerificationBadge,
+                  },
+                  {
+                    label: tr('Wasifu Kamili & Rekodi Safi', 'Clean Profile & Standing'),
+                    currentText: metrics.hasCleanVerifiedAccount
+                      ? tr('Kamili', 'Verified')
+                      : tr('Haijakamilika', 'Incomplete'),
+                    targetText: tr('Kamili', 'Complete'),
+                    met: metrics.hasCleanVerifiedAccount,
+                  },
+                ];
+
+                return (
+                  <div
+                    key={member.uid}
+                    className={`rounded-xl border p-4 ${
+                      metrics.isEligibleForMonetization
+                        ? 'border-emerald-300 bg-emerald-50/35'
+                        : 'border-slate-200 bg-white'
+                    }`}
+                  >
+                    <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-center">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <Avatar
+                          name={member.displayName}
+                          photoURL={member.photoURL}
+                          size="md"
+                          uid={member.uid}
+                          showOnlineIndicator
+                        />
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="truncate text-sm font-bold text-slate-900">
+                              {member.displayName}
+                            </span>
+                            <VerificationBadge badge={member.verificationBadge} size="sm" />
+                            {metrics.isEligibleForMonetization ? (
+                              <span className="inline-flex items-center gap-1 rounded bg-emerald-100 px-2 py-0.5 text-[10.5px] font-bold text-emerald-800">
+                                <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                                <span>{tr('Amefuzu 12/12 · Malipo Wazi', 'Eligible 12/12 · Unlocked')}</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-2 py-0.5 text-[10.5px] font-bold text-amber-900 tabular-nums">
+                                <Lock className="h-3 w-3" aria-hidden="true" />
+                                <span>
+                                  {tr(
+                                    `Imefungwa Kwake (${metrics.metCriteriaCount}/${metrics.totalCriteriaCount} · ${metrics.progressPercent}%)`,
+                                    `Locked for User (${metrics.metCriteriaCount}/${metrics.totalCriteriaCount} · ${metrics.progressPercent}%)`
+                                  )}
+                                </span>
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-0.5 text-[11px] text-slate-500">
+                            {formatMemberCode(member.uid)}
+                            {priv?.email ? ` · ${priv.email}` : ''}
+                            {priv?.phoneNumber ? ` · ${priv.phoneNumber}` : ''}
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedPayoutUid(isExpanded ? null : member.uid)
+                        }
+                        className="inline-flex min-h-[38px] shrink-0 items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 transition-colors hover:bg-slate-50"
+                      >
+                        <Award className="h-3.5 w-3.5 text-amber-600" aria-hidden="true" />
+                        <span>
+                          {isExpanded
+                            ? tr('Ficha Vigezo 12', 'Hide 12 Criteria')
+                            : tr('Kagua Vigezo 12', 'Inspect 12 Criteria')}
+                        </span>
+                      </button>
+                    </div>
+
+                    {/* Progress bar */}
+                    <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                      <div
+                        className={`h-full rounded-full transition-all duration-300 ${
+                          metrics.isEligibleForMonetization ? 'bg-emerald-600' : 'bg-amber-500'
+                        }`}
+                        style={{ width: `${metrics.progressPercent}%` }}
+                      />
+                    </div>
+
+                    {/* 3 Owner TZS Boxes */}
+                    <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+                      <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-2.5">
+                        <p className="text-[10.5px] font-semibold text-slate-500">
+                          {tr('Shughuli za Mwezi Huu (Bila Posho)', 'This Month Activity Value')}
+                        </p>
+                        <p className="mt-0.5 font-mono text-sm font-extrabold text-emerald-800 tabular-nums">
+                          TZS {metrics.monthlyEngagementPayoutTzs.toLocaleString()}
+                        </p>
+                      </div>
+
+                      <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-2.5">
+                        <p className="text-[10.5px] font-semibold text-slate-500">
+                          {metrics.isEligibleForMonetization
+                            ? tr('Malipo Halisi ya Mwezi (+Posho)', 'Unlocked Monthly Payout (+Base)')
+                            : tr('Makadirio Akifuzu (+Posho 250k)', 'Projected If Qualified (+250k Base)')}
+                        </p>
+                        <p className="mt-0.5 font-mono text-sm font-extrabold text-slate-900 tabular-nums">
+                          TZS {metrics.projectedMonthlyWithBaseTzs.toLocaleString()}
+                        </p>
+                      </div>
+
+                      <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-2.5">
+                        <p className="text-[10.5px] font-semibold text-slate-500">
+                          {tr('Thamani ya Jumla (Tangu Kujiunga)', 'Cumulative Lifetime Value')}
+                        </p>
+                        <p className="mt-0.5 font-mono text-sm font-extrabold text-[#1D4E89] tabular-nums">
+                          TZS {metrics.lifetimeEstimatedValueTzs.toLocaleString()}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Monthly activity breakdown */}
+                    <p className="mt-2.5 text-[11px] text-slate-600 tabular-nums">
+                      {tr('Mwezi Huu:', 'This Month:')}{' '}
+                      <strong>{metrics.monthlyPostsCount}</strong> {tr('Post', 'Posts')} ·{' '}
+                      <strong>{metrics.monthlyArticlesCount}</strong> {tr('Makala', 'Articles')} ·{' '}
+                      <strong>{metrics.monthlyVideosCount}</strong> {tr('Video', 'Videos')} ·{' '}
+                      <strong>{metrics.monthlyLikesReceived.toLocaleString()}</strong> {tr('Likes', 'Likes')} ·{' '}
+                      <strong>{metrics.monthlyCommentsReceived.toLocaleString()}</strong> {tr('Maoni', 'Comments')} ·{' '}
+                      <strong>{metrics.monthlySharesReceived.toLocaleString()}</strong> {tr('Shares', 'Shares')}
+                    </p>
+
+                    {isExpanded && (
+                      <div className="mt-3 grid grid-cols-1 gap-2 border-t border-slate-100 pt-3 sm:grid-cols-2 lg:grid-cols-3">
+                        {memberCriteria.map((c) => (
+                          <div
+                            key={c.label}
+                            className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50/60 px-2.5 py-2 text-[11px]"
+                          >
+                            <span className="flex min-w-0 items-center gap-1.5 text-slate-700">
+                              {c.met ? (
+                                <CheckCircle2
+                                  className="h-3.5 w-3.5 shrink-0 text-emerald-600"
+                                  aria-hidden="true"
+                                />
+                              ) : (
+                                <Circle
+                                  className="h-3.5 w-3.5 shrink-0 text-slate-300"
+                                  aria-hidden="true"
+                                />
+                              )}
+                              <span className="truncate">{c.label}</span>
+                            </span>
+                            <span className="shrink-0 font-mono font-bold text-slate-900 tabular-nums">
+                              {c.currentText} / {c.targetText}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       ) : section === 'members' ? (
         <div className="mt-6 space-y-5">
-          {/* Verification Color Legend (7 Tiers) */}
+          {/* Verification Color Legend (13 Tiers) */}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {(
               [
                 'owner',
+                'black',
+                'gold',
+                'silver',
+                'copper',
+                'gray',
+                'white',
                 'government',
                 'organization',
                 'journalist',
@@ -1413,6 +1910,42 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
                           {member.bio && (
                             <p className="text-xs text-slate-600">{member.bio}</p>
                           )}
+
+                          {(() => {
+                            const metrics = memberMetricsMap.get(member.uid);
+                            if (!metrics) return null;
+                            return (
+                              <div className="mt-1.5 flex flex-wrap items-center gap-2 rounded-lg border border-emerald-200/80 bg-emerald-50/50 px-2.5 py-1.5 text-[11px] tabular-nums">
+                                <span className="inline-flex items-center gap-1 font-bold text-emerald-900">
+                                  <Banknote className="h-3.5 w-3.5 text-emerald-700" aria-hidden="true" />
+                                  <span>
+                                    {tr('Mwezi:', 'Month:')}{' '}
+                                    TZS {metrics.monthlyEngagementPayoutTzs.toLocaleString()}
+                                  </span>
+                                </span>
+                                <span aria-hidden="true" className="text-slate-300">|</span>
+                                <span className="font-semibold text-slate-700">
+                                  {tr('Vigezo:', 'Criteria:')}{' '}
+                                  {metrics.metCriteriaCount}/{metrics.totalCriteriaCount} ({metrics.progressPercent}%)
+                                </span>
+                                <span aria-hidden="true" className="text-slate-300">|</span>
+                                <span className="font-semibold text-[#1D4E89]">
+                                  {tr('Jumla:', 'Lifetime:')}{' '}
+                                  TZS {metrics.lifetimeEstimatedValueTzs.toLocaleString()}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setExpandedPayoutUid(member.uid);
+                                    setSection('payouts');
+                                  }}
+                                  className="ml-auto font-bold text-[#0E2640] underline decoration-slate-400 underline-offset-2 hover:text-[#1D4E89]"
+                                >
+                                  {tr('Fuatilia Malipo', 'View Payouts')}
+                                </button>
+                              </div>
+                            );
+                          })()}
 
                           {(isSuspended && (member.suspendedReason || member.suspendedRuleNumber)) && (
                             <div className="space-y-0.5 text-xs font-medium text-red-800">

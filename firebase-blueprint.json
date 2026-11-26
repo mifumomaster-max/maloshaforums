@@ -12,8 +12,8 @@
         "role": { "type": "string", "enum": ["member", "moderator"] },
         "verificationBadge": {
           "type": "string",
-          "enum": ["none", "individual", "organization", "government", "owner", "journalist", "educator", "creator"],
-          "description": "Account verification tier assigned by platform administrators (7 verified colors + none)."
+          "enum": ["none", "individual", "organization", "government", "owner", "journalist", "educator", "creator", "black", "white", "gray", "gold", "silver", "copper"],
+          "description": "Account verification tier assigned by platform administrators."
         },
         "accountStatus": {
           "type": "string",
@@ -87,6 +87,7 @@
         "isPinned": { "type": "boolean" },
         "repliesCount": { "type": "integer" },
         "upvotesCount": { "type": "integer" },
+        "sharesCount": { "type": "integer" },
         "acceptedReplyId": { "type": "string", "maxLength": 128 },
         "company": { "type": "string", "maxLength": 100 },
         "location": { "type": "string", "maxLength": 100 },
@@ -95,6 +96,11 @@
         "applyInfo": { "type": "string", "maxLength": 300 },
         "coverImage": { "type": "string", "maxLength": 500 },
         "images": { "type": "array", "description": "Up to 300 ordered Cloudinary HTTPS image URLs for multi-photo Kijiweni posts." },
+        "bodyFontStyle": {
+          "type": "string",
+          "enum": ["sans", "scholarly", "classic", "editorial", "handwriting", "mono"],
+          "description": "Optional author-selected typography style for Kijiweni post descriptions."
+        },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" },
         "lastActivityAt": { "type": "string", "format": "date-time" }
@@ -256,7 +262,7 @@
         "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "photoURL": { "type": "string", "maxLength": 500 },
         "role": { "type": "string", "enum": ["member", "moderator"] },
-        "verificationBadge": { "type": "string", "enum": ["none", "individual", "organization", "government", "owner", "journalist", "educator", "creator"] },
+        "verificationBadge": { "type": "string", "enum": ["none", "individual", "organization", "government", "owner", "journalist", "educator", "creator", "black", "white", "gray", "gold", "silver", "copper"] },
         "accountStatus": { "type": "string", "enum": ["active", "suspended"] },
         "issuedAt": { "type": "string", "format": "date-time" },
         "expiresAt": { "type": "string", "format": "date-time" },
@@ -298,7 +304,7 @@
         "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "photoURL": { "type": "string", "maxLength": 500 },
-        "verificationBadge": { "type": "string", "enum": ["none", "individual", "organization", "government", "owner", "journalist", "educator", "creator"] },
+        "verificationBadge": { "type": "string", "enum": ["none", "individual", "organization", "government", "owner", "journalist", "educator", "creator", "black", "white", "gray", "gold", "silver", "copper"] },
         "isActive": { "type": "boolean" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
