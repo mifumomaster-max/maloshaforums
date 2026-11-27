@@ -167,20 +167,25 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
           <div className="flex items-center gap-2 font-semibold">
             <EyeOff className="h-4 w-4 shrink-0 text-amber-800" aria-hidden="true" />
             <span>
-              {tr(
-                'Chapisho hili limefungwa kwa sababu ya maudhui mabaya na halionekani kwa watumiaji wengine.',
-                'This post is closed due to harmful content and is hidden from all other users.'
-              )}
+              {isMakala
+                ? tr(
+                    'Makala hii imeondolewa kwa wengine na sasa inaonekana kwako pekee.',
+                    'This article is hidden from others and is visible only to you.'
+                  )
+                : tr(
+                    'Chapisho hili limefungwa kwa sababu ya maudhui mabaya na halionekani kwa watumiaji wengine.',
+                    'This post is closed due to harmful content and is hidden from all other users.'
+                  )}
             </span>
           </div>
-          {isAdmin && onToggleArchive && (
+          {(isAdmin || (isMakala && isTopicAuthor)) && onToggleArchive && (
             <button
               type="button"
               onClick={() => onToggleArchive(topic)}
               className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg bg-[#0E2640] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#163A5F]"
             >
               <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>{tr('Rejesha Hewani', 'Restore Post')}</span>
+              <span>{tr('Rejesha kwa Wote', 'Restore for Everyone')}</span>
             </button>
           )}
         </div>
@@ -344,7 +349,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                         <span>{tr('Shiriki', 'Share')}</span>
                         <span className="font-mono tabular-nums">{topic.sharesCount ?? 0}</span>
                       </button>
-                      {canManageTopic && (!isSuspended || isAdmin) && (
+                      {canManageTopic && (topic.status === 'open' || topic.status === 'private') && (!isSuspended || isAdmin) && (
                         <button
                           type="button"
                           onClick={() => onEditTopic(topic)}
@@ -354,21 +359,53 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                           <span>{tr('Hariri', 'Edit')}</span>
                         </button>
                       )}
-                      {isAdmin && onToggleArchive && (
+                      {isTopicAuthor && onTogglePrivate && topic.status !== 'archived' && (!isSuspended || isAdmin) && (
                         <button
                           type="button"
-                          onClick={() => onToggleArchive(topic)}
-                          className="inline-flex min-h-[32px] items-center gap-1 border border-amber-300 bg-amber-50 px-2.5 py-1 font-semibold text-amber-900 hover:bg-amber-100 sm:min-h-[34px]"
+                          onClick={() => onTogglePrivate(topic)}
+                          title={
+                            isPrivateTopic
+                              ? tr('Rejesha makala ionekane kwa wote', 'Restore article to public view')
+                              : tr('Ondoa kwa wengine — ibaki inaonekana kwako pekee', 'Hide from others — keep visible only to you')
+                          }
+                          className={`inline-flex min-h-[32px] items-center gap-1 border px-2.5 py-1 font-semibold transition-colors sm:min-h-[34px] ${
+                            isPrivateTopic
+                              ? 'border-emerald-300 bg-emerald-50 text-emerald-900 hover:bg-emerald-100'
+                              : 'border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100'
+                          }`}
                         >
-                          {topic.status === 'archived' ? (
+                          {isPrivateTopic ? (
                             <>
-                              <RotateCcw className="h-3 w-3" aria-hidden="true" />
-                              <span>{tr('Rejesha Hewani', 'Restore')}</span>
+                              <Eye className="h-3 w-3" aria-hidden="true" />
+                              <span>{tr('Rejesha kwa Wote', 'Restore Public')}</span>
                             </>
                           ) : (
                             <>
                               <EyeOff className="h-3 w-3" aria-hidden="true" />
-                              <span>{tr('Funga Chapisho', 'Close Post')}</span>
+                              <span>{tr('Ondoa kwa Wengine', 'Hide from Others')}</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+                      {isAdmin && onToggleArchive && !isPrivateTopic && (!isTopicAuthor || topic.status === 'archived') && (
+                        <button
+                          type="button"
+                          onClick={() => onToggleArchive(topic)}
+                          className={`inline-flex min-h-[32px] items-center gap-1 border px-2.5 py-1 font-semibold sm:min-h-[34px] ${
+                            topic.status === 'archived'
+                              ? 'border-emerald-300 bg-emerald-50 text-emerald-900 hover:bg-emerald-100'
+                              : 'border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100'
+                          }`}
+                        >
+                          {topic.status === 'archived' ? (
+                            <>
+                              <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                              <span>{tr('Rejesha kwa Wote', 'Restore Public')}</span>
+                            </>
+                          ) : (
+                            <>
+                              <EyeOff className="h-3 w-3" aria-hidden="true" />
+                              <span>{tr('Ondoa kwa Wengine', 'Hide from Others')}</span>
                             </>
                           )}
                         </button>
@@ -380,7 +417,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                           className="inline-flex min-h-[32px] items-center gap-1 border border-red-200 px-2.5 py-1 font-medium text-red-700 hover:bg-red-50 sm:min-h-[34px]"
                         >
                           <Trash2 className="h-3 w-3" aria-hidden="true" />
-                          <span>{tr('Futa', 'Delete')}</span>
+                          <span>{tr('Futa Kabisa', 'Delete')}</span>
                         </button>
                       )}
                     </div>
@@ -389,7 +426,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                   {topic.coverImage && !coverFailed && (
                     <figure className="-mx-4 my-4 overflow-hidden border-y border-slate-200 bg-slate-100 sm:mx-0 sm:my-6 sm:border">
                       <img
-                        src={optimizeCloudinaryUrl(resolveMakalaCover(topic.coverImage), 1080)}
+                        src={optimizeCloudinaryUrl(resolveMakalaCover(topic.coverImage), 1440, { quality: 'ultra' })}
                         alt={topic.title}
                         loading="lazy"
                         decoding="async"
@@ -709,7 +746,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
             </div>
 
             {topic.title.trim() && (
-              <h1 className="mt-5 font-display text-[22px] font-bold leading-[1.24] tracking-[-0.02em] text-[#0E2640] sm:text-[26px] [text-wrap:balance]">
+              <h1 className="mt-5 w-full font-display text-[22px] font-bold leading-[1.24] tracking-[-0.02em] text-[#0E2640] sm:text-[26px]">
                 {topic.title}
               </h1>
             )}
@@ -725,6 +762,12 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
                 <OrderedPhotoAlbum
                   images={albumImages}
                   altBase={topic.title.trim() || tr('Picha iliyochapishwa Kijiweni', 'Kijiweni photo post')}
+                  enableDoubleTapLike
+                  onDoubleTapLike={() => {
+                    if (!hasVotedTopic) {
+                      onToggleTopicVote(topic);
+                    }
+                  }}
                 />
               </div>
             )}
@@ -1042,7 +1085,7 @@ export const TopicDetail: React.FC<TopicDetailProps> = ({
             {topic.coverImage && !coverFailed && (
               <figure className="-mx-4 mt-4 overflow-hidden border-y border-slate-200 bg-slate-100 sm:mx-0 sm:rounded-lg sm:border">
                 <img
-                  src={optimizeCloudinaryUrl(topic.coverImage, 1080)}
+                  src={optimizeCloudinaryUrl(topic.coverImage, 1440, { quality: 'ultra' })}
                   alt={topic.title}
                   loading="lazy"
                   decoding="async"

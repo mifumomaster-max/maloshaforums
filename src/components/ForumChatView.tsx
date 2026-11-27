@@ -4,8 +4,10 @@ import {
   ArrowLeft,
   Ban,
   BookOpen,
+  Camera,
   Check,
   CheckCheck,
+  ChevronDown,
   Clock,
   Copy,
   Download,
@@ -19,6 +21,7 @@ import {
   Loader2,
   Lock,
   MessageCircle,
+  MoreVertical,
   Paperclip,
   Reply as ReplyIcon,
   Search,
@@ -28,6 +31,8 @@ import {
   Smile,
   Trash2,
   Users,
+  Volume2,
+  VolumeX,
   X,
 } from 'lucide-react';
 import { Timestamp } from 'firebase/firestore';
@@ -40,6 +45,7 @@ import {
 import {
   DEFAULT_MCHART_GROUP_SETTINGS,
   clearAllChatMessages,
+  deleteChatMessageForMe,
   editChatMessage,
   ensureDirectChatThread,
   generateChatMessageId,
@@ -75,6 +81,8 @@ import { MobilePdfNoteReader } from './MobilePdfNoteReader';
 import { LinkedText } from './RichText';
 import { AuthorVerificationBadge } from './VerificationBadge';
 import { VoiceNoteBubble, VoiceRecorderBar, formatAudioSeconds } from './VoiceNoteControls';
+import { WhatsAppMessageRow } from './WhatsAppMessageRow';
+import { isChatSoundMuted, setChatSoundMuted } from '../utils/chatSound';
 import { User } from 'firebase/auth';
 
 export type MchartSubTab = 'messages' | 'direct' | 'status' | 'notes';
@@ -355,6 +363,10 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
   const [pendingCropImage, setPendingCropImage] = useState<File | null>(null);
   const [pendingDeleteMsg, setPendingDeleteMsg] = useState<ChatMessage | null>(null);
   const [deletingMsg, setDeletingMsg] = useState(false);
+  const [selectedMsg, setSelectedMsg] = useState<ChatMessage | null>(null);
+  const [selectionMenuOpen, setSelectionMenuOpen] = useState(false);
+  const [roomMenuOpen, setRoomMenuOpen] = useState(false);
+  const [soundMuted, setSoundMuted] = useState(() => isChatSoundMuted());
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [unseenWhileScrolled, setUnseenWhileScrolled] = useState(0);
@@ -384,6 +396,8 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const attachMenuRef = useRef<HTMLDivElement>(null);
   const emojiRef = useRef<HTMLDivElement>(null);
+  const selectionMenuRef = useRef<HTMLDivElement>(null);
+  const roomMenuRef = useRef<HTMLDivElement>(null);
   const prevNewestIdRef = useRef<string | null>(null);
   const initialScrolledRef = useRef(false);
   const wasNearBottomRef = useRef(true);
@@ -485,11 +499,13 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
     [optimisticMessages]
   );
 
-  // Merge confirmed today's messages + instant optimistic sends, oldest -> newest
+  // Merge confirmed today's messages + instant optimistic sends, oldest -> newest (excluding delete-for-me)
   const chronologicalMessages = useMemo(() => {
     const serverIds = new Set(messages.map((m) => m.id));
     const pending = optimisticMessages.filter((om) => !serverIds.has(om.id));
-    const merged: (ChatMessage & { __localMs?: number })[] = [...messages, ...pending];
+    const merged: (ChatMessage & { __localMs?: number })[] = [...messages, ...pending].filter(
+      (m) => !(user?.uid && Array.isArray(m.deletedForUids) && m.deletedForUids.includes(user.uid))
+    );
 
     const sorted = merged.sort((a, b) => {
       const am = a.createdAt ? a.createdAt.toMillis() : (a.__localMs ?? Date.now());
@@ -504,7 +520,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
         m.senderName.toLowerCase().includes(q) ||
         m.attachmentName.toLowerCase().includes(q)
     );
-  }, [messages, optimisticMessages, searchQuery]);
+  }, [messages, optimisticMessages, searchQuery, user?.uid]);
 
   const activeParticipantCount = useMemo(() => {
     const ids = new Set<string>();
@@ -513,6 +529,14 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
     });
     return ids.size;
   }, [chronologicalMessages]);
+
+  // Auto-grow multiline composer textarea smoothly up to 160px
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [draft, effectiveSubTab]);
 
   // Close popovers on outside click
   useEffect(() => {
@@ -523,6 +547,12 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
       }
       if (emojiRef.current && !emojiRef.current.contains(target)) {
         setEmojiOpen(false);
+      }
+      if (selectionMenuRef.current && !selectionMenuRef.current.contains(target)) {
+        setSelectionMenuOpen(false);
+      }
+      if (roomMenuRef.current && !roomMenuRef.current.contains(target)) {
+        setRoomMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -1023,107 +1053,364 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
         className="relative flex h-full min-h-0 flex-col overflow-hidden border-slate-200 bg-[#EFEAE2] shadow-sm md:rounded-2xl md:border"
       >
         <div className={hasInlineOverlay ? 'hidden' : 'flex h-full min-h-0 flex-col'}>
-        {/* Top Chrome: Hidden when inside 1-on-1 DM room (DM room renders its own partner header); Group Room renders clickable WhatsApp Group Header; Main Hub renders 2 tabs (Chats | Notes) */}
+        {/* Top Chrome: Hidden when inside 1-on-1 DM room; Group Room switches cleanly between WhatsApp white header & Contextual Long-Press Selection Bar with top-right 3 dots */}
         {!insideDmRoom && insideGroupRoom && (
-          <header className="shrink-0 transform-gpu touch-none bg-[#075E54] text-white will-change-transform">
-            <div className="flex items-center justify-between gap-2 px-2.5 py-2 sm:px-4 sm:py-2.5">
-              <div className="flex min-w-0 flex-1 items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    onChangeSubTab('direct');
-                    setSearchOpen(false);
-                    setSearchQuery('');
-                  }}
-                  aria-label={tr('Rudi kwenye orodha ya chats', 'Back to chats list')}
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white hover:bg-white/15"
-                >
-                  <ArrowLeft className="h-5 w-5" />
-                </button>
+          <header
+            className={`relative z-30 shrink-0 ${
+              selectedMsg
+                ? 'bg-[#075E54] text-white'
+                : 'border-b border-slate-200 bg-white text-[#111B21]'
+            }`}
+          >
+            {selectedMsg ? (
+              <div className="flex items-center justify-between gap-1.5 px-2.5 py-2 sm:px-4">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedMsg(null);
+                      setSelectionMenuOpen(false);
+                    }}
+                    aria-label={tr('Ondoa uteuzi', 'Deselect message')}
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white hover:bg-white/15"
+                  >
+                    <ArrowLeft className="h-5 w-5" />
+                  </button>
+                  <span className="text-base font-bold tabular-nums">1</span>
+                </div>
 
-                <button
-                  type="button"
-                  onClick={() => setGroupInfoOpen(true)}
-                  className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-1 py-0.5 text-left transition-colors hover:bg-white/10"
-                >
-                  {groupSettings.groupPhotoUrl ? (
-                    <img
-                      src={groupSettings.groupPhotoUrl}
-                      alt={groupSettings.groupName}
-                      referrerPolicy="no-referrer"
-                      className="h-10 w-10 shrink-0 rounded-full border border-[#25D366]/60 object-cover"
-                    />
-                  ) : (
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/15 ring-1 ring-white/25">
-                      <Users className="h-5 w-5 text-[#25D366]" aria-hidden="true" />
-                    </div>
+                <div className="flex items-center gap-0.5 sm:gap-1">
+                  {!selectedMsg.isDeleted && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setReplyTo(selectedMsg);
+                        setSelectedMsg(null);
+                        setSelectionMenuOpen(false);
+                        inputRef.current?.focus();
+                      }}
+                      title={tr('Jibu', 'Reply')}
+                      aria-label={tr('Jibu ujumbe', 'Reply')}
+                      className="flex h-10 w-10 items-center justify-center rounded-full text-white hover:bg-white/15"
+                    >
+                      <ReplyIcon className="h-5 w-5" />
+                    </button>
                   )}
+                  {!selectedMsg.isDeleted && Boolean(selectedMsg.text.trim() || selectedMsg.attachmentName || selectedMsg.attachmentUrl) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const payloadText =
+                          selectedMsg.text.trim() ||
+                          selectedMsg.attachmentName ||
+                          selectedMsg.attachmentUrl;
+                        setSelectedMsg(null);
+                        setSelectionMenuOpen(false);
+                        if (payloadText) {
+                          void navigator.clipboard?.writeText(payloadText).then(() => {
+                            onToast(tr('Ujumbe umenakiliwa!', 'Message copied!'));
+                          }).catch(() => {});
+                        }
+                      }}
+                      title={tr('Nakili', 'Copy')}
+                      aria-label={tr('Nakili ujumbe', 'Copy')}
+                      className="flex h-10 w-10 items-center justify-center rounded-full text-white hover:bg-white/15"
+                    >
+                      <Copy className="h-4.5 w-4.5" />
+                    </button>
+                  )}
+                  {!selectedMsg.isDeleted && user && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setForwardingMsg(selectedMsg);
+                        setSelectedMsg(null);
+                        setSelectionMenuOpen(false);
+                      }}
+                      title={tr('Sambaza', 'Forward')}
+                      aria-label={tr('Sambaza ujumbe', 'Forward')}
+                      className="flex h-10 w-10 items-center justify-center rounded-full text-white hover:bg-white/15"
+                    >
+                      <Forward className="h-5 w-5" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPendingDeleteMsg(selectedMsg);
+                      setSelectedMsg(null);
+                      setSelectionMenuOpen(false);
+                    }}
+                    title={tr('Futa', 'Delete')}
+                    aria-label={tr('Futa ujumbe', 'Delete')}
+                    className="flex h-10 w-10 items-center justify-center rounded-full text-white hover:bg-white/15"
+                  >
+                    <Trash2 className="h-4.5 w-4.5" />
+                  </button>
 
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                      <h1 className="truncate font-display text-sm font-bold text-white sm:text-base">
-                        {groupSettings.groupName}
-                      </h1>
-                      {groupSettings.isLocked && (
-                        <Lock className="h-3.5 w-3.5 shrink-0 text-amber-300" aria-hidden="true" />
-                      )}
-                      {groupSettings.disappearAfterSeconds > 0 && (
-                        <Clock className="h-3.5 w-3.5 shrink-0 text-[#25D366]" aria-hidden="true" />
-                      )}
-                    </div>
-                    <p className="truncate text-[11px] sm:text-xs">
-                      {typingStatusLabel ? (
-                        <span className="font-bold text-[#25D366]">{typingStatusLabel}</span>
-                      ) : onlineCount > 0 || activeParticipantCount > 0 ? (
-                        <span className="text-emerald-100/90">
-                          {onlineCount > 0 ? tr(`${onlineCount} online`, `${onlineCount} online`) : ''}
-                          {onlineCount > 0 && mergedMemberCandidates.length > 0 ? ' · ' : ''}
-                          {tr(
-                            `Wanachama ${mergedMemberCandidates.length} · Gusa kuona kundi`,
-                            `${mergedMemberCandidates.length} members · Tap for info`
+                  {/* Top-Right Three Dots (⋮) Selection Menu */}
+                  <div className="relative" ref={selectionMenuRef}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectionMenuOpen((prev) => !prev)}
+                      aria-label={tr('Chaguzi za ujumbe', 'Message options')}
+                      aria-expanded={selectionMenuOpen}
+                      className="flex h-10 w-10 items-center justify-center rounded-full text-white hover:bg-white/15"
+                    >
+                      <MoreVertical className="h-5 w-5" />
+                    </button>
+
+                    {selectionMenuOpen && (
+                      <div className="absolute top-11 right-0 z-50 max-h-[70vh] w-56 overflow-y-auto rounded-2xl border border-slate-200 bg-white py-1.5 text-slate-900 shadow-xl">
+                        {!selectedMsg.isDeleted && selectedMsg.senderId === user?.uid && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setInfoMsg(selectedMsg);
+                              setSelectedMsg(null);
+                              setSelectionMenuOpen(false);
+                            }}
+                            className="flex min-h-[42px] w-full items-center gap-3 px-4 text-left text-xs font-semibold hover:bg-slate-50"
+                          >
+                            <Info className="h-4 w-4 text-[#075E54]" />
+                            <span>{tr('Waliosoma / Taarifa', 'Info (Read by)')}</span>
+                          </button>
+                        )}
+                        {!selectedMsg.isDeleted && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setForwardingMsg(selectedMsg);
+                              setSelectedMsg(null);
+                              setSelectionMenuOpen(false);
+                            }}
+                            className="flex min-h-[42px] w-full items-center gap-3 px-4 text-left text-xs font-semibold hover:bg-slate-50"
+                          >
+                            <Forward className="h-4 w-4 text-[#075E54]" />
+                            <span>{tr('Sambaza (Forward)', 'Forward')}</span>
+                          </button>
+                        )}
+                        {!selectedMsg.isDeleted &&
+                          selectedMsg.senderId === user?.uid &&
+                          Boolean(selectedMsg.text.trim()) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingMsg(selectedMsg);
+                                setSelectedMsg(null);
+                                setSelectionMenuOpen(false);
+                              }}
+                              className="flex min-h-[42px] w-full items-center gap-3 px-4 text-left text-xs font-semibold hover:bg-slate-50"
+                            >
+                              <Edit3 className="h-4 w-4 text-[#075E54]" />
+                              <span>{tr('Hariri Ujumbe', 'Edit message')}</span>
+                            </button>
                           )}
-                        </span>
-                      ) : (
-                        <span className="text-emerald-100/90">
-                          {tr('Gusa hapa kuona taarifa & mipangilio ya kundi', 'Tap here for group info & settings')}
-                        </span>
-                      )}
-                    </p>
+                        {!selectedMsg.isDeleted &&
+                          Boolean(
+                            selectedMsg.text.trim() ||
+                              selectedMsg.attachmentName ||
+                              selectedMsg.attachmentUrl
+                          ) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const payloadText =
+                                  selectedMsg.text.trim() ||
+                                  selectedMsg.attachmentName ||
+                                  selectedMsg.attachmentUrl;
+                                setSelectedMsg(null);
+                                setSelectionMenuOpen(false);
+                                if (payloadText) {
+                                  void navigator.clipboard
+                                    ?.writeText(payloadText)
+                                    .then(() =>
+                                      onToast(tr('Ujumbe umenakiliwa!', 'Message copied!'))
+                                    )
+                                    .catch(() => {});
+                                }
+                              }}
+                              className="flex min-h-[42px] w-full items-center gap-3 px-4 text-left text-xs font-semibold hover:bg-slate-50"
+                            >
+                              <Copy className="h-4 w-4 text-[#075E54]" />
+                              <span>{tr('Nakili (Copy)', 'Copy')}</span>
+                            </button>
+                          )}
+                        {!selectedMsg.isDeleted && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReactionPickerForId(selectedMsg.id);
+                              setSelectedMsg(null);
+                              setSelectionMenuOpen(false);
+                            }}
+                            className="flex min-h-[42px] w-full items-center gap-3 px-4 text-left text-xs font-semibold hover:bg-slate-50"
+                          >
+                            <Smile className="h-4 w-4 text-[#075E54]" />
+                            <span>{tr('Weka Emoji', 'Add Reaction')}</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPendingDeleteMsg(selectedMsg);
+                            setSelectedMsg(null);
+                            setSelectionMenuOpen(false);
+                          }}
+                          className="flex min-h-[42px] w-full items-center gap-3 px-4 text-left text-xs font-semibold text-red-600 hover:bg-red-50"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          <span>{tr('Futa Ujumbe', 'Delete')}</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
-                </button>
+                </div>
               </div>
+            ) : (
+              <div className="flex items-center justify-between gap-2 px-2 py-2 sm:px-4">
+                <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onChangeSubTab('direct');
+                      setSearchOpen(false);
+                      setSearchQuery('');
+                    }}
+                    aria-label={tr('Rudi kwenye orodha ya chats', 'Back to chats list')}
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[#111B21] hover:bg-slate-100"
+                  >
+                    <ArrowLeft className="h-5 w-5" />
+                  </button>
 
-              <div className="flex shrink-0 items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => setGroupInfoOpen(true)}
-                  aria-label={tr('Taarifa na mipangilio ya kundi', 'Group info & settings')}
-                  className="flex h-9 w-9 items-center justify-center rounded-full text-emerald-100 hover:bg-white/15 hover:text-white"
-                >
-                  {isAdmin ? <Settings className="h-4 w-4" /> : <Info className="h-4 w-4" />}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSearchOpen((prev) => !prev);
-                    if (searchOpen) setSearchQuery('');
-                  }}
-                  aria-label={tr('Tafuta kwenye Mchart', 'Search Mchart')}
-                  aria-expanded={searchOpen}
-                  className={`flex h-9 w-9 items-center justify-center rounded-full transition-colors ${
-                    searchOpen ? 'bg-white/20 text-white' : 'text-emerald-100 hover:bg-white/15'
-                  }`}
-                >
-                  {searchOpen ? <X className="h-4 w-4" /> : <Search className="h-4 w-4" />}
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => setGroupInfoOpen(true)}
+                    className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-1 py-0.5 text-left transition-colors hover:bg-slate-50"
+                  >
+                    {groupSettings.groupPhotoUrl ? (
+                      <img
+                        src={groupSettings.groupPhotoUrl}
+                        alt={groupSettings.groupName}
+                        referrerPolicy="no-referrer"
+                        className="h-10 w-10 shrink-0 rounded-full object-cover ring-1 ring-slate-200"
+                      />
+                    ) : (
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#075E54] text-white">
+                        <Users className="h-5 w-5 text-[#25D366]" aria-hidden="true" />
+                      </div>
+                    )}
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <h1 className="truncate text-[15px] font-bold text-[#111B21]">
+                          {groupSettings.groupName}
+                        </h1>
+                        {groupSettings.isLocked && (
+                          <Lock className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden="true" />
+                        )}
+                      </div>
+                      <p className="truncate text-[12px] text-[#667781]">
+                        {typingStatusLabel ? (
+                          <span className="font-semibold text-[#1DAB61]">{typingStatusLabel}</span>
+                        ) : onlineCount > 0 || activeParticipantCount > 0 ? (
+                          <span>
+                            {onlineCount > 0 ? `${onlineCount} online · ` : ''}
+                            {tr(
+                              `Wanachama ${mergedMemberCandidates.length}`,
+                              `${mergedMemberCandidates.length} members`
+                            )}
+                          </span>
+                        ) : (
+                          <span>{tr('Gusa kuona taarifa za kundi', 'Tap here for group info')}</span>
+                        )}
+                      </p>
+                    </div>
+                  </button>
+                </div>
+
+                <div className="flex shrink-0 items-center gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchOpen((prev) => !prev);
+                      if (searchOpen) setSearchQuery('');
+                    }}
+                    aria-label={tr('Tafuta kwenye Mchart', 'Search Mchart')}
+                    aria-expanded={searchOpen}
+                    className={`flex h-10 w-10 items-center justify-center rounded-full transition-colors ${
+                      searchOpen ? 'bg-slate-100 text-[#075E54]' : 'text-[#54656F] hover:bg-slate-100'
+                    }`}
+                  >
+                    {searchOpen ? <X className="h-4.5 w-4.5" /> : <Search className="h-4.5 w-4.5" />}
+                  </button>
+
+                  <div className="relative" ref={roomMenuRef}>
+                    <button
+                      type="button"
+                      onClick={() => setRoomMenuOpen((prev) => !prev)}
+                      aria-label={tr('Menyu ya kundi', 'Group menu')}
+                      aria-expanded={roomMenuOpen}
+                      className="flex h-10 w-10 items-center justify-center rounded-full text-[#54656F] hover:bg-slate-100"
+                    >
+                      <MoreVertical className="h-5 w-5" />
+                    </button>
+
+                    {roomMenuOpen && (
+                      <div className="absolute top-11 right-0 z-50 max-h-[70vh] w-56 overflow-y-auto rounded-2xl border border-slate-200 bg-white py-1.5 text-slate-900 shadow-xl">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRoomMenuOpen(false);
+                            setGroupInfoOpen(true);
+                          }}
+                          className="flex min-h-[42px] w-full items-center gap-3 px-4 text-left text-xs font-semibold hover:bg-slate-50"
+                        >
+                          {isAdmin ? (
+                            <Settings className="h-4 w-4 text-[#075E54]" />
+                          ) : (
+                            <Info className="h-4 w-4 text-[#075E54]" />
+                          )}
+                          <span>{tr('Taarifa & Mipangilio ya Kundi', 'Group Info & Settings')}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextMuted = !soundMuted;
+                            setChatSoundMuted(nextMuted);
+                            setSoundMuted(nextMuted);
+                            setRoomMenuOpen(false);
+                            onToast(
+                              nextMuted
+                                ? tr('Sauti ya Mchart imezimwa.', 'Mchart sound muted.')
+                                : tr('Sauti ya Mchart imewashwa!', 'Mchart notification sound on!')
+                            );
+                          }}
+                          className="flex min-h-[42px] w-full items-center gap-3 px-4 text-left text-xs font-semibold hover:bg-slate-50"
+                        >
+                          {soundMuted ? (
+                            <Volume2 className="h-4 w-4 text-[#1DAB61]" />
+                          ) : (
+                            <VolumeX className="h-4 w-4 text-slate-600" />
+                          )}
+                          <span>
+                            {soundMuted
+                              ? tr('Washa Sauti ya Ujumbe', 'Unmute Notification Sound')
+                              : tr('Zima Sauti ya Ujumbe', 'Mute Notification Sound')}
+                          </span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
 
-            {searchOpen && (
-              <div className="border-t border-white/10 bg-[#064E46] px-3.5 py-2 sm:px-5">
+            {searchOpen && !selectedMsg && (
+              <div className="border-t border-slate-100 bg-slate-50 px-3.5 py-2 sm:px-5">
                 <div className="relative">
                   <Search
-                    className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-emerald-200"
+                    className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400"
                     aria-hidden="true"
                   />
                   <input
@@ -1134,7 +1421,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                       'Tafuta ujumbe, jina au faili...',
                       'Search message, name or file...'
                     )}
-                    className="min-h-[38px] w-full rounded-xl bg-white/15 py-1.5 pr-3 pl-9 text-xs text-white placeholder-emerald-100/70 outline-none focus:bg-white/20 sm:text-sm"
+                    className="min-h-[38px] w-full rounded-xl border border-slate-200 bg-white py-1.5 pr-3 pl-9 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-[#075E54] sm:text-sm"
                   />
                 </div>
               </div>
@@ -1143,7 +1430,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
         )}
 
         {!insideDmRoom && !insideGroupRoom && (
-          <header className="shrink-0 transform-gpu touch-none bg-[#075E54] text-white will-change-transform">
+          <header className="relative z-30 shrink-0 touch-none bg-[#075E54] text-white">
             <div className="flex items-center justify-between gap-2 px-3 py-2 sm:px-5 sm:py-2.5">
               <div className="flex min-w-0 items-center gap-2.5">
                 {onBackToForum && (
@@ -1368,34 +1655,29 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
         ) : (
           <>
             {/* Scrollable WhatsApp Chat Canvas with subtle "malosha forums" watermark */}
-            <div className="bg-mchart-watermark relative min-h-0 flex-1 overflow-hidden">
+            <div className="bg-mchart-watermark relative z-0 min-h-0 flex-1 overflow-hidden">
               <div
                 ref={scrollBoxRef}
                 onScroll={handleTimelineScroll}
-                className="h-full touch-pan-y overflow-y-auto overscroll-contain px-2.5 py-2.5 sm:px-5 sm:py-4"
+                className="h-full touch-pan-y overflow-y-auto overscroll-contain px-2.5 py-2 sm:px-5 sm:py-3"
               >
-            {/* Dynamic Disappearing Messages & Invite Link Banner */}
-            <div className="mx-auto mb-3 max-w-md rounded-xl bg-[#FFF3C4]/95 px-3.5 py-2.5 text-center text-[11px] leading-relaxed text-slate-700 shadow-xs">
-              <p className="font-medium">
-                {groupSettings.disappearAfterSeconds > 0
-                  ? tr(
-                      `Ujumbe unaofutika umewashwa: Ujumbe hupotea kiotomatiki baada ya ${formatDisappearLabel(groupSettings.disappearAfterSeconds, tr)}.`,
-                      `Disappearing messages active: Messages vanish automatically after ${formatDisappearLabel(groupSettings.disappearAfterSeconds, tr)}.`
-                    )
-                  : tr(
-                      'Karibu kwenye Kundi Kuu · Ujumbe wote, sauti, picha na nyaraka zinaonekana kwa kasi na usalama.',
-                      'Welcome to Community Group · Messages, voice notes, photos, and documents sync live.'
+            {groupSettings.disappearAfterSeconds > 0 && (
+              <div className="mb-2.5 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => setGroupInfoOpen(true)}
+                  className="inline-flex items-center gap-1 rounded-full bg-white/90 px-3 py-1 text-[11px] font-medium text-[#54656F] shadow-xs"
+                >
+                  <Clock className="h-3 w-3 text-[#1DAB61]" aria-hidden="true" />
+                  <span>
+                    {tr(
+                      `Ujumbe unaofutika: ${formatDisappearLabel(groupSettings.disappearAfterSeconds, tr)}`,
+                      `Disappearing: ${formatDisappearLabel(groupSettings.disappearAfterSeconds, tr)}`
                     )}
-              </p>
-              <button
-                type="button"
-                onClick={() => setGroupInfoOpen(true)}
-                className="mt-1.5 inline-flex items-center gap-1 rounded-lg bg-[#075E54] px-2.5 py-1 text-[11px] font-bold text-white transition-colors hover:bg-[#064E46]"
-              >
-                <Share2 className="h-3 w-3 text-[#25D366]" aria-hidden="true" />
-                <span>{tr('Link ya Kundi & Mipangilio', 'Group Invite & Info')}</span>
-              </button>
-            </div>
+                  </span>
+                </button>
+              </div>
+            )}
 
             {loading ? (
               <div className="space-y-3 py-6">
@@ -1440,17 +1722,33 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                     <React.Fragment key={msg.id}>
                       {showDateDivider && (
                         <div className="my-3 flex justify-center">
-                          <span className="rounded-lg bg-white/95 px-3 py-1 text-[11px] font-semibold text-slate-600 shadow-xs">
+                          <span className="rounded-lg bg-white/95 px-3 py-1 text-[11px] font-semibold text-[#54656F] shadow-xs">
                             {formatDateDivider(msg.createdAt)}
                           </span>
                         </div>
                       )}
 
-                      <div
+                      <WhatsAppMessageRow
                         id={`chat-msg-${msg.id}`}
-                        className={`group flex items-end gap-2 ${
-                          isOwn ? 'justify-end' : 'justify-start'
-                        } ${isSameSenderAsPrev ? 'mt-0.5' : 'mt-2.5'}`}
+                        isOwn={isOwn}
+                        isSelected={selectedMsg?.id === msg.id}
+                        selectionActive={Boolean(selectedMsg)}
+                        disableSwipe={msg.isDeleted || !user}
+                        onSwipeReply={() => {
+                          if (!user) {
+                            onSignIn('chat');
+                            return;
+                          }
+                          setReplyTo(msg);
+                          setSelectedMsg(null);
+                          inputRef.current?.focus();
+                        }}
+                        onSelect={() => {
+                          setSelectedMsg((curr) => (curr?.id === msg.id ? null : msg));
+                          setSelectionMenuOpen(false);
+                          setRoomMenuOpen(false);
+                        }}
+                        className={isSameSenderAsPrev ? 'mt-0.5' : 'mt-2'}
                       >
                         {/* Sender Avatar for incoming messages */}
                         {!isOwn && (
@@ -1468,18 +1766,35 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                         )}
 
                         <div
-                          className={`relative max-w-[84%] rounded-2xl px-3 py-2 shadow-xs transition-all sm:max-w-[70%] ${
+                          className={`relative max-w-[84%] rounded-2xl px-3 py-1.5 shadow-xs transition-all sm:max-w-[70%] ${
                             isOwn
-                              ? `bg-[#D9FDD3] text-slate-900 ${
+                              ? `bg-[#D9FDD3] text-[#111B21] ${
                                   isSameSenderAsPrev ? '' : 'rounded-tr-xs'
                                 }`
-                              : `bg-white text-slate-900 ${
+                              : `bg-white text-[#111B21] ${
                                   isSameSenderAsPrev ? '' : 'rounded-tl-xs'
                                 }`
                           } ${
                             highlightedId === msg.id ? 'ring-2 ring-[#25D366] ring-offset-1' : ''
                           }`}
                         >
+                          {/* Subtle Desktop Hover Chevron Trigger */}
+                          {user && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedMsg(msg);
+                                setSelectionMenuOpen(true);
+                              }}
+                              aria-label={tr('Chaguzi za ujumbe', 'Message actions')}
+                              className={`absolute top-1 right-1 z-10 hidden h-6 w-6 items-center justify-center rounded-full shadow-xs sm:group-hover:flex ${
+                                isOwn ? 'bg-[#D9FDD3]/95 text-[#54656F]' : 'bg-white/95 text-[#54656F]'
+                              }`}
+                            >
+                              <ChevronDown className="h-3.5 w-3.5" />
+                            </button>
+                          )}
                           {/* Sender Name + Verification Badge + Online + Quick 1-on-1 DM */}
                           {!isOwn && !isSameSenderAsPrev && (
                             <div className="mb-1 flex flex-wrap items-center gap-1.5">
@@ -1739,173 +2054,44 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                             </>
                           )}
 
-                          {/* Bottom Row: Reply/React/Forward/Edit/Info/Delete Actions + Timestamp & Ticks */}
-                          <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
-                            {!msg.isDeleted ? (
-                              <div className="flex flex-wrap items-center gap-1 opacity-90 sm:opacity-75 sm:group-hover:opacity-100">
-                                {user && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      setReactionPickerForId((prevId) =>
-                                        prevId === msg.id ? null : msg.id
-                                      )
-                                    }
-                                    aria-label={tr('Weka emoji', 'React')}
-                                    className="inline-flex items-center rounded px-1 py-0.5 text-slate-600 transition-colors hover:bg-black/5 hover:text-[#075E54]"
-                                  >
-                                    <Smile className="h-3 w-3" aria-hidden="true" />
-                                  </button>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const payloadText =
-                                      msg.text.trim() ||
-                                      msg.attachmentName ||
-                                      msg.attachmentUrl;
-                                    if (!payloadText) return;
-                                    const doCopy = async () => {
-                                      try {
-                                        if (navigator.clipboard?.writeText) {
-                                          await navigator.clipboard.writeText(payloadText);
-                                          return true;
-                                        }
-                                      } catch {
-                                        // fallback
-                                      }
-                                      try {
-                                        const ta = document.createElement('textarea');
-                                        ta.value = payloadText;
-                                        ta.setAttribute('readonly', '');
-                                        ta.style.position = 'fixed';
-                                        ta.style.opacity = '0';
-                                        document.body.appendChild(ta);
-                                        ta.select();
-                                        const ok = document.execCommand('copy');
-                                        document.body.removeChild(ta);
-                                        return ok;
-                                      } catch {
-                                        return false;
-                                      }
-                                    };
-                                    void doCopy().then((ok) => {
-                                      if (ok) {
-                                        onToast(tr('Ujumbe umenakiliwa!', 'Message copied!'));
-                                      }
-                                    });
-                                  }}
-                                  title={tr('Nakili ujumbe huu', 'Copy this message')}
-                                  aria-label={tr('Nakili ujumbe', 'Copy')}
-                                  className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-black/5 hover:text-[#075E54]"
-                                >
-                                  <Copy className="h-3 w-3" aria-hidden="true" />
-                                  <span className="hidden sm:inline">{tr('Nakili', 'Copy')}</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (!user) {
-                                      onSignIn('chat');
-                                      return;
-                                    }
-                                    setReplyTo(msg);
-                                    inputRef.current?.focus();
-                                  }}
-                                  title={tr('Jibu ujumbe huu', 'Reply to this message')}
-                                  aria-label={tr('Jibu ujumbe', 'Reply')}
-                                  className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-black/5 hover:text-[#075E54]"
-                                >
-                                  <ReplyIcon className="h-3 w-3" aria-hidden="true" />
-                                  <span>{tr('Jibu', 'Reply')}</span>
-                                </button>
-                                {user && (
-                                  <button
-                                    type="button"
-                                    onClick={() => setForwardingMsg(msg)}
-                                    title={tr('Sambaza ujumbe', 'Forward message')}
-                                    aria-label={tr('Sambaza ujumbe', 'Forward message')}
-                                    className="inline-flex items-center rounded px-1 py-0.5 text-slate-600 transition-colors hover:bg-black/5 hover:text-[#075E54]"
-                                  >
-                                    <Forward className="h-3 w-3" aria-hidden="true" />
-                                  </button>
-                                )}
-                                {isOwn && Boolean(msg.text.trim()) && (
-                                  <button
-                                    type="button"
-                                    onClick={() => setEditingMsg(msg)}
-                                    title={tr('Hariri ujumbe', 'Edit message')}
-                                    aria-label={tr('Hariri ujumbe', 'Edit message')}
-                                    className="inline-flex items-center rounded px-1 py-0.5 text-slate-600 transition-colors hover:bg-black/5 hover:text-[#075E54]"
-                                  >
-                                    <Edit3 className="h-3 w-3" aria-hidden="true" />
-                                  </button>
-                                )}
-                                {isOwn && (
-                                  <button
-                                    type="button"
-                                    onClick={() => setInfoMsg(msg)}
-                                    title={tr('Maelezo ya ujumbe', 'Message info')}
-                                    aria-label={tr('Maelezo ya ujumbe', 'Message info')}
-                                    className="inline-flex items-center rounded px-1 py-0.5 text-slate-600 transition-colors hover:bg-black/5 hover:text-[#075E54]"
-                                  >
-                                    <Info className="h-3 w-3" aria-hidden="true" />
-                                  </button>
-                                )}
-                                {canDelete && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleConfirmDelete(msg)}
-                                    title={tr('Futa ujumbe', 'Delete message')}
-                                    aria-label={tr('Futa ujumbe', 'Delete')}
-                                    className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[11px] font-semibold text-red-600 transition-colors hover:bg-red-50"
-                                  >
-                                    <Trash2 className="h-3 w-3" aria-hidden="true" />
-                                  </button>
-                                )}
-                              </div>
-                            ) : (
-                              <span />
+                          {/* Bottom Timestamp + Ticks (WhatsApp style; actions are via Long-Press -> Top Bar / 3 Dots) */}
+                          <div className="mt-1 flex items-center justify-end gap-1 text-[10px] text-[#667781] tabular-nums">
+                            {msg.isEdited && !msg.isDeleted && (
+                              <span className="italic text-[#667781]">
+                                {tr('imehaririwa', 'edited')}
+                              </span>
                             )}
-
-                            <div className="ml-auto flex shrink-0 items-center gap-1 text-[10px] text-slate-500 tabular-nums">
-                              {msg.isEdited && !msg.isDeleted && (
-                                <span className="italic text-slate-400">
-                                  {tr('imehaririwa', 'edited')}
-                                </span>
-                              )}
-                              <span>{formatClockTime(msg.createdAt)}</span>
-                              {isOwn && !msg.isDeleted && (() => {
-                                const msgMs = msg.createdAt ? msg.createdAt.toMillis() : 0;
-                                if (pendingIdSet.has(msg.id) || msgMs === 0) {
-                                  return (
-                                    <Check
-                                      aria-label={tr('Inatuma', 'Sending')}
-                                      className="h-3.5 w-3.5 text-slate-400"
-                                    />
-                                  );
-                                }
-                                const readBySomeone = groupReadCursors.some(
-                                  (r) =>
-                                    r.uid !== user?.uid &&
-                                    r.lastReadAt &&
-                                    r.lastReadAt.toMillis() >= msgMs
-                                );
+                            <span>{formatClockTime(msg.createdAt)}</span>
+                            {isOwn && !msg.isDeleted && (() => {
+                              const msgMs = msg.createdAt ? msg.createdAt.toMillis() : 0;
+                              if (pendingIdSet.has(msg.id) || msgMs === 0) {
                                 return (
-                                  <CheckCheck
-                                    aria-label={
-                                      readBySomeone ? tr('Imesomwa', 'Read') : tr('Imefika', 'Delivered')
-                                    }
-                                    className={`h-3.5 w-3.5 ${
-                                      readBySomeone ? 'text-[#0284C7]' : 'text-slate-400'
-                                    }`}
+                                  <Check
+                                    aria-label={tr('Inatuma', 'Sending')}
+                                    className="h-3.5 w-3.5 text-[#8696A0]"
                                   />
                                 );
-                              })()}
-                            </div>
+                              }
+                              const readBySomeone = groupReadCursors.some(
+                                (r) =>
+                                  r.uid !== user?.uid &&
+                                  r.lastReadAt &&
+                                  r.lastReadAt.toMillis() >= msgMs
+                              );
+                              return (
+                                <CheckCheck
+                                  aria-label={
+                                    readBySomeone ? tr('Imesomwa', 'Read') : tr('Imefika', 'Delivered')
+                                  }
+                                  className={`h-3.5 w-3.5 ${
+                                    readBySomeone ? 'text-[#53BDEB]' : 'text-[#8696A0]'
+                                  }`}
+                                />
+                              );
+                            })()}
                           </div>
                         </div>
-                      </div>
+                      </WhatsAppMessageRow>
                     </React.Fragment>
                   );
                 })}
@@ -1952,11 +2138,11 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
           )}
         </div>
 
-        {/* WhatsApp Composer Footer */}
-        <footer className="shrink-0 border-t border-slate-200/80 bg-[#F0F2F5] px-2.5 py-2 sm:px-4 sm:py-2.5">
+        {/* WhatsApp Pill Composer Footer */}
+        <footer className="bg-mchart-watermark shrink-0 px-2 py-2 sm:px-4 sm:py-2.5">
           {/* Active Reply Preview */}
           {replyTo && (
-            <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border-l-4 border-[#00A884] bg-white px-3 py-2 shadow-xs">
+            <div className="mb-2 flex items-center justify-between gap-2 rounded-2xl border-l-4 border-[#1DAB61] bg-white px-3 py-2 shadow-xs">
               <div className="min-w-0 flex-1">
                 <p className="truncate text-xs font-bold text-[#075E54]">
                   {tr('Unajibu:', 'Replying to')} {replyTo.senderName}
@@ -1980,7 +2166,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
 
           {/* Pending Upload or Preview */}
           {(uploading || pendingAttachment) && (
-            <div className="mb-2 flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-xs">
+            <div className="mb-2 flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-xs">
               {uploading ? (
                 <div className="flex items-center gap-2.5 text-xs font-semibold text-[#075E54]">
                   <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
@@ -2024,7 +2210,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
           )}
 
           {!user ? (
-            <div className="flex flex-col items-center justify-between gap-2 rounded-xl bg-white px-3.5 py-2.5 sm:flex-row">
+            <div className="flex flex-col items-center justify-between gap-2 rounded-2xl bg-white px-3.5 py-2.5 shadow-xs sm:flex-row">
               <p className="text-center text-xs font-medium text-slate-700 sm:text-left">
                 {tr(
                   'Ingia au jisajili ili kutuma ujumbe, picha, na nyaraka kwenye Mchart.',
@@ -2040,7 +2226,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
               </button>
             </div>
           ) : isSuspended && !isAdmin ? (
-            <div className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs font-semibold text-red-800">
+            <div className="flex items-center gap-2 rounded-2xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs font-semibold text-red-800">
               <Lock className="h-4 w-4 shrink-0" aria-hidden="true" />
               <span>
                 {tr(
@@ -2050,7 +2236,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
               </span>
             </div>
           ) : groupSettings.isLocked && !isAdmin ? (
-            <div className="flex items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs font-semibold text-amber-900">
+            <div className="flex items-center justify-center gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs font-semibold text-amber-900">
               <Lock className="h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
               <span>
                 {tr(
@@ -2060,7 +2246,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
               </span>
             </div>
           ) : (
-            <form onSubmit={(e) => void handleSend(e)} className="relative flex items-end gap-1.5 sm:gap-2">
+            <form onSubmit={(e) => void handleSend(e)} className="relative flex items-end gap-2">
               {/* Hidden File Inputs */}
               <input
                 ref={imageInputRef}
@@ -2086,7 +2272,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
               />
 
               {!recordingVoice && (
-                <>
+                <div className="relative flex min-h-[46px] flex-1 items-end rounded-[24px] bg-white px-2 py-1 shadow-xs ring-1 ring-black/5">
                   {/* Emoji Button & Popover */}
                   <div className="relative" ref={emojiRef}>
                     <button
@@ -2096,13 +2282,13 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                         setAttachMenuOpen(false);
                       }}
                       aria-label={tr('Chagua emoji', 'Pick emoji')}
-                      className="flex h-11 w-10 shrink-0 items-center justify-center rounded-full text-slate-600 transition-colors hover:bg-slate-200/70 hover:text-[#075E54]"
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#54656F] transition-colors hover:bg-slate-100"
                     >
                       <Smile className="h-5 w-5" aria-hidden="true" />
                     </button>
 
                     {emojiOpen && (
-                      <div className="absolute bottom-13 left-0 z-30 grid w-56 grid-cols-4 gap-1 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                      <div className="absolute bottom-12 left-0 z-30 grid w-56 grid-cols-4 gap-1 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
                         {QUICK_EMOJIS.map((emoji) => (
                           <button
                             key={emoji}
@@ -2120,8 +2306,43 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                     )}
                   </div>
 
-                  {/* Attach Button & WhatsApp-Style Attachment Popover */}
-                  <div className="relative" ref={attachMenuRef}>
+                  {/* Auto-growing Message Text Input */}
+                  <textarea
+                    ref={inputRef}
+                    rows={1}
+                    maxLength={2000}
+                    value={draft}
+                    onFocus={handleComposerFocus}
+                    onChange={(e) => {
+                      const nextVal = e.target.value;
+                      setDraft(nextVal);
+                      wasNearBottomRef.current = true;
+                      if (typingIdleTimerRef.current !== null) {
+                        window.clearTimeout(typingIdleTimerRef.current);
+                        typingIdleTimerRef.current = null;
+                      }
+                      if (nextVal.trim().length > 0) {
+                        setMchartTyping(true, replyTo?.senderName || '', 'group');
+                        typingIdleTimerRef.current = window.setTimeout(() => {
+                          setMchartTyping(false, '', 'group');
+                          typingIdleTimerRef.current = null;
+                        }, 4200);
+                      } else {
+                        setMchartTyping(false, '', 'group');
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey && window.innerWidth >= 768) {
+                        e.preventDefault();
+                        void handleSend();
+                      }
+                    }}
+                    placeholder={tr('Andika ujumbe...', 'Message')}
+                    className="max-h-[160px] flex-1 resize-none overflow-y-auto bg-transparent px-1.5 py-2 text-[15px] leading-snug text-[#111B21] placeholder-[#667781] outline-none sm:text-sm"
+                  />
+
+                  {/* Attach Paperclip Button & Popover */}
+                  <div className="relative flex items-center" ref={attachMenuRef}>
                     <button
                       type="button"
                       disabled={uploading}
@@ -2130,13 +2351,25 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                         setEmojiOpen(false);
                       }}
                       aria-label={tr('Ambatanisha picha au nyaraka', 'Attach photo or document')}
-                      className="flex h-11 w-10 shrink-0 items-center justify-center rounded-full text-slate-600 transition-colors hover:bg-slate-200/70 hover:text-[#075E54] disabled:opacity-50"
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#54656F] transition-colors hover:bg-slate-100 disabled:opacity-50"
                     >
-                      <Paperclip className="h-5 w-5" aria-hidden="true" />
+                      <Paperclip className="h-5 w-5 -rotate-45" aria-hidden="true" />
                     </button>
 
+                    {!draft.trim() && (
+                      <button
+                        type="button"
+                        disabled={uploading}
+                        onClick={() => imageInputRef.current?.click()}
+                        aria-label={tr('Tuma picha', 'Send photo')}
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#54656F] transition-colors hover:bg-slate-100 disabled:opacity-50"
+                      >
+                        <Camera className="h-5 w-5" aria-hidden="true" />
+                      </button>
+                    )}
+
                     {attachMenuOpen && (
-                      <div className="absolute bottom-13 left-0 z-30 w-52 overflow-hidden rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl">
+                      <div className="absolute right-0 bottom-12 z-30 w-56 overflow-hidden rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl">
                         <button
                           type="button"
                           onClick={() => imageInputRef.current?.click()}
@@ -2168,47 +2401,10 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                       </div>
                     )}
                   </div>
-
-                  {/* Message Text Input */}
-                  <div className="flex-1 rounded-2xl bg-white px-3.5 py-2 shadow-xs ring-1 ring-slate-200/80 focus-within:ring-[#075E54]">
-                    <textarea
-                      ref={inputRef}
-                      rows={1}
-                      maxLength={2000}
-                      value={draft}
-                      onFocus={handleComposerFocus}
-                      onChange={(e) => {
-                        const nextVal = e.target.value;
-                        setDraft(nextVal);
-                        wasNearBottomRef.current = true;
-                        if (typingIdleTimerRef.current !== null) {
-                          window.clearTimeout(typingIdleTimerRef.current);
-                          typingIdleTimerRef.current = null;
-                        }
-                        if (nextVal.trim().length > 0) {
-                          setMchartTyping(true, replyTo?.senderName || '', 'group');
-                          typingIdleTimerRef.current = window.setTimeout(() => {
-                            setMchartTyping(false, '', 'group');
-                            typingIdleTimerRef.current = null;
-                          }, 4200);
-                        } else {
-                          setMchartTyping(false, '', 'group');
-                        }
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey && window.innerWidth >= 768) {
-                          e.preventDefault();
-                          void handleSend();
-                        }
-                      }}
-                      placeholder={tr('Andika ujumbe hapa...', 'Type a message...')}
-                      className="max-h-24 w-full resize-none bg-transparent text-[15px] leading-snug text-slate-900 placeholder-slate-400 outline-none sm:text-sm"
-                    />
-                  </div>
-                </>
+                </div>
               )}
 
-              {/* Mic Voice Note or Green Send Button */}
+              {/* Mic Voice Note or Circular Green Send Button */}
               {!draft.trim() && !pendingAttachment && !uploading ? (
                 <VoiceRecorderBar
                   disabled={!canSendToGroup}
@@ -2221,7 +2417,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                   type="submit"
                   disabled={uploading || (!draft.trim() && !pendingAttachment)}
                   aria-label={tr('Tuma ujumbe', 'Send message')}
-                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#00A884] text-white shadow-sm transition-colors hover:bg-[#008F6F] disabled:cursor-not-allowed disabled:bg-slate-300"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#1DAB61] text-white shadow-sm transition-colors hover:bg-[#179453] disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                   <Send className="h-5 w-5 translate-x-[1px]" aria-hidden="true" />
                 </button>
@@ -2229,48 +2425,86 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
             </form>
           )}
           {pendingDeleteMsg && (
-            <div className="mt-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 shadow-xs">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-bold text-red-900">
-                    {tr('Futa ujumbe huu kwa wote?', 'Delete this message for everyone?')}
-                  </p>
-                  <p className="truncate text-[11px] text-red-700">
-                    {pendingDeleteMsg.text.trim() ||
-                      pendingDeleteMsg.attachmentName ||
-                      tr('Kiambatisho', 'Attachment')}
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
+            <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 p-3 sm:items-center">
+              <div className="w-full max-w-sm overflow-hidden rounded-2xl bg-white p-4 shadow-2xl">
+                <h4 className="text-sm font-bold text-slate-900">
+                  {tr('Futa ujumbe huu?', 'Delete this message?')}
+                </h4>
+                <p className="mt-1 line-clamp-2 text-xs text-slate-500">
+                  {pendingDeleteMsg.text.trim() ||
+                    pendingDeleteMsg.attachmentName ||
+                    tr('Kiambatisho', 'Attachment')}
+                </p>
+
+                <div className="mt-4 flex flex-col gap-2">
+                  {!pendingDeleteMsg.isDeleted &&
+                    (pendingDeleteMsg.senderId === user?.uid || isAdmin) && (
+                      <button
+                        type="button"
+                        disabled={deletingMsg}
+                        onClick={async () => {
+                          setDeletingMsg(true);
+                          try {
+                            await softDeleteChatMessage(pendingDeleteMsg.id);
+                            setPendingDeleteMsg(null);
+                            onToast(tr('Ujumbe umefutwa kwa wote.', 'Deleted for everyone.'));
+                          } catch (err) {
+                            onToast(
+                              err instanceof Error
+                                ? err.message
+                                : tr('Imeshindwa kufuta.', 'Failed to delete.'),
+                              'error'
+                            );
+                          } finally {
+                            setDeletingMsg(false);
+                          }
+                        }}
+                        className="flex min-h-[42px] w-full items-center justify-center rounded-xl bg-red-600 px-4 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-60"
+                      >
+                        {deletingMsg ? '...' : tr('Futa kwa wote', 'Delete for everyone')}
+                      </button>
+                    )}
+
+                  {user && (
+                    <button
+                      type="button"
+                      disabled={deletingMsg}
+                      onClick={async () => {
+                        setDeletingMsg(true);
+                        try {
+                          if (pendingIdSet.has(pendingDeleteMsg.id)) {
+                            setOptimisticMessages((prev) =>
+                              prev.filter((m) => m.id !== pendingDeleteMsg.id)
+                            );
+                          } else {
+                            await deleteChatMessageForMe(pendingDeleteMsg.id, user.uid);
+                          }
+                          setPendingDeleteMsg(null);
+                          onToast(tr('Ujumbe umefutwa kwako tu.', 'Deleted for you.'));
+                        } catch (err) {
+                          onToast(
+                            err instanceof Error
+                              ? err.message
+                              : tr('Imeshindwa kufuta.', 'Failed to delete.'),
+                            'error'
+                          );
+                        } finally {
+                          setDeletingMsg(false);
+                        }
+                      }}
+                      className="flex min-h-[42px] w-full items-center justify-center rounded-xl border border-red-200 bg-red-50 px-4 text-xs font-bold text-red-700 hover:bg-red-100 disabled:opacity-60"
+                    >
+                      {deletingMsg ? '...' : tr('Futa kwangu tu', 'Delete for me')}
+                    </button>
+                  )}
+
                   <button
                     type="button"
                     disabled={deletingMsg}
                     onClick={() => setPendingDeleteMsg(null)}
-                    className="min-h-[34px] rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                    className="flex min-h-[40px] w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                   >
                     {tr('Ghairi', 'Cancel')}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={deletingMsg}
-                    onClick={async () => {
-                      setDeletingMsg(true);
-                      try {
-                        await softDeleteChatMessage(pendingDeleteMsg.id);
-                        setPendingDeleteMsg(null);
-                        onToast(tr('Ujumbe umefutwa.', 'Message deleted.'));
-                      } catch (err) {
-                        onToast(
-                          err instanceof Error ? err.message : tr('Imeshindwa kufuta.', 'Failed to delete.'),
-                          'error'
-                        );
-                      } finally {
-                        setDeletingMsg(false);
-                      }
-                    }}
-                    className="min-h-[34px] rounded-xl bg-red-600 px-3 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-60"
-                  >
-                    {deletingMsg ? '...' : tr('Futa Kwa Wote', 'Delete')}
                   </button>
                 </div>
               </div>
@@ -2393,9 +2627,18 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                       activePdfDoc.url,
                       activePdfDoc.name,
                       'application/pdf'
-                    ).then(() =>
-                      onToast(tr('PDF imepakuliwa kwenye simu yako!', 'PDF saved to your device!'))
-                    );
+                    )
+                      .then(() =>
+                        onToast(tr('PDF imepakuliwa kwenye simu yako!', 'PDF saved to your device!'))
+                      )
+                      .catch((err) =>
+                        onToast(
+                          err instanceof Error
+                            ? err.message
+                            : tr('Imeshindwa kupakua PDF.', 'Failed to save PDF.'),
+                          'error'
+                        )
+                      );
                   }}
                   className="inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-xl bg-[#25D366] px-3 text-xs font-extrabold text-[#064E46] hover:brightness-105"
                 >
@@ -2412,9 +2655,18 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                       activePdfDoc.url,
                       activePdfDoc.name,
                       'application/pdf'
-                    ).then(() =>
-                      onToast(tr('PDF imepakuliwa kwenye simu yako!', 'PDF saved to your device!'))
-                    );
+                    )
+                      .then(() =>
+                        onToast(tr('PDF imepakuliwa kwenye simu yako!', 'PDF saved to your device!'))
+                      )
+                      .catch((err) =>
+                        onToast(
+                          err instanceof Error
+                            ? err.message
+                            : tr('Imeshindwa kupakua PDF.', 'Failed to save PDF.'),
+                          'error'
+                        )
+                      );
                   }}
                 />
               </div>

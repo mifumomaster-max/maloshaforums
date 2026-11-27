@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
+  Heart,
   Images,
   LayoutGrid,
   Maximize2,
@@ -17,15 +18,29 @@ interface OrderedPhotoAlbumProps {
   altBase: string;
   initialPreviewLimit?: number;
   className?: string;
+  enableDoubleTapLike?: boolean;
+  onDoubleTapLike?: () => void;
+}
+
+interface FloatingHeart {
+  id: number;
+  x: number;
+  y: number;
+  tiltDeg: number;
+  scale: number;
 }
 
 const AUTO_SLIDE_INTERVAL_MS = 4500;
+const HEART_TILTS = [-16, -8, 0, 8, 16];
+const HEART_SCALES = [0.95, 1.05, 1.15, 1.25];
 
 export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
   images,
   altBase,
   initialPreviewLimit = 6,
   className = '',
+  enableDoubleTapLike = false,
+  onDoubleTapLike,
 }) => {
   const { tr } = useLanguage();
   const [expanded, setExpanded] = useState(false);
@@ -41,10 +56,62 @@ export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
     return true;
   });
   const [isPausedByPointer, setIsPausedByPointer] = useState(false);
+  const [hasEnteredViewport, setHasEnteredViewport] = useState(
+    () => typeof IntersectionObserver === 'undefined'
+  );
+  const [isInView, setIsInView] = useState(true);
+  const [floatingHearts, setFloatingHearts] = useState<FloatingHeart[]>([]);
+  const albumRootRef = useRef<HTMLDivElement | null>(null);
   const touchStartXRef = useRef<number | null>(null);
   const thumbStripRef = useRef<HTMLDivElement | null>(null);
+  const lastTapAtRef = useRef(0);
+  const lastBurstAtRef = useRef(0);
+  const singleTapTimerRef = useRef<number | null>(null);
+  const heartIdRef = useRef(0);
+  const heartTimersRef = useRef<number[]>([]);
 
   const total = images.length;
+
+  useEffect(() => {
+    const el = albumRootRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const nearObserver = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setHasEnteredViewport(true);
+          nearObserver.disconnect();
+        }
+      },
+      { rootMargin: '350px 0px' }
+    );
+    nearObserver.observe(el);
+
+    const viewObserver = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (entry) {
+          setIsInView(entry.isIntersecting && entry.intersectionRatio >= 0.08);
+        }
+      },
+      { threshold: [0, 0.08, 0.25] }
+    );
+    viewObserver.observe(el);
+
+    return () => {
+      nearObserver.disconnect();
+      viewObserver.disconnect();
+    };
+  }, [images]);
+
+  useEffect(() => {
+    return () => {
+      if (singleTapTimerRef.current !== null) {
+        window.clearTimeout(singleTapTimerRef.current);
+      }
+      heartTimersRef.current.forEach((t) => window.clearTimeout(t));
+      heartTimersRef.current = [];
+    };
+  }, []);
 
   useEffect(() => {
     setExpanded(false);
@@ -55,14 +122,21 @@ export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
   }, [images]);
 
   useEffect(() => {
-    if (total <= 1 || viewMode !== 'slide' || !autoPlay || isPausedByPointer || lightboxIdx !== null) {
+    if (
+      total <= 1 ||
+      viewMode !== 'slide' ||
+      !autoPlay ||
+      !isInView ||
+      isPausedByPointer ||
+      lightboxIdx !== null
+    ) {
       return;
     }
     const timer = window.setInterval(() => {
       setActiveSlide((curr) => (curr + 1) % total);
     }, AUTO_SLIDE_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [total, viewMode, autoPlay, isPausedByPointer, lightboxIdx]);
+  }, [total, viewMode, autoPlay, isInView, isPausedByPointer, lightboxIdx]);
 
   // Keep active thumbnail smoothly visible inside the horizontal strip without vertical page scroll
   useEffect(() => {
@@ -115,6 +189,90 @@ export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [lightboxIdx, handleCloseLightbox, handlePrev, handleNext]);
 
+  const spawnFloatingHeart = useCallback((x: number, y: number) => {
+    const id = ++heartIdRef.current;
+    const tiltDeg = HEART_TILTS[Math.floor(Math.random() * HEART_TILTS.length)] ?? 0;
+    const scale = HEART_SCALES[Math.floor(Math.random() * HEART_SCALES.length)] ?? 1;
+    const jitterX = (Math.random() - 0.5) * 20;
+    const jitterY = (Math.random() - 0.5) * 14;
+    setFloatingHearts((prev) => [
+      ...prev.slice(-14),
+      { id, x: x + jitterX, y: y + jitterY, tiltDeg, scale },
+    ]);
+    const timer = window.setTimeout(() => {
+      setFloatingHearts((prev) => prev.filter((item) => item.id !== id));
+      heartTimersRef.current = heartTimersRef.current.filter((t) => t !== timer);
+    }, 900);
+    heartTimersRef.current.push(timer);
+  }, []);
+
+  const handleMediaTap = useCallback(
+    (e: React.MouseEvent<HTMLElement>, indexToOpen: number) => {
+      if (!enableDoubleTapLike) {
+        setLightboxIdx(indexToOpen);
+        return;
+      }
+
+      const rect = e.currentTarget.getBoundingClientRect();
+      const hasPointerCoords = e.clientX !== 0 || e.clientY !== 0;
+      const x = hasPointerCoords ? e.clientX - rect.left : rect.width / 2;
+      const y = hasPointerCoords ? e.clientY - rect.top : rect.height / 2;
+
+      const now = Date.now();
+      const isDoubleOrBurstTap =
+        now - lastTapAtRef.current <= 360 || now - lastBurstAtRef.current <= 550;
+
+      if (isDoubleOrBurstTap) {
+        if (singleTapTimerRef.current !== null) {
+          window.clearTimeout(singleTapTimerRef.current);
+          singleTapTimerRef.current = null;
+        }
+        lastBurstAtRef.current = now;
+        lastTapAtRef.current = now;
+        onDoubleTapLike?.();
+        spawnFloatingHeart(x, y);
+        return;
+      }
+
+      lastTapAtRef.current = now;
+      if (singleTapTimerRef.current !== null) {
+        window.clearTimeout(singleTapTimerRef.current);
+      }
+      singleTapTimerRef.current = window.setTimeout(() => {
+        singleTapTimerRef.current = null;
+        setLightboxIdx(indexToOpen);
+      }, 250);
+    },
+    [enableDoubleTapLike, onDoubleTapLike, spawnFloatingHeart]
+  );
+
+  const renderFloatingHeartsOverlay = () => {
+    if (floatingHearts.length === 0) return null;
+    return (
+      <div
+        className="pointer-events-none absolute inset-0 z-20 overflow-hidden"
+        aria-hidden="true"
+      >
+        {floatingHearts.map((heart) => (
+          <div
+            key={heart.id}
+            style={
+              {
+                left: `${heart.x}px`,
+                top: `${heart.y}px`,
+                '--heart-tilt': `${heart.tiltDeg}deg`,
+                '--heart-scale': String(heart.scale),
+              } as React.CSSProperties
+            }
+            className="animate-kijiweni-heart-pop absolute"
+          >
+            <Heart className="h-14 w-14 fill-rose-500 text-rose-500 drop-shadow-[0_6px_14px_rgba(244,63,94,0.45)]" />
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   if (total === 0) return null;
 
   // Single photo preserves full-width crisp display
@@ -123,24 +281,30 @@ export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
     return (
       <>
         <div
-          className={`${className} -mx-4 overflow-hidden border-y border-slate-200 bg-slate-100 sm:mx-0 sm:rounded-lg sm:border`}
+          ref={albumRootRef}
+          className={`${className} relative -mx-4 overflow-hidden border-y border-slate-200 bg-slate-100 sm:mx-0 sm:rounded-lg sm:border`}
         >
           <button
             type="button"
-            onClick={() => setLightboxIdx(0)}
+            onClick={(e) => handleMediaTap(e, 0)}
             aria-label={tr('Fungua picha kwa ukubwa kamili', 'Open full-size photo')}
-            className="block w-full cursor-zoom-in focus-visible:outline-2 focus-visible:outline-[#1D4E89]"
+            className="relative block w-full cursor-zoom-in touch-manipulation focus-visible:outline-2 focus-visible:outline-[#1D4E89]"
           >
-            <img
-              src={optimizeCloudinaryUrl(images[0], 1080)}
-              alt={altBase}
-              loading="lazy"
-              decoding="async"
-              referrerPolicy="no-referrer"
-              onError={() => setFailedUrls((prev) => new Set(prev).add(0))}
-              className="block h-auto w-full"
-            />
+            {hasEnteredViewport ? (
+              <img
+                src={optimizeCloudinaryUrl(images[0], 1440, { quality: 'ultra' })}
+                alt={altBase}
+                loading="lazy"
+                decoding="async"
+                referrerPolicy="no-referrer"
+                onError={() => setFailedUrls((prev) => new Set(prev).add(0))}
+                className="block h-auto w-full select-none"
+              />
+            ) : (
+              <div className="aspect-[4/3] w-full animate-pulse bg-slate-100" />
+            )}
           </button>
+          {renderFloatingHeartsOverlay()}
         </div>
 
         {lightboxIdx !== null && (
@@ -168,12 +332,13 @@ export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
   return (
     <>
       <div
+        ref={albumRootRef}
         onMouseEnter={() => setIsPausedByPointer(true)}
         onMouseLeave={() => setIsPausedByPointer(false)}
-        className={`${className} -mx-4 overflow-hidden border-y border-slate-200 bg-slate-50/80 p-2 sm:mx-0 sm:rounded-xl sm:border sm:p-2.5`}
+        className={`${className} -mx-4 overflow-hidden border-y border-slate-200 bg-white sm:mx-0 sm:rounded-lg sm:border`}
       >
         {/* Top Control Bar */}
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50/75 px-3 py-2">
           <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-[#0E2640] tabular-nums">
             <Images className="h-3.5 w-3.5 text-[#1D4E89]" aria-hidden="true" />
             <span>
@@ -236,8 +401,8 @@ export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
         </div>
 
         {viewMode === 'slide' ? (
-          <div className="space-y-2">
-            {/* Active Auto-Slide Stage */}
+          <div>
+            {/* Active Auto-Slide Stage — Full Width Matching Single Photo */}
             <div
               onTouchStart={(e) => {
                 touchStartXRef.current = e.touches[0]?.clientX ?? null;
@@ -254,37 +419,43 @@ export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
                   else if (delta <= -40) handleSlideNext();
                 }
               }}
-              className="relative flex h-[320px] w-full items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-950 sm:h-[420px]"
+              className="relative w-full overflow-hidden bg-slate-100"
             >
               {!slideFailed ? (
                 <button
                   type="button"
-                  onClick={() => setLightboxIdx(safeSlideIndex)}
+                  onClick={(e) => handleMediaTap(e, safeSlideIndex)}
                   aria-label={tr(
                     `Fungua picha #${safeSlideIndex + 1} kwa ukubwa kamili`,
                     `Open photo #${safeSlideIndex + 1} fullscreen`
                   )}
-                  className="flex h-full w-full cursor-zoom-in items-center justify-center focus-visible:outline-2 focus-visible:outline-[#1D4E89]"
+                  className="relative block w-full cursor-zoom-in touch-manipulation focus-visible:outline-2 focus-visible:outline-[#1D4E89]"
                 >
-                  <img
-                    key={`${safeSlideIndex}-${currentSlideUrl}`}
-                    src={optimizeCloudinaryUrl(currentSlideUrl, 1200)}
-                    alt={`${altBase} #${safeSlideIndex + 1}`}
-                    loading="eager"
-                    decoding="async"
-                    referrerPolicy="no-referrer"
-                    onError={() => setFailedUrls((prev) => new Set(prev).add(safeSlideIndex))}
-                    className="max-h-full max-w-full object-contain transition-opacity duration-300"
-                  />
+                  {hasEnteredViewport ? (
+                    <img
+                      key={`${safeSlideIndex}-${currentSlideUrl}`}
+                      src={optimizeCloudinaryUrl(currentSlideUrl, 1440, { quality: 'ultra' })}
+                      alt={`${altBase} #${safeSlideIndex + 1}`}
+                      loading="lazy"
+                      decoding="async"
+                      referrerPolicy="no-referrer"
+                      onError={() => setFailedUrls((prev) => new Set(prev).add(safeSlideIndex))}
+                      className="block h-auto max-h-[82vh] w-full bg-slate-100 object-contain transition-opacity duration-300 select-none"
+                    />
+                  ) : (
+                    <div className="aspect-[4/3] w-full animate-pulse bg-slate-100" />
+                  )}
                 </button>
               ) : (
-                <div className="flex h-full w-full items-center justify-center text-xs font-semibold text-slate-400">
+                <div className="flex min-h-[260px] w-full items-center justify-center text-xs font-semibold text-slate-400">
                   #{safeSlideIndex + 1}
                 </div>
               )}
 
+              {renderFloatingHeartsOverlay()}
+
               {/* Top Slide Counter & Fullscreen Hint */}
-              <div className="pointer-events-none absolute top-2.5 right-2.5 left-2.5 flex items-center justify-between gap-2">
+              <div className="pointer-events-none absolute top-2.5 right-2.5 left-2.5 z-10 flex items-center justify-between gap-2">
                 <span className="rounded-md bg-black/70 px-2 py-0.5 text-[11px] font-bold text-white tabular-nums backdrop-blur-xs">
                   #{safeSlideIndex + 1} / {total}
                 </span>
@@ -304,7 +475,7 @@ export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
                 type="button"
                 onClick={handleSlidePrev}
                 aria-label={tr('Picha iliyotangulia', 'Previous photo')}
-                className="absolute top-1/2 left-2 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white ring-1 ring-white/20 backdrop-blur-xs transition-colors hover:bg-black/85"
+                className="absolute top-1/2 left-2 z-10 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white ring-1 ring-white/20 backdrop-blur-xs transition-colors hover:bg-black/85"
               >
                 <ChevronLeft className="h-5 w-5" aria-hidden="true" />
               </button>
@@ -313,14 +484,14 @@ export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
                 type="button"
                 onClick={handleSlideNext}
                 aria-label={tr('Picha inayofuata', 'Next photo')}
-                className="absolute top-1/2 right-2 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white ring-1 ring-white/20 backdrop-blur-xs transition-colors hover:bg-black/85"
+                className="absolute top-1/2 right-2 z-10 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white ring-1 ring-white/20 backdrop-blur-xs transition-colors hover:bg-black/85"
               >
                 <ChevronRight className="h-5 w-5" aria-hidden="true" />
               </button>
 
               {/* Progress Dot Indicator */}
               {total <= 12 && (
-                <div className="pointer-events-none absolute right-0 bottom-2.5 left-0 flex items-center justify-center gap-1.5 px-3">
+                <div className="pointer-events-none absolute right-0 bottom-2.5 left-0 z-10 flex items-center justify-center gap-1.5 px-3">
                   {images.map((_, idx) => (
                     <button
                       key={`dot-${idx}`}
@@ -341,10 +512,11 @@ export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
             {/* Horizontal Clickable Thumbnail Strip */}
             <div
               ref={thumbStripRef}
-              className="flex items-center gap-1.5 overflow-x-auto pb-0.5"
+              className="flex items-center gap-1.5 overflow-x-auto border-t border-slate-100 bg-slate-50/60 px-3 py-2"
             >
-              {images.map((url, idx) => {
-                if (total > 40 && Math.abs(idx - safeSlideIndex) > 16 && idx !== 0 && idx !== total - 1) {
+              {hasEnteredViewport &&
+                images.map((url, idx) => {
+                if (total > 24 && Math.abs(idx - safeSlideIndex) > 12 && idx !== 0 && idx !== total - 1) {
                   return null;
                 }
                 const isActive = idx === safeSlideIndex;
@@ -364,7 +536,7 @@ export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
                   >
                     {!failed ? (
                       <img
-                        src={optimizeCloudinaryUrl(url, 160)}
+                        src={optimizeCloudinaryUrl(url, 128, { quality: 'eco' })}
                         alt={`#${idx + 1}`}
                         loading="lazy"
                         decoding="async"
@@ -390,7 +562,7 @@ export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
             </div>
           </div>
         ) : (
-          <>
+          <div className="p-2.5 sm:p-3">
             <div
               className={`grid gap-1.5 sm:gap-2 ${
                 total === 2 ? 'grid-cols-2' : 'grid-cols-2 sm:grid-cols-3'
@@ -422,9 +594,9 @@ export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
                       }
                       className="relative block h-full w-full focus-visible:outline-2 focus-visible:outline-[#1D4E89]"
                     >
-                      {!failed ? (
+                      {!failed && hasEnteredViewport ? (
                         <img
-                          src={optimizeCloudinaryUrl(url, 600)}
+                          src={optimizeCloudinaryUrl(url, 720, { quality: 'good' })}
                           alt={`${altBase} #${idx + 1}`}
                           loading="lazy"
                           decoding="async"
@@ -489,7 +661,7 @@ export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
                 )}
               </div>
             )}
-          </>
+          </div>
         )}
       </div>
 
@@ -608,7 +780,7 @@ const LightboxModal: React.FC<LightboxModalProps> = ({
         )}
 
         <img
-          src={optimizeCloudinaryUrl(activeUrl, 1600)}
+          src={optimizeCloudinaryUrl(activeUrl, 2048, { quality: 'ultra' })}
           alt={`${altBase} #${activeIndex + 1}`}
           referrerPolicy="no-referrer"
           className="max-h-full max-w-full rounded-lg object-contain select-none"

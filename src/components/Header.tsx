@@ -37,9 +37,11 @@ import {
   getNotificationPermission,
   isNotificationSupported,
   isPhoneAlertsEnabled,
+  isStandalonePWA,
   requestPhoneNotificationPermission,
   sendPhoneNotification,
   setPhoneAlertsEnabled,
+  updateAppBadgeCount,
 } from '../services/notificationService';
 import { AuthorName, Avatar, OnlineStatusPill } from './Avatar';
 import { NavIconSection, NavSectionIcon } from './NavIcons';
@@ -81,6 +83,7 @@ const NOTIF_READ_IDS_KEY = 'malosha_notif_read_ids_v1';
 const NOTIF_READ_TIMESTAMPS_KEY = 'malosha_notif_read_ts_v2';
 const NOTIF_CLEARED_AT_KEY = 'malosha_notif_cleared_at_v1';
 const NOTIF_BANNER_DISMISSED_KEY = 'malosha_notif_banner_dismissed_v1';
+const STANDALONE_NOTIF_BANNER_DISMISSED_KEY = 'malosha_standalone_notif_banner_dismissed_v1';
 const NOTIF_READ_TTL_MS = 24 * 60 * 60 * 1000;
 
 const GoogleGIcon: React.FC = () => (
@@ -147,7 +150,10 @@ export const Header: React.FC<HeaderProps> = ({
   const [notifBannerDismissed, setNotifBannerDismissed] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true;
     try {
-      return window.localStorage.getItem(NOTIF_BANNER_DISMISSED_KEY) === '1';
+      const key = isStandalonePWA()
+        ? STANDALONE_NOTIF_BANNER_DISMISSED_KEY
+        : NOTIF_BANNER_DISMISSED_KEY;
+      return window.localStorage.getItem(key) === '1';
     } catch {
       return false;
     }
@@ -188,6 +194,20 @@ export const Header: React.FC<HeaderProps> = ({
   useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 60_000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const refreshPermission = () => {
+      setNotifPermission(getNotificationPermission());
+      setPhoneAlertsOn(isPhoneAlertsEnabled());
+    };
+    window.addEventListener('focus', refreshPermission);
+    document.addEventListener('visibilitychange', refreshPermission);
+    return () => {
+      window.removeEventListener('focus', refreshPermission);
+      document.removeEventListener('visibilitychange', refreshPermission);
+    };
   }, []);
 
   const todayDateLabel = useMemo(() => {
@@ -421,10 +441,11 @@ export const Header: React.FC<HeaderProps> = ({
     setNotifPermission(result);
     if (result === 'granted') {
       setPhoneAlertsOn(true);
+      void updateAppBadgeCount(0);
       onToast?.(
         tr(
-          'Safi! Utapata arifa kwenye simu kila taarifa mpya ikichapishwa.',
-          'All set! You will receive phone notifications for new posts.'
+          'Safi! Utapata arifa kwenye simu na namba kwenye icon ya App.',
+          'All set! You will receive phone alerts and App icon badge counts.'
         )
       );
       void sendPhoneNotification({
@@ -1538,7 +1559,10 @@ export const Header: React.FC<HeaderProps> = ({
                 onClick={() => {
                   setNotifBannerDismissed(true);
                   try {
-                    window.localStorage.setItem(NOTIF_BANNER_DISMISSED_KEY, '1');
+                    const key = isStandalonePWA()
+                      ? STANDALONE_NOTIF_BANNER_DISMISSED_KEY
+                      : NOTIF_BANNER_DISMISSED_KEY;
+                    window.localStorage.setItem(key, '1');
                   } catch {
                     // Ignore storage error
                   }

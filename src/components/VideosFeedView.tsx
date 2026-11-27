@@ -103,6 +103,10 @@ import {
 } from '../types';
 import { AuthorName, Avatar } from './Avatar';
 import { AuthorVerificationBadge } from './VerificationBadge';
+import {
+  scrollCommentInputAboveKeyboard,
+  useMobileKeyboardState,
+} from '../utils/mobileKeyboard';
 
 interface VideosFeedViewProps {
   videos: VideoPost[];
@@ -416,6 +420,12 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
   const [replyingToComment, setReplyingToComment] = useState<VideoComment | null>(null);
   const [sendingComment, setSendingComment] = useState(false);
   const commentsScrollRef = useRef<HTMLDivElement>(null);
+  const commentInputRef = useRef<HTMLInputElement>(null);
+  const {
+    isKeyboardOpen: mobileKeyboardOpen,
+    viewportTop,
+    viewportHeight,
+  } = useMobileKeyboardState();
 
   // Settings / Post Options / Sound Drawer states
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -3515,12 +3525,25 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
       {/* Slide-Up Comments Drawer (Threaded + Creator Auto-Reply + Lock Support) */}
       {commentsVideoId && (
         <div
+          style={
+            typeof window !== 'undefined' && window.innerWidth < 768 && viewportHeight > 0
+              ? {
+                  top: `${viewportTop}px`,
+                  height: `${viewportHeight}px`,
+                  bottom: 'auto',
+                }
+              : undefined
+          }
           className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-[2px] overscroll-contain md:items-center"
           onClick={() => setCommentsVideoId(null)}
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="flex h-[76dvh] max-h-[76dvh] w-full flex-col overflow-hidden overscroll-contain rounded-t-3xl bg-white text-slate-900 shadow-2xl md:h-[600px] md:max-h-[600px] md:max-w-md md:rounded-2xl"
+            className={`flex w-full flex-col overflow-hidden overscroll-contain rounded-t-3xl bg-white text-slate-900 shadow-2xl md:h-[600px] md:max-h-[600px] md:max-w-md md:rounded-2xl ${
+              mobileKeyboardOpen
+                ? 'h-[92%] max-h-[92%]'
+                : 'h-[76dvh] max-h-[76dvh]'
+            }`}
           >
             <div className="mx-auto mt-2.5 h-1.5 w-10 rounded-full bg-slate-300 md:hidden" />
             <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
@@ -3634,7 +3657,13 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                               user?.uid === activeCommentsVideo?.authorId) && (
                               <button
                                 type="button"
-                                onClick={() => setReplyingToComment(item)}
+                                onClick={() => {
+                                  setReplyingToComment(item);
+                                  window.setTimeout(() => {
+                                    commentInputRef.current?.focus({ preventScroll: true });
+                                    scrollCommentInputAboveKeyboard(commentInputRef.current);
+                                  }, 30);
+                                }}
                                 className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-slate-500 hover:text-slate-900"
                               >
                                 <ReplyIcon className="h-3 w-3" aria-hidden="true" />
@@ -3702,9 +3731,11 @@ export const VideosFeedView: React.FC<VideosFeedViewProps> = ({
                   {user ? (
                     <>
                       <input
+                        ref={commentInputRef}
                         type="text"
                         maxLength={1000}
                         value={commentText}
+                        onFocus={(e) => scrollCommentInputAboveKeyboard(e.currentTarget)}
                         onChange={(e) => setCommentText(e.target.value)}
                         placeholder={
                           replyingToComment

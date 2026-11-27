@@ -11,6 +11,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocs,
   limit,
   onSnapshot,
   orderBy,
@@ -128,9 +129,14 @@ import {
 } from './services/pollService';
 import {
   dismissPhoneNotifications,
+  isMobileDeviceContext,
+  isStandalonePWA,
   sendPhoneNotification,
+  syncBackgroundSummaryNotification,
   updateAppBadgeCount,
 } from './services/notificationService';
+import { initChatAudioUnlock, playIncomingMessageSound } from './utils/chatSound';
+import { useMobileKeyboardState } from './utils/mobileKeyboard';
 
 const CHAT_LAST_SEEN_KEY = 'malosha_chat_last_seen_ms_v1';
 const NOTES_LAST_SEEN_KEY = 'malosha_notes_last_seen_ms_v1';
@@ -147,6 +153,37 @@ function getStartOfTodayBoundaryMs(): number {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).getTime() - 1;
 }
 
+function mapTopicSnapshotDoc(d: { id: string; data: () => Record<string, unknown> }): Topic {
+  const data = d.data();
+  return {
+    id: d.id,
+    title: String(data.title || ''),
+    body: String(data.body || ''),
+    category: data.category as Topic['category'],
+    tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
+    authorId: String(data.authorId || ''),
+    authorName: String(data.authorName || 'Mwanachama'),
+    authorPhoto: String(data.authorPhoto || ''),
+    status: (data.status as Topic['status']) || 'open',
+    isPinned: Boolean(data.isPinned),
+    repliesCount: Number(data.repliesCount || 0),
+    upvotesCount: Number(data.upvotesCount || 0),
+    sharesCount: Number(data.sharesCount || 0),
+    acceptedReplyId: String(data.acceptedReplyId || ''),
+    company: String(data.company || ''),
+    location: String(data.location || ''),
+    jobType: String(data.jobType || ''),
+    deadline: String(data.deadline || ''),
+    applyInfo: String(data.applyInfo || ''),
+    coverImage: String(data.coverImage || ''),
+    images: Array.isArray(data.images) ? data.images.map(String).filter(Boolean) : [],
+    bodyFontStyle: normalizeKijiweniFontStyle(data.bodyFontStyle),
+    createdAt: (data.createdAt as Topic['createdAt']) || null,
+    updatedAt: (data.updatedAt as Topic['updatedAt']) || null,
+    lastActivityAt: ((data.lastActivityAt || data.createdAt) as Topic['lastActivityAt']) || null,
+  };
+}
+
 function ForumShell() {
   const { lang, setLang, tr } = useLanguage();
   const { setLocalUserIdentity } = useUserBadges();
@@ -157,8 +194,13 @@ function ForumShell() {
   const [isAdminDoc, setIsAdminDoc] = useState(false);
   const [authBusy] = useState(false);
 
-  const [topics, setTopics] = useState<Topic[]>([]);
+  const [baseTopics, setBaseTopics] = useState<Topic[]>([]);
+  const [olderArchiveTopics, setOlderArchiveTopics] = useState<Topic[]>([]);
+  const [topicsFetchLimit, setTopicsFetchLimit] = useState(120);
+  const [hasMoreCloudTopics, setHasMoreCloudTopics] = useState(false);
+  const [loadingMoreCloudTopics, setLoadingMoreCloudTopics] = useState(false);
   const [loadingTopics, setLoadingTopics] = useState(true);
+  const hasLoadedInitialTopicsRef = useRef(false);
   const [votedTopicIds, setVotedTopicIds] = useState<Set<string>>(new Set());
   const [videos, setVideos] = useState<VideoPost[]>([]);
   const [loadingVideos, setLoadingVideos] = useState(true);
@@ -203,6 +245,10 @@ function ForumShell() {
       }
       return next;
     });
+  }, []);
+
+  useEffect(() => {
+    initChatAudioUnlock();
   }, []);
   const [reports, setReports] = useState<Report[]>([]);
   const [userNotifications, setUserNotifications] = useState<UserNotification[]>([]);
@@ -397,6 +443,14 @@ function ForumShell() {
     if (viewParam === 'messages' || viewParam === 'group') return 'messages';
     return 'direct';
   });
+  const [isAppVisible, setIsAppVisible] = useState<boolean>(() =>
+    typeof document === 'undefined' ? true : document.visibilityState === 'visible'
+  );
+  const isAppVisibleRef = useRef<boolean>(isAppVisible);
+  const totalAppUnreadCountRef = useRef<number>(0);
+  const acknowledgedUnreadTotalRef = useRef<number | null>(null);
+  const lastBgBadgeSentRef = useRef<number>(0);
+  const latestBgAlertSummaryRef = useRef<string>('');
   const [authPromptReason, setAuthPromptReason] = useState<AuthPromptReason | null>(null);
   const returnDestinationRef = useRef<{ tab: NavTab; topicId: string | null; pollId: string | null }>({
     tab: 'kijiweni',
@@ -622,43 +676,40 @@ function ForumShell() {
     return () => unsub();
   }, [authReady, user, setLocalUserIdentity]);
 
+  const topics = useMemo(() => {
+    if (
+      (sortMode !== 'oldest' && sortMode !== 'mixed') ||
+      olderArchiveTopics.length === 0
+    ) {
+      return baseTopics;
+    }
+    const byId = new Map<string, Topic>();
+    for (const item of baseTopics) {
+      byId.set(item.id, item);
+    }
+    for (const item of olderArchiveTopics) {
+      if (item.status === 'archived') continue;
+      if (!byId.has(item.id)) {
+        byId.set(item.id, item);
+      }
+    }
+    return Array.from(byId.values()).sort((a, b) => {
+      const msA = a.createdAt ? a.createdAt.toMillis() : Date.now();
+      const msB = b.createdAt ? b.createdAt.toMillis() : Date.now();
+      return msB - msA;
+    });
+  }, [baseTopics, olderArchiveTopics, sortMode]);
+
   useEffect(() => {
     if (!authReady) return;
-    setLoadingTopics(true);
+    if (!hasLoadedInitialTopicsRef.current) {
+      setLoadingTopics(true);
+    }
     const path = 'topics';
-    const mapTopicDoc = (d: { id: string; data: () => Record<string, unknown> }): Topic => {
-      const data = d.data();
-      return {
-        id: d.id,
-        title: String(data.title || ''),
-        body: String(data.body || ''),
-        category: data.category as Topic['category'],
-        tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
-        authorId: String(data.authorId || ''),
-        authorName: String(data.authorName || 'Mwanachama'),
-        authorPhoto: String(data.authorPhoto || ''),
-        status: (data.status as Topic['status']) || 'open',
-        isPinned: Boolean(data.isPinned),
-        repliesCount: Number(data.repliesCount || 0),
-        upvotesCount: Number(data.upvotesCount || 0),
-        sharesCount: Number(data.sharesCount || 0),
-        acceptedReplyId: String(data.acceptedReplyId || ''),
-        company: String(data.company || ''),
-        location: String(data.location || ''),
-        jobType: String(data.jobType || ''),
-        deadline: String(data.deadline || ''),
-        applyInfo: String(data.applyInfo || ''),
-        coverImage: String(data.coverImage || ''),
-        images: Array.isArray(data.images) ? data.images.map(String).filter(Boolean) : [],
-        bodyFontStyle: normalizeKijiweniFontStyle(data.bodyFontStyle),
-        createdAt: (data.createdAt as Topic['createdAt']) || null,
-        updatedAt: (data.updatedAt as Topic['updatedAt']) || null,
-        lastActivityAt: ((data.lastActivityAt || data.createdAt) as Topic['lastActivityAt']) || null,
-      };
-    };
 
     let publicTopics: Topic[] = [];
     let ownTopics: Topic[] = [];
+    let adminArchivedMakala: Topic[] = [];
 
     const mergeTopicLists = () => {
       const byId = new Map<string, Topic>();
@@ -666,26 +717,63 @@ function ForumShell() {
         if (item.status !== 'archived') byId.set(item.id, item);
       }
       for (const item of ownTopics) {
-        if (item.status !== 'archived') byId.set(item.id, item);
+        if (item.status !== 'archived' || normalizeBoardCategory(item.category) === 'Makala') {
+          byId.set(item.id, item);
+        }
+      }
+      for (const item of adminArchivedMakala) {
+        if (normalizeBoardCategory(item.category) === 'Makala') {
+          byId.set(item.id, item);
+        }
       }
       const merged = Array.from(byId.values()).sort((a, b) => {
         const msA = a.createdAt ? a.createdAt.toMillis() : Date.now();
         const msB = b.createdAt ? b.createdAt.toMillis() : Date.now();
         return msB - msA;
       });
-      setTopics(merged);
+      hasLoadedInitialTopicsRef.current = true;
+      setBaseTopics(merged);
       setLoadingTopics(false);
+      setLoadingMoreCloudTopics(false);
     };
 
-    const qPublic = query(collection(db, path), where('status', 'in', ['open', 'locked']));
+    const qPublicOrdered = query(
+      collection(db, path),
+      where('status', 'in', ['open', 'locked']),
+      orderBy('createdAt', 'desc'),
+      limit(topicsFetchLimit)
+    );
+    let unsubPublicFallback: (() => void) | null = null;
     const unsubPublic = onSnapshot(
-      qPublic,
+      qPublicOrdered,
       (snapshot) => {
-        publicTopics = snapshot.docs.map((d) => mapTopicDoc(d));
+        publicTopics = snapshot.docs.map((d) => mapTopicSnapshotDoc(d));
+        setHasMoreCloudTopics(snapshot.docs.length >= topicsFetchLimit);
         mergeTopicLists();
       },
       (error) => {
+        if ((error as { code?: string })?.code === 'failed-precondition') {
+          const qPublicUnordered = query(
+            collection(db, path),
+            where('status', 'in', ['open', 'locked'])
+          );
+          unsubPublicFallback = onSnapshot(
+            qPublicUnordered,
+            (snapshot) => {
+              publicTopics = snapshot.docs.map((d) => mapTopicSnapshotDoc(d));
+              setHasMoreCloudTopics(false);
+              mergeTopicLists();
+            },
+            (fallbackErr) => {
+              setLoadingTopics(false);
+              setLoadingMoreCloudTopics(false);
+              handleFirestoreError(fallbackErr, OperationType.LIST, path);
+            }
+          );
+          return;
+        }
         setLoadingTopics(false);
+        setLoadingMoreCloudTopics(false);
         handleFirestoreError(error, OperationType.LIST, path);
       }
     );
@@ -696,7 +784,7 @@ function ForumShell() {
       unsubOwn = onSnapshot(
         qOwn,
         (snapshot) => {
-          ownTopics = snapshot.docs.map((d) => mapTopicDoc(d));
+          ownTopics = snapshot.docs.map((d) => mapTopicSnapshotDoc(d));
           mergeTopicLists();
         },
         () => {
@@ -705,11 +793,64 @@ function ForumShell() {
       );
     }
 
+    let unsubAdminArchived: (() => void) | null = null;
+    if (isAdmin) {
+      const qAdminArchived = query(collection(db, path), where('status', '==', 'archived'));
+      unsubAdminArchived = onSnapshot(
+        qAdminArchived,
+        (snapshot) => {
+          adminArchivedMakala = snapshot.docs
+            .map((d) => mapTopicSnapshotDoc(d))
+            .filter((item) => normalizeBoardCategory(item.category) === 'Makala');
+          mergeTopicLists();
+        },
+        () => {
+          // Non-fatal fallback
+        }
+      );
+    }
+
     return () => {
       unsubPublic();
+      if (unsubPublicFallback) unsubPublicFallback();
       if (unsubOwn) unsubOwn();
+      if (unsubAdminArchived) unsubAdminArchived();
     };
-  }, [authReady, user?.uid]);
+  }, [authReady, user?.uid, isAdmin, topicsFetchLimit]);
+
+  useEffect(() => {
+    if (!authReady) return;
+    if (sortMode !== 'oldest' && sortMode !== 'mixed') return;
+    if (olderArchiveTopics.length > 0) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const snap = await getDocs(
+          query(
+            collection(db, 'topics'),
+            where('status', 'in', ['open', 'locked']),
+            orderBy('createdAt', 'asc'),
+            limit(100)
+          )
+        );
+        if (cancelled) return;
+        setOlderArchiveTopics(snap.docs.map((d) => mapTopicSnapshotDoc(d)));
+      } catch {
+        // Optional composite index; already-loaded cloud topics still sort properly
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authReady, sortMode, olderArchiveTopics.length]);
+
+  const handleLoadMoreCloudTopics = useCallback(() => {
+    if (loadingMoreCloudTopics || !hasMoreCloudTopics) return;
+    setLoadingMoreCloudTopics(true);
+    setTopicsFetchLimit((prev) => prev + 100);
+  }, [loadingMoreCloudTopics, hasMoreCloudTopics]);
 
   // Real-time Malosha Reels short videos & photo-music feed listener (plus signed-in author's private posts)
   useEffect(() => {
@@ -990,9 +1131,8 @@ function ForumShell() {
     const path = 'forum_chat_messages';
     const q = query(
       collection(db, path),
-      where('createdAt', '>=', Timestamp.fromMillis(0)),
       orderBy('createdAt', 'desc'),
-      limit(200)
+      limit(80)
     );
 
     const unsub = onSnapshot(
@@ -1029,6 +1169,9 @@ function ForumShell() {
             replyToSenderName: String(data.replyToSenderName || ''),
             replyToPreview: String(data.replyToPreview || ''),
             isDeleted: Boolean(data.isDeleted),
+            deletedForUids: Array.isArray(data.deletedForUids)
+              ? data.deletedForUids.filter((u): u is string => typeof u === 'string')
+              : [],
             createdAt: data.createdAt || null,
             updatedAt: data.updatedAt || null,
           };
@@ -1047,11 +1190,13 @@ function ForumShell() {
           (m) =>
             !knownChatIdsRef.current.has(m.id) &&
             !m.isDeleted &&
+            !(m.deletedForUids && user?.uid && m.deletedForUids.includes(user.uid)) &&
             m.senderId !== user?.uid
         );
         list.forEach((m) => knownChatIdsRef.current.add(m.id));
 
         if (newestIncoming) {
+          playIncomingMessageSound();
           const isViewingChat =
             activeTabRef.current === 'chat' &&
             mchartSubTabRef.current === 'messages' &&
@@ -1071,12 +1216,17 @@ function ForumShell() {
 
             if (typeof document !== 'undefined' && !document.hidden) {
               showToast(`${alertTitle}: ${preview.slice(0, 80)}`);
+            } else {
+              latestBgAlertSummaryRef.current = `${alertTitle}: ${preview.slice(0, 95)}`;
             }
             void sendPhoneNotification({
               title: alertTitle,
               body: preview.slice(0, 140),
               url: '/?tab=mchart&view=messages',
               tag: 'malosha-chat-msg',
+              badgeCount: !isAppVisibleRef.current
+                ? Math.max(1, totalAppUnreadCountRef.current + 1 - (acknowledgedUnreadTotalRef.current ?? 0))
+                : undefined,
             });
           }
         }
@@ -1108,7 +1258,6 @@ function ForumShell() {
     const path = 'mchart_notes';
     const q = query(
       collection(db, path),
-      where('createdAt', '>=', Timestamp.fromMillis(0)),
       orderBy('createdAt', 'desc'),
       limit(50)
     );
@@ -1174,15 +1323,20 @@ function ForumShell() {
             !document.hidden;
 
           if (!isViewingNotes) {
-            const alertTitle = tr('Note Mpya · Mchart (Malosha)', 'New Note · Malosha Mchart');
+            const alertTitle = tr('Slide Mpya · Mchart (Malosha)', 'New Slide · Malosha Mchart');
             if (typeof document !== 'undefined' && !document.hidden) {
               showToast(`${alertTitle}: ${newestNote.title}`);
+            } else {
+              latestBgAlertSummaryRef.current = `${alertTitle}: ${newestNote.title}`;
             }
             void sendPhoneNotification({
               title: alertTitle,
               body: newestNote.title,
               url: '/?tab=mchart&view=notes',
               tag: 'malosha-mchart-note',
+              badgeCount: !isAppVisibleRef.current
+                ? Math.max(1, totalAppUnreadCountRef.current + 1 - (acknowledgedUnreadTotalRef.current ?? 0))
+                : undefined,
             });
           }
         }
@@ -1226,7 +1380,7 @@ function ForumShell() {
 
   // Mark community chat messages as seen & clear phone chat alerts when viewing Chat messages
   useEffect(() => {
-    if (activeTab !== 'chat' || mchartSubTab !== 'messages' || selectedTopicId) return;
+    if (!isAppVisible || activeTab !== 'chat' || mchartSubTab !== 'messages' || selectedTopicId) return;
     let latestMs = Date.now();
     chatMessages.forEach((m) => {
       const ms = m.createdAt ? m.createdAt.toMillis() : 0;
@@ -1239,11 +1393,11 @@ function ForumShell() {
       // Ignore storage error
     }
     void dismissPhoneNotifications('malosha-chat-msg');
-  }, [activeTab, mchartSubTab, selectedTopicId, chatMessages]);
+  }, [isAppVisible, activeTab, mchartSubTab, selectedTopicId, chatMessages]);
 
   // Mark Mchart notes as seen & dismiss phone note notification when viewing Notes
   useEffect(() => {
-    if (activeTab !== 'chat' || mchartSubTab !== 'notes' || selectedTopicId) return;
+    if (!isAppVisible || activeTab !== 'chat' || mchartSubTab !== 'notes' || selectedTopicId) return;
     let latestMs = Date.now() + 1000;
     mchartNotes.forEach((n) => {
       const ms = n.createdAt ? n.createdAt.toMillis() + 1000 : 0;
@@ -1257,26 +1411,26 @@ function ForumShell() {
     }
     void dismissPhoneNotifications('malosha-mchart-note');
     setToast((curr) => (curr && curr.text.includes('Note Mpya') ? null : curr));
-  }, [activeTab, mchartSubTab, selectedTopicId, mchartNotes]);
+  }, [isAppVisible, activeTab, mchartSubTab, selectedTopicId, mchartNotes]);
 
   const unreadChatCount = useMemo(() => {
-    if (activeTab === 'chat' && mchartSubTab === 'messages' && !selectedTopicId) return 0;
+    if (isAppVisible && activeTab === 'chat' && mchartSubTab === 'messages' && !selectedTopicId) return 0;
     return chatMessages.filter((m) => {
       if (m.isDeleted || m.senderId === user?.uid) return false;
       const ms = m.createdAt ? m.createdAt.toMillis() : 0;
       return ms > lastSeenChatMs;
     }).length;
-  }, [activeTab, mchartSubTab, selectedTopicId, chatMessages, user?.uid, lastSeenChatMs]);
+  }, [isAppVisible, activeTab, mchartSubTab, selectedTopicId, chatMessages, user?.uid, lastSeenChatMs]);
 
   const unreadNotesCount = useMemo(() => {
-    if (activeTab === 'chat' && mchartSubTab === 'notes' && !selectedTopicId) return 0;
+    if (isAppVisible && activeTab === 'chat' && mchartSubTab === 'notes' && !selectedTopicId) return 0;
     return mchartNotes.filter((n) => {
       if (n.isArchived || n.authorId === user?.uid) return false;
       if (readNoteIds.has(n.id)) return false;
       const ms = n.createdAt ? n.createdAt.toMillis() : 0;
       return ms > lastSeenNotesMs;
     }).length;
-  }, [activeTab, mchartSubTab, selectedTopicId, mchartNotes, user?.uid, lastSeenNotesMs, readNoteIds]);
+  }, [isAppVisible, activeTab, mchartSubTab, selectedTopicId, mchartNotes, user?.uid, lastSeenNotesMs, readNoteIds]);
 
   const currentlyViewedBoard: PrimaryBoard | null = useMemo(() => {
     if (selectedTopicId) return null;
@@ -1291,7 +1445,7 @@ function ForumShell() {
 
   // Clear board unread badge immediately when user opens that section
   useEffect(() => {
-    if (!currentlyViewedBoard) return;
+    if (!isAppVisible || !currentlyViewedBoard) return;
     let latestBoardMs = Date.now();
     topics.forEach((t) => {
       if (normalizeBoardCategory(t.category) !== currentlyViewedBoard) return;
@@ -1308,7 +1462,7 @@ function ForumShell() {
       }
       return next;
     });
-  }, [currentlyViewedBoard, topics]);
+  }, [isAppVisible, currentlyViewedBoard, topics]);
 
   const markTopicRead = useCallback((topicId: string) => {
     if (!topicId) return;
@@ -1369,6 +1523,9 @@ function ForumShell() {
             unreadCountB: Number(data.unreadCountB || 0),
             lastReadAtA: data.lastReadAtA || null,
             lastReadAtB: data.lastReadAtB || null,
+            blockedByUids: Array.isArray(data.blockedByUids)
+              ? data.blockedByUids.map((u) => String(u))
+              : [],
             createdAt: data.createdAt || null,
             updatedAt: data.updatedAt || null,
           };
@@ -1393,6 +1550,7 @@ function ForumShell() {
           if (msgMs > prevMs) {
             lastDmUpdateByThreadRef.current[t.chatId] = msgMs;
             if (t.lastSenderId && t.lastSenderId !== user.uid && t.lastMessageText) {
+              playIncomingMessageSound();
               const isViewingThisDm =
                 activeTabRef.current === 'chat' &&
                 mchartSubTabRef.current === 'direct' &&
@@ -1407,12 +1565,17 @@ function ForumShell() {
                 const alertTitle = `${senderName} · ${tr('Ujumbe Binafsi', 'Private Message')}`;
                 if (typeof document !== 'undefined' && !document.hidden) {
                   showToast(`${alertTitle}: ${t.lastMessageText.slice(0, 75)}`);
+                } else {
+                  latestBgAlertSummaryRef.current = `${alertTitle}: ${t.lastMessageText.slice(0, 95)}`;
                 }
                 void sendPhoneNotification({
                   title: alertTitle,
                   body: t.lastMessageText.slice(0, 140),
                   url: '/?tab=mchart&view=direct',
                   tag: `malosha-dm-${t.chatId}`,
+                  badgeCount: !isAppVisibleRef.current
+                    ? Math.max(1, totalAppUnreadCountRef.current + 1 - (acknowledgedUnreadTotalRef.current ?? 0))
+                    : undefined,
                 });
               }
             }
@@ -1664,9 +1827,9 @@ function ForumShell() {
     return () => unsub();
   }, [authReady, user]);
 
-  // Clear video unread badge when user opens Video Reels
+  // Clear video unread badge when user opens Video Reels while app is visible
   useEffect(() => {
-    if (activeTab !== 'video' || selectedTopicId) return;
+    if (!isAppVisible || activeTab !== 'video' || selectedTopicId) return;
     let latestMs = Date.now();
     videos.forEach((v) => {
       if (v.isArchived) return;
@@ -1683,11 +1846,11 @@ function ForumShell() {
       }
       return nextMs;
     });
-  }, [activeTab, selectedTopicId, videos]);
+  }, [isAppVisible, activeTab, selectedTopicId, videos]);
 
-  // Clear Mpoll notification badge permanently once user opens Mpoll until a newer poll arrives
+  // Clear Mpoll notification badge permanently once user opens Mpoll while app is visible
   useEffect(() => {
-    if (activeTab !== 'votes' || selectedTopicId) return;
+    if (!isAppVisible || activeTab !== 'votes' || selectedTopicId) return;
     let latestMs = Date.now();
     polls.forEach((p) => {
       const ms = p.createdAt ? p.createdAt.toMillis() : 0;
@@ -1703,7 +1866,7 @@ function ForumShell() {
       }
       return nextMs;
     });
-  }, [activeTab, selectedTopicId, polls]);
+  }, [isAppVisible, activeTab, selectedTopicId, polls]);
 
   const memberDirectoryCandidates = useMemo<MemberDirectoryCandidate[]>(() => {
     const map = new Map<string, MemberDirectoryCandidate>();
@@ -1758,6 +1921,7 @@ function ForumShell() {
     if (!user) return 0;
     return directChats.reduce((sum, t) => {
       if (
+        isAppVisible &&
         activeTab === 'chat' &&
         mchartSubTab === 'direct' &&
         activeDirectChatId === t.chatId &&
@@ -1768,14 +1932,14 @@ function ForumShell() {
       const count = user.uid === t.participantA ? t.unreadCountA : t.unreadCountB;
       return sum + (count > 0 ? count : 0);
     }, 0);
-  }, [user, directChats, activeTab, mchartSubTab, activeDirectChatId, selectedTopicId]);
+  }, [isAppVisible, user, directChats, activeTab, mchartSubTab, activeDirectChatId, selectedTopicId]);
 
   const unreadCounts: NavUnreadCounts = useMemo(() => {
     const countBoard = (board: PrimaryBoard): number => {
-      if (currentlyViewedBoard === board) return 0;
+      if (isAppVisible && currentlyViewedBoard === board) return 0;
       const cutoff = boardLastSeen[board] || 0;
       return topics.filter((t) => {
-        if (t.status === 'private') return false;
+        if (t.status === 'private' || t.status === 'archived') return false;
         if (normalizeBoardCategory(t.category) !== board) return false;
         if (user?.uid && t.authorId === user.uid) return false;
         if (readTopicIds.has(t.id)) return false;
@@ -1785,7 +1949,7 @@ function ForumShell() {
     };
 
     const unreadVideoCount =
-      activeTab === 'video' && !selectedTopicId
+      isAppVisible && activeTab === 'video' && !selectedTopicId
         ? 0
         : videos.filter((v) => {
             if (v.isArchived) return false;
@@ -1795,7 +1959,7 @@ function ForumShell() {
           }).length;
 
     const unvotedOpenPollsCount =
-      activeTab === 'votes' && !selectedTopicId
+      isAppVisible && activeTab === 'votes' && !selectedTopicId
         ? 0
         : polls.filter((p) => {
             if (!isPollEffectivelyOpen(p)) return false;
@@ -1813,6 +1977,7 @@ function ForumShell() {
       votes: unvotedOpenPollsCount,
     };
   }, [
+    isAppVisible,
     currentlyViewedBoard,
     boardLastSeen,
     topics,
@@ -2092,18 +2257,102 @@ function ForumShell() {
     unreadRepliesModCount +
     unreadSignupCount;
 
-  // Sync unread count onto mobile App Icon badge (setAppBadge / clearAppBadge) & document title
+  totalAppUnreadCountRef.current = totalAppUnreadCount;
+  isAppVisibleRef.current = isAppVisible;
+
   useEffect(() => {
-    void updateAppBadgeCount(totalAppUnreadCount);
-    if (typeof document === 'undefined') return;
-    const syncBadge = () => {
-      void updateAppBadgeCount(totalAppUnreadCount);
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    const handleVisibility = () => {
+      const visible = document.visibilityState === 'visible';
+      setIsAppVisible(visible);
+      isAppVisibleRef.current = visible;
+      if (visible) {
+        acknowledgedUnreadTotalRef.current = totalAppUnreadCountRef.current;
+        lastBgBadgeSentRef.current = 0;
+        latestBgAlertSummaryRef.current = '';
+        void dismissPhoneNotifications();
+        if (isMobileDeviceContext() || isStandalonePWA()) {
+          void updateAppBadgeCount(0);
+        }
+      }
     };
-    document.addEventListener('visibilitychange', syncBadge);
+    const handleFocusOrShow = () => {
+      setIsAppVisible(true);
+      isAppVisibleRef.current = true;
+      acknowledgedUnreadTotalRef.current = totalAppUnreadCountRef.current;
+      lastBgBadgeSentRef.current = 0;
+      latestBgAlertSummaryRef.current = '';
+      void dismissPhoneNotifications();
+      if (isMobileDeviceContext() || isStandalonePWA()) {
+        void updateAppBadgeCount(0);
+      }
+    };
+    const handleHide = () => {
+      setIsAppVisible(false);
+      isAppVisibleRef.current = false;
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleFocusOrShow);
+    window.addEventListener('pageshow', handleFocusOrShow);
+    window.addEventListener('pagehide', handleHide);
+
+    // Clear any stale OS tray alerts & mobile icon badge right on opening the app
+    if (document.visibilityState === 'visible') {
+      void dismissPhoneNotifications();
+      if (isMobileDeviceContext() || isStandalonePWA()) {
+        void updateAppBadgeCount(0);
+      }
+    }
+
     return () => {
-      document.removeEventListener('visibilitychange', syncBadge);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleFocusOrShow);
+      window.removeEventListener('pageshow', handleFocusOrShow);
+      window.removeEventListener('pagehide', handleHide);
     };
-  }, [totalAppUnreadCount]);
+  }, []);
+
+  // Sync unread count onto PC & Mobile App Icon badge (clear automatically when opened on mobile; increment & show tray summary while backgrounded)
+  useEffect(() => {
+    const isMobileOrInstalled = isMobileDeviceContext() || isStandalonePWA();
+    if (acknowledgedUnreadTotalRef.current === null) {
+      acknowledgedUnreadTotalRef.current = isAppVisible ? totalAppUnreadCount : 0;
+    } else if (totalAppUnreadCount < acknowledgedUnreadTotalRef.current) {
+      acknowledgedUnreadTotalRef.current = totalAppUnreadCount;
+    }
+
+    if (isAppVisible) {
+      acknowledgedUnreadTotalRef.current = totalAppUnreadCount;
+      lastBgBadgeSentRef.current = 0;
+      void dismissPhoneNotifications();
+      if (isMobileOrInstalled) {
+        void updateAppBadgeCount(0);
+      } else {
+        void updateAppBadgeCount(totalAppUnreadCount);
+      }
+      return;
+    }
+
+    const backgroundUnread = Math.max(
+      0,
+      totalAppUnreadCount - (acknowledgedUnreadTotalRef.current ?? 0)
+    );
+    const badgeValue = isMobileOrInstalled ? backgroundUnread : Math.max(backgroundUnread, totalAppUnreadCount);
+    const hasIncreased = badgeValue > lastBgBadgeSentRef.current;
+    lastBgBadgeSentRef.current = badgeValue;
+
+    void updateAppBadgeCount(badgeValue);
+    if (isMobileOrInstalled && badgeValue > 0) {
+      const summary =
+        latestBgAlertSummaryRef.current ||
+        tr(
+          `Una taarifa ${badgeValue} mpya zinazosubiri Malosha Forums.`,
+          `You have ${badgeValue} new updates on Malosha Forums.`
+        );
+      void syncBackgroundSummaryNotification(badgeValue, summary, { renotify: hasIncreased });
+    }
+  }, [totalAppUnreadCount, isAppVisible, tr]);
 
   // Phone + toast notification when a new video is posted by another member
   useEffect(() => {
@@ -2139,12 +2388,17 @@ function ForumShell() {
           );
         if (typeof document !== 'undefined' && !document.hidden) {
           showToast(`${alertTitle}: ${alertBody.slice(0, 75)}`);
+        } else {
+          latestBgAlertSummaryRef.current = `${alertTitle}: ${alertBody.slice(0, 95)}`;
         }
         void sendPhoneNotification({
           title: alertTitle,
           body: alertBody.slice(0, 140),
           url: `/?tab=video&v=${encodeURIComponent(newestVideo.id)}`,
           tag: `malosha-video-${newestVideo.id}`,
+          badgeCount: !isAppVisibleRef.current
+            ? Math.max(1, totalAppUnreadCountRef.current + 1 - (acknowledgedUnreadTotalRef.current ?? 0))
+            : undefined,
         });
       }
     }
@@ -2349,12 +2603,17 @@ function ForumShell() {
                   : `${actionText}: "${newestUnread.replyPreview.slice(0, 75)}"`,
                 isModerationAlert ? 'error' : 'success'
               );
+            } else {
+              latestBgAlertSummaryRef.current = `${actionText}${topicLabel}`;
             }
             void sendPhoneNotification({
               title: `${actionText}${topicLabel}`,
               body: newestUnread.replyPreview.slice(0, 140),
               topicId: isModerationAlert ? '' : newestUnread.topicId,
               tag: `malosha-reply-${newestUnread.id}`,
+              badgeCount: !isAppVisibleRef.current
+                ? Math.max(1, totalAppUnreadCountRef.current + 1 - (acknowledgedUnreadTotalRef.current ?? 0))
+                : undefined,
             });
           }
         }
@@ -2944,7 +3203,12 @@ function ForumShell() {
 
   const latestMakala = useMemo(() => {
     return topics
-      .filter((t) => normalizeBoardCategory(t.category) === 'Makala')
+      .filter(
+        (t) =>
+          normalizeBoardCategory(t.category) === 'Makala' &&
+          t.status !== 'private' &&
+          t.status !== 'archived'
+      )
       .sort((a, b) => {
         const am = a.createdAt ? a.createdAt.toMillis() : Date.now();
         const bm = b.createdAt ? b.createdAt.toMillis() : Date.now();
@@ -3030,11 +3294,18 @@ function ForumShell() {
             : tr('Chapisho Jipya · Kijiweni', 'New Post · Kijiweni');
       const alertBody = newlyPublished.title.trim() || newlyPublished.body.slice(0, 100);
 
-      showToast(`${alertTitle}: ${alertBody}`);
+      if (typeof document !== 'undefined' && !document.hidden) {
+        showToast(`${alertTitle}: ${alertBody}`);
+      } else {
+        latestBgAlertSummaryRef.current = `${alertTitle}: ${alertBody.slice(0, 95)}`;
+      }
       void sendPhoneNotification({
         title: alertTitle,
         body: alertBody,
         topicId: newlyPublished.id,
+        badgeCount: !isAppVisibleRef.current
+          ? Math.max(1, totalAppUnreadCountRef.current + 1 - (acknowledgedUnreadTotalRef.current ?? 0))
+          : undefined,
       });
     }
   }, [loadingTopics, topics, user?.uid, showToast, tr]);
@@ -3302,16 +3573,27 @@ function ForumShell() {
     if (topic.status === 'archived') return;
     const nextStatus = topic.status === 'private' ? 'open' : 'private';
     await updateTopicStatus(topic.id, nextStatus);
+    const isMakala = normalizeBoardCategory(topic.category) === 'Makala';
     showToast(
       nextStatus === 'private'
-        ? tr(
-            'Chapisho limefungwa na sasa linaonekana kwenye akaunti yako tu.',
-            'Post locked to private and visible only in your account.'
-          )
-        : tr(
-            'Chapisho limefunguliwa tena na sasa linaonekana kwa wote.',
-            'Post unlocked and now visible to everyone.'
-          )
+        ? isMakala
+          ? tr(
+              'Makala imeondolewa kwa wengine — bado inaonekana kwako tu.',
+              'Article hidden from others — still visible to you only.'
+            )
+          : tr(
+              'Chapisho limefungwa na sasa linaonekana kwenye akaunti yako tu.',
+              'Post locked to private and visible only in your account.'
+            )
+        : isMakala
+          ? tr(
+              'Makala imerejeshwa na sasa inaonekana kwa wote.',
+              'Article restored and now visible to everyone.'
+            )
+          : tr(
+              'Chapisho limefunguliwa tena na sasa linaonekana kwa wote.',
+              'Post unlocked and now visible to everyone.'
+            )
     );
   };
 
@@ -3319,16 +3601,28 @@ function ForumShell() {
     if (!isAdmin) return;
     const nextStatus = topic.status === 'archived' ? 'open' : 'archived';
     await updateTopicStatus(topic.id, nextStatus);
+    const isMakala = normalizeBoardCategory(topic.category) === 'Makala';
     if (nextStatus === 'archived') {
-      setSelectedTopicId(null);
+      if (!isMakala) {
+        setSelectedTopicId(null);
+      }
       showToast(
-        tr(
-          'Chapisho limefungwa na kuondolewa kwa watumiaji wengine.',
-          'Post closed and removed from public view.'
-        )
+        isMakala
+          ? tr(
+              'Makala imeondolewa kwa wengine — bado inaonekana kwako tu.',
+              'Article hidden from others — still visible to you only.'
+            )
+          : tr(
+              'Chapisho limefungwa na kuondolewa kwa watumiaji wengine.',
+              'Post closed and removed from public view.'
+            )
       );
     } else {
-      showToast(tr('Chapisho limerejeshwa hewani.', 'Post restored to public view.'));
+      showToast(
+        isMakala
+          ? tr('Makala imerejeshwa kwa watumiaji wote.', 'Article restored for everyone.')
+          : tr('Chapisho limerejeshwa hewani.', 'Post restored to public view.')
+      );
     }
   };
 
@@ -3446,11 +3740,10 @@ function ForumShell() {
   const isAuthView = activeTab === 'auth' && authReady && !user;
   const isFullStageView = isMchartView || isVideoView;
   const lockViewportToScreen = isFullStageView || isAuthView;
-  const [mobileKeyboardOpen, setMobileKeyboardOpen] = useState(false);
+  const { isKeyboardOpen: mobileKeyboardOpen, keyboardHeight } = useMobileKeyboardState();
 
   useEffect(() => {
     if (!lockViewportToScreen || typeof window === 'undefined') {
-      setMobileKeyboardOpen(false);
       return;
     }
 
@@ -3465,25 +3758,10 @@ function ForumShell() {
     body.style.overscrollBehavior = 'none';
     window.scrollTo(0, 0);
 
-    const checkKeyboard = () => {
-      const vv = window.visualViewport;
-      const isMobile = window.innerWidth < 768;
-      const open = Boolean(vv && isMobile && vv.height < window.innerHeight - 130);
-      setMobileKeyboardOpen(open);
-    };
-
-    checkKeyboard();
-    window.addEventListener('resize', checkKeyboard);
-    const vv = window.visualViewport;
-    vv?.addEventListener('resize', checkKeyboard);
-
     return () => {
       html.style.overflow = prevHtmlOverflow;
       body.style.overflow = prevBodyOverflow;
       body.style.overscrollBehavior = prevBodyOverscroll;
-      window.removeEventListener('resize', checkKeyboard);
-      vv?.removeEventListener('resize', checkKeyboard);
-      setMobileKeyboardOpen(false);
     };
   }, [lockViewportToScreen]);
 
@@ -3541,6 +3819,11 @@ function ForumShell() {
       )}
 
       <main
+        style={
+          mobileKeyboardOpen && keyboardHeight > 0 && !isFullStageView && !isAuthView
+            ? { paddingBottom: `${keyboardHeight + 24}px` }
+            : undefined
+        }
         className={`flex-1 ${
           isAuthView
             ? 'h-[100dvh] overflow-hidden'
@@ -3878,6 +4161,7 @@ function ForumShell() {
               setComposerOpen(true);
             }}
             onTogglePrivate={handleTogglePrivateTopic}
+            onToggleArchive={handleToggleArchive}
             onDeleteTopic={handleDeleteTopic}
             onOpenReport={(targetType, targetId, topicId) => {
               if (blockIfSuspended()) return;
@@ -3896,11 +4180,14 @@ function ForumShell() {
             onVisibleTopicIdsChange={setVisibleTopicIds}
             unreadCounts={unreadCounts}
             hideMpollTab={false}
+            hasMoreCloudTopics={hasMoreCloudTopics}
+            loadingMoreCloudTopics={loadingMoreCloudTopics}
+            onLoadMoreCloudTopics={handleLoadMoreCloudTopics}
           />
         )}
       </main>
 
-      {!isFullStageView && !isAuthView && (
+      {!isFullStageView && !isAuthView && !mobileKeyboardOpen && (
         <footer
           className={`border-t py-6 pb-20 md:pb-6 transition-colors duration-300 ${
             isMpollDarkBlue
@@ -3976,7 +4263,7 @@ function ForumShell() {
           activeTab={activeTab}
           onSelectTab={handleSelectTab}
           unreadCounts={unreadCounts}
-          hidden={isMchartView && mobileKeyboardOpen}
+          hidden={mobileKeyboardOpen}
           darkTheme={isVideoView}
           hideVideoTab={hideVideoTabForCurrentUser}
           hideMpollTab={false}
@@ -3988,7 +4275,7 @@ function ForumShell() {
       )}
 
       {/* Floating Add Topic / Post Action Icon */}
-      {!isFullStageView && !isAuthView && activeTab !== 'votes' && (
+      {!isFullStageView && !isAuthView && activeTab !== 'votes' && !mobileKeyboardOpen && (
         <button
           type="button"
           onClick={handleOpenNewTopic}

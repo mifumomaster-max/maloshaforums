@@ -211,7 +211,7 @@ export async function downloadNoteAsPdf(note: MchartNote): Promise<void> {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9.2);
     doc.setTextColor(7, 94, 84);
-    doc.text('MCHART OFFICIAL STUDY NOTES & DIGITAL ARCHIVE', centerX, 32.8, { align: 'center' });
+    doc.text('MCHART OFFICIAL STUDY SLIDE & DIGITAL ARCHIVE', centerX, 32.8, { align: 'center' });
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8.2);
@@ -242,7 +242,7 @@ export async function downloadNoteAsPdf(note: MchartNote): Promise<void> {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8);
     doc.setTextColor(100, 116, 139);
-    doc.text('MALOSHA FORUMS  ·  MCHART OFFICIAL NOTES', centerX, 9.5, { align: 'center' });
+    doc.text('MALOSHA FORUMS  ·  MCHART OFFICIAL SLIDE', centerX, 9.5, { align: 'center' });
     doc.setDrawColor(226, 232, 240);
     doc.setLineWidth(0.25);
     doc.line(marginX, 12, pageWidth - marginX, 12);
@@ -250,7 +250,7 @@ export async function downloadNoteAsPdf(note: MchartNote): Promise<void> {
   };
 
   // Pre-calculate centered official document title card
-  const cleanTitle = normalizePdfText(note.title) || 'Notes za Malosha Forums';
+  const cleanTitle = normalizePdfText(note.title) || 'Slide za Malosha Forums';
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(15.5);
   const titleLines = doc.splitTextToSize(cleanTitle, maxContentWidth - 12) as string[];

@@ -267,7 +267,7 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
             <button
               type="button"
               onClick={() => handleToggleComments(false)}
-              className="block text-left font-display text-[19px] font-bold leading-[1.28] tracking-[-0.015em] text-[#0E2640] hover:text-[#1D4E89] sm:text-[21px] [text-wrap:balance]"
+              className="block w-full text-left font-display text-[19px] font-bold leading-[1.28] tracking-[-0.015em] text-[#0E2640] hover:text-[#1D4E89] sm:text-[21px]"
             >
               {post.title}
             </button>
@@ -311,6 +311,12 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
               altBase={post.title.trim() || tr('Picha iliyochapishwa Kijiweni', 'Kijiweni photo post')}
               initialPreviewLimit={6}
               className={post.title.trim() || post.body.trim() ? 'mt-4' : ''}
+              enableDoubleTapLike
+              onDoubleTapLike={() => {
+                if (!hasVoted) {
+                  onToggleVote(post);
+                }
+              }}
             />
           )}
 

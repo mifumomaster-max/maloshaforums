@@ -170,7 +170,7 @@
         "senderName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "senderPhoto": { "type": "string", "maxLength": 500 },
         "text": { "type": "string", "maxLength": 2000 },
-        "attachmentType": { "type": "string", "enum": ["none", "image", "document"] },
+        "attachmentType": { "type": "string", "enum": ["none", "image", "document", "audio"] },
         "attachmentUrl": { "type": "string", "maxLength": 500 },
         "attachmentName": { "type": "string", "maxLength": 140 },
         "attachmentSize": { "type": "integer" },
@@ -179,6 +179,7 @@
         "replyToSenderName": { "type": "string", "maxLength": 80 },
         "replyToPreview": { "type": "string", "maxLength": 160 },
         "isDeleted": { "type": "boolean" },
+        "deletedForUids": { "type": "array", "description": "UIDs of users who deleted this message for themselves only." },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -358,6 +359,7 @@
         "unreadCountB": { "type": "integer" },
         "lastReadAtA": { "type": "string", "format": "date-time" },
         "lastReadAtB": { "type": "string", "format": "date-time" },
+        "blockedByUids": { "type": "array", "description": "Optional list of participant UIDs (max 2) who blocked this 1-on-1 conversation." },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -380,7 +382,7 @@
         "senderName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "senderPhoto": { "type": "string", "maxLength": 500 },
         "text": { "type": "string", "maxLength": 2000 },
-        "attachmentType": { "type": "string", "enum": ["none", "image", "document"] },
+        "attachmentType": { "type": "string", "enum": ["none", "image", "document", "audio"] },
         "attachmentUrl": { "type": "string", "maxLength": 500 },
         "attachmentName": { "type": "string", "maxLength": 140 },
         "attachmentSize": { "type": "integer" },
@@ -389,6 +391,7 @@
         "replyToSenderName": { "type": "string", "maxLength": 80 },
         "replyToPreview": { "type": "string", "maxLength": 160 },
         "isDeleted": { "type": "boolean" },
+        "deletedForUids": { "type": "array", "description": "UIDs of participants who deleted this message for themselves only." },
         "viewOnce": { "type": "boolean" },
         "viewOnceConsumed": { "type": "boolean" },
         "viewOnceOpenedAt": { "type": "string", "format": "date-time" },
@@ -790,6 +793,33 @@
       "required": [
         "pollId", "userId", "selectedOptionIds"
       ]
+    },
+    "ChatFileMeta": {
+      "title": "ChatFileMeta",
+      "description": "Metadata for Mchart chat documents and Slide PDFs stored directly in Firestore.",
+      "type": "object",
+      "properties": {
+        "fileId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "uploaderId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "fileName": { "type": "string", "maxLength": 140 },
+        "fileSize": { "type": "integer" },
+        "mimeType": { "type": "string", "maxLength": 120 },
+        "chunkCount": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["fileId", "uploaderId", "fileName", "chunkCount"]
+    },
+    "ChatFileChunk": {
+      "title": "ChatFileChunk",
+      "description": "Base64 binary chunk belonging to a ChatFileMeta document.",
+      "type": "object",
+      "properties": {
+        "fileId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "uploaderId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "chunkIndex": { "type": "integer" },
+        "data": { "type": "string" }
+      },
+      "required": ["fileId", "uploaderId", "chunkIndex", "data"]
     }
   },
   "firestore": {
@@ -932,6 +962,14 @@
     "/poll_tournaments/{tournamentId}": {
       "schema": { "$ref": "#/entities/PollTournament" },
       "description": "Multi-stage deterministic elimination elections linked to Mpoll ballot rounds."
+    },
+    "/chat_files/{fileId}": {
+      "schema": { "$ref": "#/entities/ChatFileMeta" },
+      "description": "Metadata for Mchart PDFs and chat documents stored reliably in Firestore."
+    },
+    "/chat_files/{fileId}/chunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/ChatFileChunk" },
+      "description": "Base64 file chunks for reliable signed-in Mchart downloads without HTTP 401 errors."
     }
   }
 }

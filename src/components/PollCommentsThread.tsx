@@ -26,6 +26,7 @@ import { AuthPromptReason, Poll, PollComment } from '../types';
 import { AuthorName, Avatar, OnlineStatusPill } from './Avatar';
 import { renderLinkedInline } from './RichText';
 import { AuthorVerificationBadge } from './VerificationBadge';
+import { scrollCommentInputAboveKeyboard } from '../utils/mobileKeyboard';
 
 interface PollCommentsThreadProps {
   poll: Poll;
@@ -86,7 +87,7 @@ export const PollCommentsThread: React.FC<PollCommentsThreadProps> = ({
   const [comments, setComments] = useState<PollComment[]>([]);
   const [loading, setLoading] = useState(true);
   const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
-  const [sortMode, setSortMode] = useState<'newest' | 'top' | 'oldest'>('newest');
+  const [sortMode, setSortMode] = useState<'newest' | 'top' | 'oldest'>('oldest');
 
   // Top-level Facebook-style composer
   const [newComment, setNewComment] = useState('');
@@ -164,6 +165,8 @@ export const PollCommentsThread: React.FC<PollCommentsThreadProps> = ({
 
   const threadScrollRef = useRef<HTMLDivElement>(null);
   const [showScrollTopBtn, setShowScrollTopBtn] = useState(false);
+  const didInitialScrollRef = useRef(false);
+  const prevCommentCountRef = useRef(0);
 
   const handleThreadScroll = () => {
     const el = threadScrollRef.current;
@@ -172,11 +175,34 @@ export const PollCommentsThread: React.FC<PollCommentsThreadProps> = ({
   };
 
   useEffect(() => {
+    didInitialScrollRef.current = false;
+    prevCommentCountRef.current = 0;
+  }, [poll.id]);
+
+  useEffect(() => {
+    if (loading) return;
+    const el = threadScrollRef.current;
+    if (!el) return;
+
+    const countIncreased = comments.length > prevCommentCountRef.current;
+    prevCommentCountRef.current = comments.length;
+
+    if (sortMode === 'oldest' && (!didInitialScrollRef.current || countIncreased)) {
+      didInitialScrollRef.current = true;
+      window.requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight;
+      });
+    } else if (!didInitialScrollRef.current) {
+      didInitialScrollRef.current = true;
+    }
+  }, [loading, comments.length, sortMode]);
+
+  useEffect(() => {
     if (activeReplyRootId) {
-      const t = window.setTimeout(
-        () => nestedInputRef.current?.focus({ preventScroll: true }),
-        40
-      );
+      const t = window.setTimeout(() => {
+        nestedInputRef.current?.focus({ preventScroll: true });
+        scrollCommentInputAboveKeyboard(nestedInputRef.current);
+      }, 40);
       return () => window.clearTimeout(t);
     }
   }, [activeReplyRootId]);
@@ -671,9 +697,9 @@ export const PollCommentsThread: React.FC<PollCommentsThreadProps> = ({
           <div className="inline-flex items-center gap-1 rounded-lg bg-white border border-slate-200 p-0.5">
             {(
               [
+                { id: 'oldest', label: tr('Mtiririko', 'Chronological') },
                 { id: 'newest', label: tr('Mpya Zaidi', 'Newest') },
                 { id: 'top', label: tr('Pendwa Zaidi', 'Top') },
-                { id: 'oldest', label: tr('Ya Kwanza', 'Oldest') },
               ] as const
             ).map((opt) => (
               <button
@@ -692,99 +718,6 @@ export const PollCommentsThread: React.FC<PollCommentsThreadProps> = ({
           </div>
         )}
       </div>
-
-      {/* Main Facebook-style Comment Composer */}
-      {!isOpen ? (
-        <p className="rounded-lg bg-slate-100 border border-slate-200 px-3.5 py-2.5 text-xs text-slate-600">
-          {tr(
-            'Mjadala huu umefungwa na haupokei maoni mapya kwa sasa.',
-            'This discussion has closed and is no longer accepting new comments.'
-          )}
-        </p>
-      ) : isSuspended ? (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs font-medium text-red-800">
-          {tr(
-            'Akaunti yako imefungwa — huwezi kuandika maoni, kujibu, au kupenda.',
-            'Your account is suspended — you cannot comment, reply, or like.'
-          )}
-        </p>
-      ) : !userUid ? (
-        <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-amber-200 bg-amber-50/70 px-3.5 py-2.5">
-          <div className="min-w-0 flex-1">
-            <div className="text-xs font-bold text-[#0F172A]">
-              {tr(
-                'Jisajili au Endelea na Google Kutoa Maoni',
-                'Sign Up or Continue with Google to Join Discussion'
-              )}
-            </div>
-            <p className="text-[11px] text-slate-600 mt-0.5">
-              {tr(
-                'Unaweza kusoma maoni yote bure. Ili uandike maoni yako au ujibu wengine, ingia na akaunti yako.',
-                'Read all comments freely. Sign in with your account to post a comment, reply, or like.'
-              )}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => onSignIn('comment')}
-            className="inline-flex items-center gap-1.5 min-h-[36px] rounded-lg bg-[#1D4E89] px-3.5 py-1.5 text-xs font-bold text-white hover:bg-[#163A5F] whitespace-nowrap shrink-0"
-          >
-            <UserCheck size={14} />
-            {tr('Endelea na Google / Jisajili', 'Continue with Google / Sign Up')}
-          </button>
-        </div>
-      ) : (
-        <form onSubmit={handleSubmitMainComment} className="flex items-start gap-2.5">
-          <div className="pt-0.5 shrink-0">
-            <Avatar
-              name={userDisplayName}
-              photoURL={userPhoto}
-              uid={userUid}
-              showOnlineIndicator
-              size="sm"
-            />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-white px-3.5 py-2 focus-within:border-[#1D4E89] focus-within:ring-2 focus-within:ring-[#1D4E89]/15">
-              <textarea
-                ref={mainInputRef}
-                rows={1}
-                maxLength={4000}
-                value={newComment}
-                onChange={(e) => {
-                  setNewComment(e.target.value);
-                  if (mainError) setMainError('');
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    void handleSubmitMainComment();
-                  }
-                }}
-                placeholder={tr(
-                  'Toa maoni yako kuhusu swali hili...',
-                  'Share your thoughts on this question...'
-                )}
-                aria-label={tr('Andika maoni yako', 'Write your comment')}
-                className="max-h-28 min-h-[24px] w-full resize-none bg-transparent text-sm leading-snug text-slate-900 placeholder:text-slate-400 focus:outline-none"
-              />
-              <button
-                type="submit"
-                disabled={submittingMain || newComment.trim().length < 2}
-                aria-label={tr('Tuma maoni', 'Send comment')}
-                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#1D4E89] text-white transition-colors hover:bg-[#163A5F] disabled:bg-slate-200 disabled:text-slate-400"
-              >
-                <Send className="h-3.5 w-3.5" aria-hidden="true" />
-              </button>
-            </div>
-            {mainError && (
-              <p role="alert" className="mt-1 px-2 text-xs text-red-600">
-                {mainError}
-              </p>
-            )}
-          </div>
-        </form>
-      )}
 
       {/* Self-Contained Mchart-Style Scrollable Thread Box */}
       <div className="relative">
@@ -953,6 +886,7 @@ export const PollCommentsThread: React.FC<PollCommentsThreadProps> = ({
                             rows={1}
                             maxLength={3900}
                             value={nestedReplyText}
+                            onFocus={(e) => scrollCommentInputAboveKeyboard(e.currentTarget)}
                             onChange={(e) => setNestedReplyText(e.target.value)}
                             onKeyDown={(e) => {
                               if (e.key === 'Enter' && !e.shiftKey) {
@@ -1008,6 +942,100 @@ export const PollCommentsThread: React.FC<PollCommentsThreadProps> = ({
           </button>
         )}
       </div>
+
+      {/* Bottom Comment Input (Latest message stays directly above typing bar like Kijiweni) */}
+      {!isOpen ? (
+        <p className="rounded-lg bg-slate-100 border border-slate-200 px-3.5 py-2.5 text-xs text-slate-600">
+          {tr(
+            'Mjadala huu umefungwa na haupokei maoni mapya kwa sasa.',
+            'This discussion has closed and is no longer accepting new comments.'
+          )}
+        </p>
+      ) : isSuspended ? (
+        <p className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs font-medium text-red-800">
+          {tr(
+            'Akaunti yako imefungwa — huwezi kuandika maoni, kujibu, au kupenda.',
+            'Your account is suspended — you cannot comment, reply, or like.'
+          )}
+        </p>
+      ) : !userUid ? (
+        <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-amber-200 bg-amber-50/70 px-3.5 py-2.5">
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-bold text-[#0F172A]">
+              {tr(
+                'Jisajili au Endelea na Google Kutoa Maoni',
+                'Sign Up or Continue with Google to Join Discussion'
+              )}
+            </div>
+            <p className="text-[11px] text-slate-600 mt-0.5">
+              {tr(
+                'Unaweza kusoma maoni yote bure. Ili uandike maoni yako au ujibu wengine, ingia na akaunti yako.',
+                'Read all comments freely. Sign in with your account to post a comment, reply, or like.'
+              )}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => onSignIn('comment')}
+            className="inline-flex items-center gap-1.5 min-h-[36px] rounded-lg bg-[#1D4E89] px-3.5 py-1.5 text-xs font-bold text-white hover:bg-[#163A5F] whitespace-nowrap shrink-0"
+          >
+            <UserCheck size={14} />
+            {tr('Endelea na Google / Jisajili', 'Continue with Google / Sign Up')}
+          </button>
+        </div>
+      ) : (
+        <form onSubmit={handleSubmitMainComment} className="flex items-start gap-2.5">
+          <div className="pt-0.5 shrink-0">
+            <Avatar
+              name={userDisplayName}
+              photoURL={userPhoto}
+              uid={userUid}
+              showOnlineIndicator
+              size="sm"
+            />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-white px-3.5 py-2 focus-within:border-[#1D4E89] focus-within:ring-2 focus-within:ring-[#1D4E89]/15">
+              <textarea
+                ref={mainInputRef}
+                rows={1}
+                maxLength={4000}
+                value={newComment}
+                onFocus={(e) => scrollCommentInputAboveKeyboard(e.currentTarget)}
+                onChange={(e) => {
+                  setNewComment(e.target.value);
+                  if (mainError) setMainError('');
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    void handleSubmitMainComment();
+                  }
+                }}
+                placeholder={tr(
+                  'Toa maoni yako kuhusu swali hili...',
+                  'Share your thoughts on this question...'
+                )}
+                aria-label={tr('Andika maoni yako', 'Write your comment')}
+                className="max-h-28 min-h-[24px] w-full resize-none bg-transparent text-sm leading-snug text-slate-900 placeholder:text-slate-400 focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={submittingMain || newComment.trim().length < 2}
+                aria-label={tr('Tuma maoni', 'Send comment')}
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#1D4E89] text-white transition-colors hover:bg-[#163A5F] disabled:bg-slate-200 disabled:text-slate-400"
+              >
+                <Send className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </div>
+            {mainError && (
+              <p role="alert" className="mt-1 px-2 text-xs text-red-600">
+                {mainError}
+              </p>
+            )}
+          </div>
+        </form>
+      )}
     </div>
   );
 };

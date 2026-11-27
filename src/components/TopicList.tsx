@@ -36,6 +36,11 @@ import { MakalaNewsroom } from './MakalaNewsroom';
 import { NavIconSection, NavSectionIcon } from './NavIcons';
 import { AuthorVerificationBadge } from './VerificationBadge';
 import { hasPendingStudioMakalaImport } from '../utils/studioMakalaBridge';
+import { sortTopicsList } from '../utils/topicSort';
+
+const INITIAL_VISIBLE_POSTS = 8;
+const SCROLL_STEP_POSTS = 8;
+const KIJIWENI_GATE_BATCH = 100;
 
 interface TopicListProps {
   topics: Topic[];
@@ -94,6 +99,7 @@ interface TopicListProps {
   onClearSharedKijiweniPayload?: (id: number) => void;
   onEditTopic: (topic: Topic) => void;
   onTogglePrivate?: (topic: Topic) => void;
+  onToggleArchive?: (topic: Topic) => void;
   onDeleteTopic: (topic: Topic) => void;
   onOpenReport: (targetType: 'topic' | 'reply', targetId: string, topicId: string) => void;
   onAuthorClick?: (author: { uid: string; displayName: string; photoURL?: string }) => void;
@@ -111,6 +117,9 @@ interface TopicListProps {
   onVisibleTopicIdsChange?: (ids: string[]) => void;
   unreadCounts?: NavUnreadCounts;
   hideMpollTab?: boolean;
+  hasMoreCloudTopics?: boolean;
+  loadingMoreCloudTopics?: boolean;
+  onLoadMoreCloudTopics?: () => void;
 }
 
 function getBoardIconSection(board: PrimaryBoard): NavIconSection {
@@ -154,6 +163,7 @@ export const TopicList: React.FC<TopicListProps> = ({
   onClearSharedKijiweniPayload,
   onEditTopic,
   onTogglePrivate,
+  onToggleArchive,
   onDeleteTopic,
   onOpenReport,
   onAuthorClick,
@@ -165,6 +175,9 @@ export const TopicList: React.FC<TopicListProps> = ({
   onVisibleTopicIdsChange,
   unreadCounts,
   hideMpollTab = false,
+  hasMoreCloudTopics = false,
+  loadingMoreCloudTopics = false,
+  onLoadMoreCloudTopics,
 }) => {
   const getBoardUnread = (board: PrimaryBoard): number => {
     if (!unreadCounts) return 0;
@@ -176,6 +189,7 @@ export const TopicList: React.FC<TopicListProps> = ({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const inlineComposerAnchorRef = useRef<HTMLDivElement>(null);
   const fursaComposerAnchorRef = useRef<HTMLDivElement>(null);
+  const scrollSentinelRef = useRef<HTMLDivElement>(null);
   const [selectedJobType, setSelectedJobType] = useState<string>('all');
   const [onlyPrivate, setOnlyPrivate] = useState(false);
   const [inlineComposerOpen, setInlineComposerOpen] = useState(false);
@@ -183,7 +197,9 @@ export const TopicList: React.FC<TopicListProps> = ({
   const [makalaInlineOpen, setMakalaInlineOpen] = useState(false);
   const [makalaExpandTrigger, setMakalaExpandTrigger] = useState(0);
   const lastHandledExpandRef = useRef<number>(inlineExpandRequest);
-  const [visibleCount, setVisibleCount] = useState<number>(8);
+  const [mixSeed, setMixSeed] = useState<number>(1);
+  const [visibleCount, setVisibleCount] = useState<number>(INITIAL_VISIBLE_POSTS);
+  const [scrollCap, setScrollCap] = useState<number>(KIJIWENI_GATE_BATCH);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -333,37 +349,14 @@ export const TopicList: React.FC<TopicListProps> = ({
       return true;
     });
 
-    const getCreatedMillis = (t: Topic) => (t.createdAt ? t.createdAt.toMillis() : Date.now());
-    const getActivityMillis = (t: Topic) =>
-      t.lastActivityAt ? t.lastActivityAt.toMillis() : getCreatedMillis(t);
-
-    return [...list].sort((a, b) => {
-      if (sortMode === 'votes') {
-        if (b.upvotesCount !== a.upvotesCount) {
-          return b.upvotesCount - a.upvotesCount;
-        }
-        if (b.repliesCount !== a.repliesCount) {
-          return b.repliesCount - a.repliesCount;
-        }
-        return getCreatedMillis(b) - getCreatedMillis(a);
-      }
-
-      if (sortMode === 'oldest') {
-        const diff = getCreatedMillis(a) - getCreatedMillis(b);
-        if (diff !== 0) return diff;
-        return a.id.localeCompare(b.id);
-      }
-
-      const diff = getCreatedMillis(b) - getCreatedMillis(a);
-      if (diff !== 0) return diff;
-      return getActivityMillis(b) - getActivityMillis(a);
-    });
+    return sortTopicsList(list, sortMode, mixSeed);
   }, [
     topics,
     activeTab,
     effectiveCategory,
     selectedJobType,
     sortMode,
+    mixSeed,
     searchQuery,
     onlyMine,
     onlyPrivate,
@@ -371,15 +364,69 @@ export const TopicList: React.FC<TopicListProps> = ({
   ]);
 
   useEffect(() => {
-    setVisibleCount(8);
+    setVisibleCount(INITIAL_VISIBLE_POSTS);
+    setScrollCap(KIJIWENI_GATE_BATCH);
   }, [activeTab, effectiveCategory, selectedJobType, sortMode, searchQuery, onlyMine, onlyPrivate]);
 
   const paginatedTopics = useMemo(
-    () => filteredTopics.slice(0, visibleCount),
-    [filteredTopics, visibleCount]
+    () => filteredTopics.slice(0, Math.min(visibleCount, scrollCap)),
+    [filteredTopics, visibleCount, scrollCap]
   );
 
   const remainingTopicsCount = Math.max(0, filteredTopics.length - paginatedTopics.length);
+  const reachedGateCap =
+    paginatedTopics.length >= scrollCap && (remainingTopicsCount > 0 || hasMoreCloudTopics);
+  const canAutoScrollMore =
+    !reachedGateCap &&
+    (paginatedTopics.length < Math.min(filteredTopics.length, scrollCap) || hasMoreCloudTopics);
+
+  useEffect(() => {
+    if (effectiveCategory === 'Makala' || loading || !canAutoScrollMore) return;
+    const target = scrollSentinelRef.current;
+    if (!target || typeof IntersectionObserver === 'undefined') return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        setVisibleCount((prev) => {
+          const cap = Math.min(filteredTopics.length, scrollCap);
+          if (prev < cap) {
+            return Math.min(cap, prev + SCROLL_STEP_POSTS);
+          }
+          return prev;
+        });
+        if (
+          filteredTopics.length < scrollCap &&
+          hasMoreCloudTopics &&
+          !loadingMoreCloudTopics
+        ) {
+          onLoadMoreCloudTopics?.();
+        }
+      },
+      { rootMargin: '500px 0px' }
+    );
+
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [
+    effectiveCategory,
+    loading,
+    canAutoScrollMore,
+    filteredTopics.length,
+    scrollCap,
+    hasMoreCloudTopics,
+    loadingMoreCloudTopics,
+    onLoadMoreCloudTopics,
+  ]);
+
+  const handleUnlockNextBatch = () => {
+    const nextCap = scrollCap + KIJIWENI_GATE_BATCH;
+    setScrollCap(nextCap);
+    setVisibleCount((prev) => Math.min(nextCap, prev + SCROLL_STEP_POSTS));
+    if (filteredTopics.length - paginatedTopics.length < 25 && hasMoreCloudTopics && !loadingMoreCloudTopics) {
+      onLoadMoreCloudTopics?.();
+    }
+  };
 
   useEffect(() => {
     if (!onVisibleTopicIdsChange || effectiveCategory === 'Makala') return;
@@ -452,11 +499,14 @@ export const TopicList: React.FC<TopicListProps> = ({
         userUid={userUid}
         userDisplayName={userDisplayName}
         userPhoto={userPhoto}
+        isAdmin={isAdmin}
         isSuspended={isSuspended}
         votedTopicIds={votedTopicIds}
         onToggleVote={onToggleVote}
         onShareTopic={onShareTopic}
         onOpenTopic={onOpenTopic}
+        onTogglePrivate={onTogglePrivate}
+        onToggleArchive={onToggleArchive}
         onCreateMakalaPost={onCreateMakalaPost}
         onSignIn={onSignIn}
         onToast={onToast}
@@ -629,19 +679,25 @@ export const TopicList: React.FC<TopicListProps> = ({
             <div
               role="group"
               aria-label={tr('Mpangilio wa mada', 'Topic sorting')}
-              className="grid grid-cols-3 rounded-lg border border-slate-300 bg-white p-1 sm:inline-flex shrink-0"
+              className="grid grid-cols-2 rounded-lg border border-slate-300 bg-white p-1 sm:inline-flex shrink-0"
             >
               {(
                 [
                   { id: 'newest', label: tr('Mpya Zaidi', 'Newest') },
                   { id: 'votes', label: tr('Pendwa Zaidi', 'Most Liked') },
                   { id: 'oldest', label: tr('Zilizotangulia', 'Earlier') },
+                  { id: 'mixed', label: tr('Mchanganyiko', 'Mixed') },
                 ] as { id: SortMode; label: string }[]
               ).map((opt) => (
                 <button
                   key={opt.id}
                   type="button"
-                  onClick={() => onChangeSort(opt.id)}
+                  onClick={() => {
+                    if (opt.id === 'mixed') {
+                      setMixSeed((s) => s + 1);
+                    }
+                    onChangeSort(opt.id);
+                  }}
                   className={`min-h-[36px] rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 sm:px-3 ${
                     sortMode === opt.id
                       ? 'bg-[#1D4E89] text-white'
@@ -929,25 +985,36 @@ export const TopicList: React.FC<TopicListProps> = ({
                   onRequestConfirm={onRequestConfirm}
                 />
               ))}
-              {remainingTopicsCount > 0 && (
+              {canAutoScrollMore && (
+                <div ref={scrollSentinelRef} className="flex flex-col items-center gap-2 py-3 text-center">
+                  <span className="text-xs font-medium text-slate-400">
+                    {loadingMoreCloudTopics
+                      ? tr('Inapakia fursa kutoka wingu...', 'Loading from cloud...')
+                      : tr('Inapakia kadri unavyoshuka...', 'Loading as you scroll...')}
+                  </span>
+                </div>
+              )}
+              {reachedGateCap && (
                 <div className="flex justify-center pt-2">
                   <button
                     type="button"
-                    onClick={() => setVisibleCount((prev) => prev + 8)}
+                    onClick={handleUnlockNextBatch}
                     className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-xs font-bold text-slate-800 transition-colors hover:border-[#1D4E89] hover:text-[#1D4E89]"
                   >
                     <span>
-                      {tr(
-                        `Onyesha Fursa Zaidi (${remainingTopicsCount} zimesalia)`,
-                        `Load More Opportunities (${remainingTopicsCount} remaining)`
-                      )}
+                      {remainingTopicsCount > 0
+                        ? tr(
+                            `Onyesha machapisho zaidi (${remainingTopicsCount} yamesalia)`,
+                            `Show more posts (${remainingTopicsCount} remaining)`
+                          )
+                        : tr('Onyesha machapisho zaidi', 'Show more posts')}
                     </span>
                   </button>
                 </div>
               )}
             </div>
           ) : effectiveCategory === 'Kijiweni' ? (
-            /* ── KIJIWENI: Facebook-Style Feed with Threadlike Comments ─ */
+            /* ── KIJIWENI: Cloud-First Lazy Feed (100 posts progressive scroll before Load More) ─ */
             <div className="space-y-4">
               {paginatedTopics.map((post) => (
                 <KijiweniPostCard
@@ -972,18 +1039,29 @@ export const TopicList: React.FC<TopicListProps> = ({
                   onRequestConfirm={onRequestConfirm}
                 />
               ))}
-              {remainingTopicsCount > 0 && (
+              {canAutoScrollMore && (
+                <div ref={scrollSentinelRef} className="flex flex-col items-center gap-2 py-3 text-center">
+                  <span className="text-xs font-medium text-slate-400">
+                    {loadingMoreCloudTopics
+                      ? tr('Inapakia machapisho kutoka wingu...', 'Loading posts from cloud...')
+                      : tr('Inapakia machapisho kadri unavyoshuka...', 'Loading posts as you scroll...')}
+                  </span>
+                </div>
+              )}
+              {reachedGateCap && (
                 <div className="flex justify-center pt-2">
                   <button
                     type="button"
-                    onClick={() => setVisibleCount((prev) => prev + 8)}
+                    onClick={handleUnlockNextBatch}
                     className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-xs font-bold text-slate-800 transition-colors hover:border-[#1D4E89] hover:text-[#1D4E89]"
                   >
                     <span>
-                      {tr(
-                        `Onyesha Machapisho Zaidi (${remainingTopicsCount} yamesalia)`,
-                        `Load More Posts (${remainingTopicsCount} remaining)`
-                      )}
+                      {remainingTopicsCount > 0
+                        ? tr(
+                            `Onyesha machapisho zaidi (${remainingTopicsCount} yamesalia)`,
+                            `Show more posts (${remainingTopicsCount} remaining)`
+                          )
+                        : tr('Onyesha machapisho zaidi', 'Show more posts')}
                     </span>
                   </button>
                 </div>
@@ -1257,18 +1335,29 @@ export const TopicList: React.FC<TopicListProps> = ({
                   );
                 })}
               </div>
-              {remainingTopicsCount > 0 && (
+              {canAutoScrollMore && (
+                <div ref={scrollSentinelRef} className="border-t border-slate-200 bg-slate-50/70 p-3 text-center">
+                  <span className="text-xs font-medium text-slate-400">
+                    {loadingMoreCloudTopics
+                      ? tr('Inapakia mada kutoka wingu...', 'Loading topics from cloud...')
+                      : tr('Inapakia kadri unavyoshuka...', 'Loading as you scroll...')}
+                  </span>
+                </div>
+              )}
+              {reachedGateCap && (
                 <div className="border-t border-slate-200 bg-slate-50/70 p-3 text-center">
                   <button
                     type="button"
-                    onClick={() => setVisibleCount((prev) => prev + 8)}
+                    onClick={handleUnlockNextBatch}
                     className="inline-flex min-h-[42px] items-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-2 text-xs font-bold text-[#163A5F] transition-colors hover:border-[#1D4E89] hover:bg-sky-50/50"
                   >
                     <span>
-                      {tr(
-                        `Onyesha Mada Zaidi (${remainingTopicsCount} zimesalia)`,
-                        `Load More Topics (${remainingTopicsCount} remaining)`
-                      )}
+                      {remainingTopicsCount > 0
+                        ? tr(
+                            `Onyesha machapisho zaidi (${remainingTopicsCount} yamesalia)`,
+                            `Show more posts (${remainingTopicsCount} remaining)`
+                          )
+                        : tr('Onyesha machapisho zaidi', 'Show more posts')}
                     </span>
                   </button>
                 </div>

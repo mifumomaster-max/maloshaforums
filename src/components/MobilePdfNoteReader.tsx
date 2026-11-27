@@ -14,6 +14,8 @@ import {
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
+import { decodeMaloshaProtectedBytes } from '../services/cloudinaryService';
+import { isFirestoreChatFileUrl, readFirestoreChatFileBytes } from '../services/chatFileStorage';
 import { useLanguage } from '../context/LanguageContext';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
@@ -215,6 +217,7 @@ export const MobilePdfNoteReader: React.FC<MobilePdfNoteReaderProps> = ({
   const [numPages, setNumPages] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
+  const [accessBlocked401, setAccessBlocked401] = useState(false);
 
   const [cloudinaryPageUrls, setCloudinaryPageUrls] = useState<string[]>([]);
   const [blobPreviewUrl, setBlobPreviewUrl] = useState('');
@@ -243,6 +246,7 @@ export const MobilePdfNoteReader: React.FC<MobilePdfNoteReaderProps> = ({
 
     setLoading(true);
     setLoadError(false);
+    setAccessBlocked401(false);
     setExtractedPages([]);
     setCloudinaryPageUrls([]);
     setCachedPdfBlob(null);
@@ -252,34 +256,97 @@ export const MobilePdfNoteReader: React.FC<MobilePdfNoteReaderProps> = ({
     setReaderMode('pages');
 
     const load = async () => {
-      try {
-        // Strategy 1: Fetch full PDF bytes directly over CORS so pdfjs doesn't fail on range/stream headers
-        const res = await fetch(pdfUrl, { mode: 'cors', credentials: 'omit' });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const arrayBuf = await res.arrayBuffer();
-        if (cancelled) return;
+      if (isFirestoreChatFileUrl(pdfUrl)) {
+        try {
+          const stored = await readFirestoreChatFileBytes(pdfUrl);
+          if (cancelled) return;
+          const decodedBytes = decodeMaloshaProtectedBytes(stored.bytes);
+          const decodedBuffer = decodedBytes.buffer.slice(
+            decodedBytes.byteOffset,
+            decodedBytes.byteOffset + decodedBytes.byteLength
+          ) as ArrayBuffer;
 
-        const blob = new Blob([arrayBuf], { type: 'application/pdf' });
-        createdBlobUrl = URL.createObjectURL(blob);
-        setCachedPdfBlob(blob);
-        setBlobPreviewUrl(createdBlobUrl);
+          const blob = new Blob([decodedBuffer], { type: 'application/pdf' });
+          createdBlobUrl = URL.createObjectURL(blob);
+          setCachedPdfBlob(blob);
+          setBlobPreviewUrl(createdBlobUrl);
 
-        loadingTask = pdfjsLib.getDocument({
-          data: new Uint8Array(arrayBuf),
-          disableRange: true,
-          disableStream: true,
-        });
-        const loadedDoc = await loadingTask.promise;
-        if (cancelled) {
-          void loadingTask.destroy();
+          loadingTask = pdfjsLib.getDocument({
+            data: new Uint8Array(decodedBuffer),
+            disableRange: true,
+            disableStream: true,
+          });
+          const loadedDoc = await loadingTask.promise;
+          if (cancelled) {
+            void loadingTask.destroy();
+            return;
+          }
+          setPdfDoc(loadedDoc);
+          setNumPages(loadedDoc.numPages);
+          setLoading(false);
+          return;
+        } catch {
+          if (!cancelled) {
+            setLoadError(true);
+            setLoading(false);
+          }
           return;
         }
-        setPdfDoc(loadedDoc);
-        setNumPages(loadedDoc.numPages);
-        setLoading(false);
-        return;
-      } catch {
-        // Fall through to Strategy 2
+      }
+
+      let sawBlocked401 = false;
+      const fetchCandidates = [
+        pdfUrl,
+        pdfUrl.startsWith('https://res.cloudinary.com/')
+          ? `/api/proxy-pdf?url=${encodeURIComponent(pdfUrl)}`
+          : '',
+      ].filter(Boolean);
+
+      for (const candidate of fetchCandidates) {
+        try {
+          // Strategy 1: Fetch full PDF bytes over CORS or same-origin proxy & decode MLFXOR1 wrapper if present
+          const res = await fetch(
+            candidate,
+            candidate.startsWith('/api/')
+              ? { credentials: 'same-origin' }
+              : { mode: 'cors', credentials: 'omit' }
+          );
+          if (res.status === 401 || res.status === 403) {
+            sawBlocked401 = true;
+            continue;
+          }
+          if (!res.ok) continue;
+          const arrayBuf = await res.arrayBuffer();
+          if (cancelled) return;
+
+          const decodedBytes = decodeMaloshaProtectedBytes(arrayBuf);
+          const decodedBuffer = decodedBytes.buffer.slice(
+            decodedBytes.byteOffset,
+            decodedBytes.byteOffset + decodedBytes.byteLength
+          ) as ArrayBuffer;
+
+          const blob = new Blob([decodedBuffer], { type: 'application/pdf' });
+          createdBlobUrl = URL.createObjectURL(blob);
+          setCachedPdfBlob(blob);
+          setBlobPreviewUrl(createdBlobUrl);
+
+          loadingTask = pdfjsLib.getDocument({
+            data: new Uint8Array(decodedBuffer),
+            disableRange: true,
+            disableStream: true,
+          });
+          const loadedDoc = await loadingTask.promise;
+          if (cancelled) {
+            void loadingTask.destroy();
+            return;
+          }
+          setPdfDoc(loadedDoc);
+          setNumPages(loadedDoc.numPages);
+          setLoading(false);
+          return;
+        } catch {
+          // Try next fetch candidate or fall through to Strategy 2
+        }
       }
 
       // Strategy 2: Direct URL fallback with disableRange/disableStream
@@ -322,9 +389,16 @@ export const MobilePdfNoteReader: React.FC<MobilePdfNoteReaderProps> = ({
       }
 
       if (!cancelled) {
-        // Strategy 4: Show embedded viewer automatically so user can still read in-app
+        // Strategy 4: Switch to extracted text fallback if available; otherwise show embedded viewer / 401 guard
+        setAccessBlocked401(sawBlocked401);
         setLoadError(true);
-        setReaderMode('embed');
+        const hasFallbackText = Boolean(
+          fallbackBody
+            .split(/\n{2,}/)
+            .map((p) => p.replace(/^#{1,3}\s+/, '').trim())
+            .filter((p) => p && !p.startsWith('Faili "')).length
+        );
+        setReaderMode(sawBlocked401 && hasFallbackText ? 'text' : 'embed');
         setLoading(false);
       }
     };
@@ -506,15 +580,17 @@ export const MobilePdfNoteReader: React.FC<MobilePdfNoteReaderProps> = ({
             </button>
           )}
 
-          <a
-            href={blobPreviewUrl || pdfUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 text-[11px] font-bold text-slate-800 hover:bg-slate-50"
-          >
-            <ExternalLink className="h-3.5 w-3.5 text-[#0E2640]" aria-hidden="true" />
-            <span>{tr('Soma Nje', 'Open Outside')}</span>
-          </a>
+          {(!accessBlocked401 || blobPreviewUrl) && (
+            <a
+              href={blobPreviewUrl || pdfUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 text-[11px] font-bold text-slate-800 hover:bg-slate-50"
+            >
+              <ExternalLink className="h-3.5 w-3.5 text-[#0E2640]" aria-hidden="true" />
+              <span>{tr('Soma Nje', 'Open Outside')}</span>
+            </a>
+          )}
 
           {cachedPdfBlob &&
             typeof navigator !== 'undefined' &&
@@ -552,47 +628,64 @@ export const MobilePdfNoteReader: React.FC<MobilePdfNoteReaderProps> = ({
           </p>
         </div>
       ) : readerMode === 'embed' ? (
-        <div className="space-y-3">
-          {loadError && (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50/70 px-3.5 py-2.5 text-xs text-amber-900">
-              <div className="flex items-center gap-2">
-                <AlertCircle className="h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
-                <span>
-                  {tr(
-                    'Kisomaji mbadala kimetumika. Unaweza pia kupakua PDF moja kwa moja.',
-                    'Using embedded fallback viewer. You can also download the PDF.'
-                  )}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={onDownload}
-                  className="inline-flex min-h-[34px] items-center gap-1 rounded-lg bg-[#075E54] px-3 text-xs font-bold text-white"
-                >
-                  <Download className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>{tr('Pakua', 'Download')}</span>
-                </button>
-                <a
-                  href={blobPreviewUrl || pdfUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-800"
-                >
-                  <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>{tr('Fungua Nje', 'Open')}</span>
-                </a>
-              </div>
-            </div>
-          )}
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
-            <iframe
-              src={effectiveIframeUrl}
-              title={fileName}
-              className="h-[68vh] min-h-[420px] w-full border-0 bg-slate-50"
-            />
+        accessBlocked401 && !blobPreviewUrl ? (
+          <div className="rounded-2xl border border-amber-200 bg-white p-6 text-center shadow-xs">
+            <AlertCircle className="mx-auto h-9 w-9 text-amber-600" aria-hidden="true" />
+            <h4 className="mt-3 text-sm font-bold text-slate-900">
+              {tr('Faili la Zamani Limezuiwa na Seva (HTTP 401)', 'Older File Restricted by Storage Server (HTTP 401)')}
+            </h4>
+            <p className="mx-auto mt-1.5 max-w-md text-xs leading-relaxed text-slate-600">
+              {tr(
+                'PDF hii ilipakiwa kabla ya maboresho ya usalama na seva imezuia kusomwa moja kwa moja. Mwombe aliyetuma atume tena faili hili sasa liweze kusomeka na kupakuliwa bila tatizo.',
+                'This older PDF was restricted by the storage server (HTTP 401). Ask the sender to resend this PDF so it opens and downloads smoothly.'
+              )}
+            </p>
           </div>
-        </div>
+        ) : (
+          <div className="space-y-3">
+            {loadError && (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50/70 px-3.5 py-2.5 text-xs text-amber-900">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
+                  <span>
+                    {tr(
+                      'Kisomaji mbadala kimetumika. Unaweza pia kupakua PDF moja kwa moja.',
+                      'Using embedded fallback viewer. You can also download the PDF.'
+                    )}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={onDownload}
+                    className="inline-flex min-h-[34px] items-center gap-1 rounded-lg bg-[#075E54] px-3 text-xs font-bold text-white"
+                  >
+                    <Download className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>{tr('Pakua', 'Download')}</span>
+                  </button>
+                  {blobPreviewUrl && (
+                    <a
+                      href={blobPreviewUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-800"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>{tr('Fungua Nje', 'Open')}</span>
+                    </a>
+                  )}
+                </div>
+              </div>
+            )}
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+              <iframe
+                src={effectiveIframeUrl}
+                title={fileName}
+                className="h-[68vh] min-h-[420px] w-full border-0 bg-slate-50"
+              />
+            </div>
+          </div>
+        )
       ) : readerMode === 'pages' && pdfDoc ? (
         <div className="space-y-3">
           {Array.from({ length: numPages }, (_, idx) => idx + 1).map((pageNum) => (
@@ -621,6 +714,7 @@ export const MobilePdfNoteReader: React.FC<MobilePdfNoteReaderProps> = ({
                 <img
                   src={imgUrl}
                   alt={`${fileName} — ${tr('Ukurasa', 'Page')} ${idx + 1}`}
+                  referrerPolicy="no-referrer"
                   style={{ width: `${Math.round(zoom * 100)}%` }}
                   className="mx-auto block max-w-none rounded-b-lg bg-white"
                 />

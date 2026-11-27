@@ -1057,6 +1057,7 @@ export interface ChatMessage {
   isEdited?: boolean;
   forwardedFromName?: string;
   isDeleted: boolean;
+  deletedForUids?: string[];
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }
@@ -1137,7 +1138,7 @@ export type NavTab =
   | 'votes'
   | 'safety'
   | 'auth';
-export type SortMode = 'newest' | 'votes' | 'oldest';
+export type SortMode = 'newest' | 'votes' | 'oldest' | 'mixed';
 
 export type UserNotificationType =
   | 'comment_reply'
@@ -1191,6 +1192,7 @@ export interface DirectChatThread {
   unreadCountB: number;
   lastReadAtA: Timestamp | null;
   lastReadAtB: Timestamp | null;
+  blockedByUids?: string[];
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }
@@ -1216,6 +1218,7 @@ export interface DirectChatMessage {
   isEdited?: boolean;
   forwardedFromName?: string;
   isDeleted: boolean;
+  deletedForUids?: string[];
   viewOnce?: boolean;
   viewOnceConsumed?: boolean;
   viewOnceOpenedAt?: Timestamp | null;

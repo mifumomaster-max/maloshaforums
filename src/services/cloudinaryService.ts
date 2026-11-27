@@ -1,3 +1,10 @@
+import { auth } from '../firebase';
+import {
+  isFirestoreChatFileUrl,
+  readFirestoreChatFileBytes,
+  uploadFileToFirestore,
+} from './chatFileStorage';
+
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8MB
 const ALLOWED_IMAGE_TYPES = new Set([
   'image/jpeg',
@@ -26,7 +33,11 @@ export function getCloudinaryConfig(): {
   };
 }
 
-export function optimizeCloudinaryUrl(url?: string, width = 720): string {
+export function optimizeCloudinaryUrl(
+  url?: string,
+  width = 720,
+  options?: { quality?: 'ultra' | 'good' | 'eco' }
+): string {
   if (!url) return '';
   const trimmed = url.trim();
   const marker = '/image/upload/';
@@ -39,7 +50,10 @@ export function optimizeCloudinaryUrl(url?: string, width = 720): string {
   if (/^(?:[a-z_]+:[^/]+,?)+(\/|$)/i.test(after) || after.startsWith('f_auto')) {
     return trimmed;
   }
-  return `${trimmed.slice(0, idx + marker.length)}f_auto,q_auto:eco,w_${width},c_limit/${after}`;
+  const tier = options?.quality ?? (width <= 240 ? 'eco' : 'good');
+  const qFlag =
+    tier === 'ultra' ? 'q_auto:best,fl_progressive' : tier === 'good' ? 'q_auto:good,fl_progressive' : 'q_auto:eco';
+  return `${trimmed.slice(0, idx + marker.length)}f_auto,${qFlag},w_${width},c_limit/${after}`;
 }
 
 export async function uploadImageToCloudinary(file: File): Promise<string> {
@@ -235,6 +249,38 @@ export interface ChatAttachmentUploadResult {
   attachmentType: 'image' | 'document';
 }
 
+const MLF_XOR_MAGIC = [0x4d, 0x4c, 0x46, 0x58, 0x4f, 0x52, 0x31, 0x5f, 0x44, 0x4f, 0x43, 0x0a]; // "MLFXOR1_DOC\n"
+const MLF_XOR_KEY = 0x5a;
+
+export function encodeMaloshaProtectedBytes(input: ArrayBuffer | Uint8Array): Uint8Array {
+  const src = input instanceof Uint8Array ? input : new Uint8Array(input);
+  const out = new Uint8Array(MLF_XOR_MAGIC.length + src.length);
+  for (let i = 0; i < MLF_XOR_MAGIC.length; i++) {
+    out[i] = MLF_XOR_MAGIC[i];
+  }
+  for (let i = 0; i < src.length; i++) {
+    out[MLF_XOR_MAGIC.length + i] = src[i] ^ MLF_XOR_KEY;
+  }
+  return out;
+}
+
+export function decodeMaloshaProtectedBytes(input: ArrayBuffer | Uint8Array): Uint8Array {
+  const src = input instanceof Uint8Array ? input : new Uint8Array(input);
+  if (src.length < MLF_XOR_MAGIC.length) {
+    return src;
+  }
+  for (let i = 0; i < MLF_XOR_MAGIC.length; i++) {
+    if (src[i] !== MLF_XOR_MAGIC[i]) {
+      return src;
+    }
+  }
+  const out = new Uint8Array(src.length - MLF_XOR_MAGIC.length);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = src[MLF_XOR_MAGIC.length + i] ^ MLF_XOR_KEY;
+  }
+  return out;
+}
+
 export async function uploadChatFileToCloudinary(
   file: File
 ): Promise<ChatAttachmentUploadResult> {
@@ -257,6 +303,17 @@ export async function uploadChatFileToCloudinary(
     );
   }
 
+  if (!isImage && auth.currentUser) {
+    const stored = await uploadFileToFirestore(file, auth.currentUser.uid);
+    return {
+      url: stored.url,
+      fileName: stored.fileName,
+      fileSize: stored.fileSize,
+      mimeType: stored.mimeType,
+      attachmentType: 'document',
+    };
+  }
+
   const { cloudName, uploadPreset, configured } = getCloudinaryConfig();
   if (!configured) {
     throw new Error(
@@ -264,8 +321,30 @@ export async function uploadChatFileToCloudinary(
     );
   }
 
+  const needsTxtWrapper =
+    !isImage &&
+    (ext === 'pdf' ||
+      ext === 'zip' ||
+      file.type === 'application/pdf' ||
+      file.type.includes('zip'));
+
+  const safeStem =
+    (file.name || 'nyaraka')
+      .replace(/\.[^.]+$/, '')
+      .replace(/[^a-zA-Z0-9_-]+/g, '_')
+      .slice(0, 60) || 'nyaraka';
+
+  let uploadPayload: Blob = file;
+  if (needsTxtWrapper) {
+    const rawBuf = await file.arrayBuffer();
+    const wrapped = encodeMaloshaProtectedBytes(rawBuf);
+    const wrappedBuffer = wrapped.buffer.slice(wrapped.byteOffset, wrapped.byteOffset + wrapped.byteLength) as ArrayBuffer;
+    uploadPayload = new Blob([wrappedBuffer], { type: 'text/plain' });
+  }
+  const uploadFileName = needsTxtWrapper ? `${safeStem}_${ext || 'pdf'}.txt` : file.name;
+
   const formData = new FormData();
-  formData.append('file', file);
+  formData.append('file', uploadPayload, uploadFileName);
   formData.append('upload_preset', uploadPreset);
 
   const endpoint = isImage ? 'image/upload' : 'raw/upload';
@@ -299,7 +378,10 @@ export async function uploadChatFileToCloudinary(
     url: result.secure_url.slice(0, 500),
     fileName: (file.name || 'faili').slice(0, 140),
     fileSize: Math.max(0, Math.min(file.size, 15_728_640)),
-    mimeType: (file.type || (isImage ? 'image/jpeg' : ext === 'pdf' ? 'application/pdf' : 'application/octet-stream')).slice(0, 120),
+    mimeType: (
+      file.type ||
+      (isImage ? 'image/jpeg' : ext === 'pdf' ? 'application/pdf' : 'application/octet-stream')
+    ).slice(0, 120),
     attachmentType: isImage ? 'image' : 'document',
   };
 }
@@ -310,7 +392,11 @@ export function buildExternalAttachmentUrl(
 ): string {
   const cleanUrl = (fileUrl || '').trim();
   if (!cleanUrl) return '';
-  if (options?.forceDownload && cleanUrl.includes('res.cloudinary.com') && cleanUrl.includes('/image/upload/')) {
+  if (
+    options?.forceDownload &&
+    cleanUrl.includes('res.cloudinary.com') &&
+    cleanUrl.includes('/image/upload/')
+  ) {
     const cleanSlug = (options.fileName || 'nyaraka')
       .replace(/\.[^.]+$/, '')
       .replace(/[^a-zA-Z0-9_-]+/g, '_')
@@ -319,6 +405,44 @@ export function buildExternalAttachmentUrl(
     return cleanUrl.replace('/image/upload/', `/image/upload/${flag}/`);
   }
   return cleanUrl;
+}
+
+function triggerBlobDownload(blob: Blob, fileName: string): void {
+  const blobUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = fileName;
+  a.rel = 'noopener noreferrer';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+}
+
+async function fetchImageAsDataUrl(url: string): Promise<{ dataUrl: string; width: number; height: number } | null> {
+  try {
+    const res = await fetch(url, { mode: 'cors', credentials: 'omit' });
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    if (!blob || blob.size === 0) return null;
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('FileReader error'));
+      reader.readAsDataURL(blob);
+    });
+    if (!dataUrl) return null;
+    const dims = await new Promise<{ width: number; height: number }>((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve({ width: img.naturalWidth || 1200, height: img.naturalHeight || 1697 });
+      img.onerror = () => resolve({ width: 1200, height: 1697 });
+      img.src = dataUrl;
+    });
+    return { dataUrl, ...dims };
+  } catch {
+    return null;
+  }
 }
 
 export async function downloadChatAttachmentFile(
@@ -343,39 +467,103 @@ export async function downloadChatAttachmentFile(
       : `${baseName.replace(/\.[^.]+$/, '')}.pdf`
     : baseName;
 
+  if (isFirestoreChatFileUrl(cleanUrl)) {
+    const stored = await readFirestoreChatFileBytes(cleanUrl);
+    const bytesBuffer = stored.bytes.buffer.slice(
+      stored.bytes.byteOffset,
+      stored.bytes.byteOffset + stored.bytes.byteLength
+    ) as ArrayBuffer;
+    const contentType = isPdf
+      ? 'application/pdf'
+      : mimeType || stored.mimeType || 'application/octet-stream';
+    const blob = new Blob([bytesBuffer], { type: contentType });
+    triggerBlobDownload(blob, safeName);
+    return 'blob';
+  }
+
   const attachmentUrl = buildExternalAttachmentUrl(cleanUrl, {
     forceDownload: true,
     fileName: safeName,
   });
 
-  const candidateUrls = [cleanUrl, attachmentUrl].filter(
+  const proxyUrl = cleanUrl.startsWith('https://res.cloudinary.com/')
+    ? `/api/proxy-pdf?url=${encodeURIComponent(cleanUrl)}`
+    : '';
+
+  const candidateUrls = [cleanUrl, attachmentUrl, proxyUrl].filter(
     (u, idx, arr) => Boolean(u) && arr.indexOf(u) === idx
   );
 
+  let saw401or403 = false;
+
   for (const url of candidateUrls) {
     try {
-      const res = await fetch(url, { mode: 'cors', credentials: 'omit' });
+      const res = await fetch(
+        url,
+        url.startsWith('/api/')
+          ? { credentials: 'same-origin' }
+          : { mode: 'cors', credentials: 'omit' }
+      );
+      if (res.status === 401 || res.status === 403) {
+        saw401or403 = true;
+        continue;
+      }
       if (!res.ok) continue;
       const arrayBuf = await res.arrayBuffer();
       if (!arrayBuf || arrayBuf.byteLength === 0) continue;
+      const decodedBytes = decodeMaloshaProtectedBytes(arrayBuf);
+      const decodedBuffer = decodedBytes.buffer.slice(
+        decodedBytes.byteOffset,
+        decodedBytes.byteOffset + decodedBytes.byteLength
+      ) as ArrayBuffer;
       const contentType = isPdf
         ? 'application/pdf'
         : mimeType || res.headers.get('content-type') || 'application/octet-stream';
-      const blob = new Blob([arrayBuf], { type: contentType });
-      const blobUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = safeName;
-      a.rel = 'noopener noreferrer';
-      a.style.display = 'none';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+      const blob = new Blob([decodedBuffer], { type: contentType });
+      triggerBlobDownload(blob, safeName);
       return 'blob';
     } catch {
       // Try next candidate URL
     }
+  }
+
+  // Legacy Cloudinary image/upload PDFs blocked directly by 401: reconstruct clean multi-page PDF from page renders
+  if (isPdf && cleanUrl.includes('res.cloudinary.com') && cleanUrl.includes('/image/upload/')) {
+    const pages: Array<{ dataUrl: string; width: number; height: number }> = [];
+    for (let p = 1; p <= 30; p++) {
+      const pageImgUrl = cleanUrl.replace(
+        '/image/upload/',
+        `/image/upload/f_jpg,q_auto:good,w_1400,pg_${p}/`
+      );
+      const pageData = await fetchImageAsDataUrl(pageImgUrl);
+      if (!pageData) break;
+      pages.push(pageData);
+    }
+    if (pages.length > 0) {
+      const { jsPDF } = await import('jspdf');
+      const first = pages[0];
+      const orientation = first.width > first.height ? 'l' : 'p';
+      const pdfDoc = new jsPDF({
+        orientation,
+        unit: 'pt',
+        format: [first.width, first.height],
+      });
+      pages.forEach((pg, idx) => {
+        if (idx > 0) {
+          pdfDoc.addPage([pg.width, pg.height], pg.width > pg.height ? 'l' : 'p');
+        }
+        pdfDoc.addImage(pg.dataUrl, 'JPEG', 0, 0, pg.width, pg.height);
+      });
+      const outBlob = pdfDoc.output('blob');
+      triggerBlobDownload(outBlob, safeName);
+      return 'blob';
+    }
+  }
+
+  if (saw401or403 || cleanUrl.includes('res.cloudinary.com')) {
+    throw new Error(
+      'Faili hili la zamani limezuiwa na seva ya uhifadhi (HTTP 401). Tafadhali mwombe aliyetuma atume tena faili hili upya.'
+    );
   }
 
   const a = document.createElement('a');
@@ -409,6 +597,15 @@ export async function uploadNotePdfToCloudinary(file: File): Promise<NotePdfUplo
     throw new Error('Faili la PDF ni kubwa sana. Ukubwa usizidi MB 15.');
   }
 
+  if (auth.currentUser) {
+    const stored = await uploadFileToFirestore(file, auth.currentUser.uid);
+    return {
+      url: stored.url,
+      fileName: stored.fileName,
+      fileSize: stored.fileSize,
+    };
+  }
+
   const { cloudName, uploadPreset, configured } = getCloudinaryConfig();
   if (!configured) {
     throw new Error(
@@ -416,12 +613,29 @@ export async function uploadNotePdfToCloudinary(file: File): Promise<NotePdfUplo
     );
   }
 
+  const safeStem =
+    (file.name || 'notes')
+      .replace(/\.[^.]+$/, '')
+      .replace(/[^a-zA-Z0-9_-]+/g, '_')
+      .slice(0, 60) || 'notes';
+
+  const rawBuf = await file.arrayBuffer();
+  const wrapped = encodeMaloshaProtectedBytes(rawBuf);
+  const wrappedBuffer = wrapped.buffer.slice(
+    wrapped.byteOffset,
+    wrapped.byteOffset + wrapped.byteLength
+  ) as ArrayBuffer;
+
   const formData = new FormData();
-  formData.append('file', file);
+  formData.append(
+    'file',
+    new Blob([wrappedBuffer], { type: 'text/plain' }),
+    `${safeStem}_pdf.txt`
+  );
   formData.append('upload_preset', uploadPreset);
 
   const response = await fetch(
-    `https://api.cloudinary.com/v1_1/${encodeURIComponent(cloudName)}/auto/upload`,
+    `https://api.cloudinary.com/v1_1/${encodeURIComponent(cloudName)}/raw/upload`,
     {
       method: 'POST',
       body: formData,

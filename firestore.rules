@@ -265,7 +265,7 @@ service cloud.firestore {
 
     // 7. Mchart Community Group Chat & Read Cursors
     match /forum_chat_messages/{messageId} {
-      allow get: if isSignedIn() && isValidId(messageId) && isNotKickedFromMchartGroup();
+      allow get: if isSignedIn() && isValidId(messageId);
       allow list: if isSignedIn();
 
       allow create: if isNotSuspended()
@@ -281,6 +281,13 @@ service cloud.firestore {
           (
             isNotKickedFromMchartGroup() &&
             incoming().diff(existing()).affectedKeys().hasOnly(['reactions', 'updatedAt'])
+          ) ||
+          (
+            isNotKickedFromMchartGroup() &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['deletedForUids', 'updatedAt']) &&
+            incoming().deletedForUids is list &&
+            incoming().deletedForUids.size() <= 500 &&
+            request.auth.uid in incoming().deletedForUids
           )
         );
 
@@ -339,13 +346,25 @@ service cloud.firestore {
       allow get: if isSignedIn() && isValidId(chatId) && request.auth.uid in existing().participants;
       allow list: if isSignedIn() && request.auth.uid in resource.data.participants;
       allow create: if isNotSuspended() && isValidId(chatId) && request.auth.uid in incoming().participants;
-      allow update: if isNotSuspended() && isValidId(chatId) && request.auth.uid in existing().participants;
+      allow update: if isNotSuspended()
+        && isValidId(chatId)
+        && request.auth.uid in existing().participants
+        && (!('blockedByUids' in incoming()) || (incoming().blockedByUids is list && incoming().blockedByUids.size() <= 2));
       allow delete: if false;
 
       match /messages/{messageId} {
         allow get: if isSignedIn() && isValidId(chatId) && isValidId(messageId) && request.auth.uid in existing().participants;
         allow list: if isSignedIn() && request.auth.uid in resource.data.participants;
-        allow create: if isNotSuspended() && isValidId(chatId) && isValidId(messageId) && incoming().senderId == request.auth.uid && request.auth.uid in incoming().participants;
+        allow create: if isNotSuspended()
+          && isValidId(chatId)
+          && isValidId(messageId)
+          && incoming().senderId == request.auth.uid
+          && request.auth.uid in incoming().participants
+          && (
+            !exists(/databases/$(database)/documents/direct_chats/$(chatId))
+            || !('blockedByUids' in get(/databases/$(database)/documents/direct_chats/$(chatId)).data)
+            || get(/databases/$(database)/documents/direct_chats/$(chatId)).data.blockedByUids.size() == 0
+          );
         allow update: if isNotSuspended() && isValidId(chatId) && isValidId(messageId) && request.auth.uid in existing().participants;
         allow delete: if isNotSuspended() && isValidId(chatId) && isValidId(messageId) && existing().senderId == request.auth.uid;
       }
@@ -539,6 +558,23 @@ service cloud.firestore {
       allow list: if true;
       allow create: if isSignedIn() && isValidId(tournamentId) && incoming().createdBy == request.auth.uid;
       allow update, delete: if isSignedIn() && isValidId(tournamentId) && (isAdmin() || ('createdBy' in existing() && existing().createdBy == request.auth.uid));
+    }
+
+    // 17. Mchart & Slide Binary Document Storage (Zero HTTP 401)
+    match /chat_files/{fileId} {
+      allow get: if isSignedIn() && isValidId(fileId);
+      allow list: if isSignedIn() && (resource.data.uploaderId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && isValidId(fileId) && incoming().uploaderId == request.auth.uid;
+      allow update: if false;
+      allow delete: if isSignedIn() && isValidId(fileId) && (isAdmin() || existing().uploaderId == request.auth.uid);
+
+      match /chunks/{chunkId} {
+        allow get: if isSignedIn() && isValidId(fileId) && isValidId(chunkId);
+        allow list: if isSignedIn() && (resource.data.uploaderId == request.auth.uid || isAdmin());
+        allow create: if isSignedIn() && isValidId(fileId) && isValidId(chunkId) && incoming().uploaderId == request.auth.uid;
+        allow update: if false;
+        allow delete: if isSignedIn() && isValidId(fileId) && isValidId(chunkId) && (isAdmin() || existing().uploaderId == request.auth.uid);
+      }
     }
   }
 }

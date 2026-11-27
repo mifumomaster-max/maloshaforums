@@ -78,18 +78,50 @@ self.addEventListener('fetch', function (event) {
 
 self.addEventListener('message', function (event) {
   var payload = event && event.data;
-  if (!payload || payload.type !== 'SET_BADGE') return;
-  var count = Number(payload.count || 0);
-  try {
-    if (self.navigator && typeof self.navigator.setAppBadge === 'function') {
-      if (count > 0) {
-        self.navigator.setAppBadge(count);
-      } else if (typeof self.navigator.clearAppBadge === 'function') {
-        self.navigator.clearAppBadge();
+  if (!payload) return;
+
+  if (payload.type === 'SET_BADGE') {
+    var count = Number(payload.count || 0);
+    try {
+      if (self.navigator && typeof self.navigator.setAppBadge === 'function') {
+        if (count > 0) {
+          Promise.resolve(self.navigator.setAppBadge(count)).catch(function () {});
+        } else if (typeof self.navigator.clearAppBadge === 'function') {
+          Promise.resolve(self.navigator.clearAppBadge()).catch(function () {});
+        } else {
+          Promise.resolve(self.navigator.setAppBadge(0)).catch(function () {});
+        }
       }
+    } catch (err) {
+      // Ignore unsupported badge calls in SW
     }
-  } catch (err) {
-    // Ignore unsupported badge calls in SW
+    return;
+  }
+
+  if (payload.type === 'DISMISS_ALL_NOTIFICATIONS') {
+    event.waitUntil(
+      (async function () {
+        try {
+          if (self.registration && typeof self.registration.getNotifications === 'function') {
+            var list = await self.registration.getNotifications();
+            list.forEach(function (n) {
+              n.close();
+            });
+          }
+        } catch (err) {
+          // Ignore getNotifications failures
+        }
+        try {
+          if (self.navigator && typeof self.navigator.clearAppBadge === 'function') {
+            await Promise.resolve(self.navigator.clearAppBadge());
+          } else if (self.navigator && typeof self.navigator.setAppBadge === 'function') {
+            await Promise.resolve(self.navigator.setAppBadge(0));
+          }
+        } catch (err) {
+          // Ignore unsupported clearAppBadge calls
+        }
+      })()
+    );
   }
 });
 
@@ -99,25 +131,44 @@ self.addEventListener('notificationclick', function (event) {
   var targetUrl = typeof data.url === 'string' && data.url ? data.url : '/';
 
   event.waitUntil(
-    self.clients
-      .matchAll({ type: 'window', includeUncontrolled: true })
-      .then(function (clientList) {
-        for (var i = 0; i < clientList.length; i++) {
-          var client = clientList[i];
-          if ('focus' in client) {
-            if ('navigate' in client && targetUrl) {
-              try {
-                client.navigate(targetUrl);
-              } catch (err) {
-                // Ignore cross-navigation error
-              }
+    (async function () {
+      try {
+        if (self.registration && typeof self.registration.getNotifications === 'function') {
+          var remaining = await self.registration.getNotifications();
+          remaining.forEach(function (n) {
+            n.close();
+          });
+        }
+      } catch (err) {
+        // Ignore getNotifications failures
+      }
+      try {
+        if (self.navigator && typeof self.navigator.clearAppBadge === 'function') {
+          await Promise.resolve(self.navigator.clearAppBadge());
+        } else if (self.navigator && typeof self.navigator.setAppBadge === 'function') {
+          await Promise.resolve(self.navigator.setAppBadge(0));
+        }
+      } catch (err) {
+        // Ignore clearAppBadge failures
+      }
+
+      var clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (var i = 0; i < clientList.length; i++) {
+        var client = clientList[i];
+        if ('focus' in client) {
+          if ('navigate' in client && targetUrl) {
+            try {
+              client.navigate(targetUrl);
+            } catch (err) {
+              // Ignore cross-navigation error
             }
-            return client.focus();
           }
+          return client.focus();
         }
-        if (self.clients.openWindow) {
-          return self.clients.openWindow(targetUrl);
-        }
-      })
+      }
+      if (self.clients.openWindow) {
+        return self.clients.openWindow(targetUrl);
+      }
+    })()
   );
 });

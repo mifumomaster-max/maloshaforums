@@ -2,10 +2,13 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronRight,
   Clock,
+  Eye,
+  EyeOff,
   Heart,
   MessageCircle,
   Newspaper,
   PenSquare,
+  RotateCcw,
   Search,
   Share2,
 } from 'lucide-react';
@@ -21,6 +24,7 @@ import {
 import { optimizeCloudinaryUrl } from '../services/cloudinaryService';
 import { extractEditorialPreview } from '../utils/editorialFormatter';
 import { estimateReadMinutes } from '../utils/formatters';
+import { sortTopicsList } from '../utils/topicSort';
 import { useLanguage } from '../context/LanguageContext';
 import { AuthorName, Avatar } from './Avatar';
 import { MakalaInlineComposer } from './MakalaInlineComposer';
@@ -37,11 +41,14 @@ interface MakalaNewsroomProps {
   userUid: string | null;
   userDisplayName: string;
   userPhoto: string;
+  isAdmin?: boolean;
   isSuspended?: boolean;
   votedTopicIds: Set<string>;
   onToggleVote: (topic: Topic) => void;
   onShareTopic: (topic: Topic) => void;
   onOpenTopic: (topicId: string) => void;
+  onTogglePrivate?: (topic: Topic) => void;
+  onToggleArchive?: (topic: Topic) => void;
   onCreateMakalaPost: (data: {
     title: string;
     body: string;
@@ -73,7 +80,9 @@ const BbcCoverImage: React.FC<{
 }) => {
   const { tr } = useLanguage();
   const [failed, setFailed] = useState(false);
-  const resolved = optimizeCloudinaryUrl(resolveMakalaCover(src), widthHint);
+  const resolved = optimizeCloudinaryUrl(resolveMakalaCover(src), widthHint, {
+    quality: widthHint >= 1000 ? 'ultra' : 'good',
+  });
 
   useEffect(() => {
     setFailed(false);
@@ -126,11 +135,14 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
   userUid,
   userDisplayName,
   userPhoto,
+  isAdmin = false,
   isSuspended = false,
   votedTopicIds,
   onToggleVote,
   onShareTopic,
   onOpenTopic,
+  onTogglePrivate,
+  onToggleArchive,
   onCreateMakalaPost,
   onSignIn,
   onToast,
@@ -144,6 +156,7 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
   const { lang, tr, formatTime, getMakalaSectionLabel } = useLanguage();
   const [selectedSection, setSelectedSection] = useState<string>('all');
   const [visibleCount, setVisibleCount] = useState<number>(INITIAL_MAKALA_PAGE_SIZE);
+  const [mixSeed, setMixSeed] = useState<number>(1);
   const composerAnchorRef = useRef<HTMLDivElement>(null);
   const prevExpandedRef = useRef(inlineExpanded);
   const lastExpandTriggerRef = useRef(expandTrigger);
@@ -223,23 +236,8 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
   }, [sectionFilteredArticles]);
 
   const displayedArticles = useMemo(() => {
-    return [...sectionFilteredArticles].sort((a, b) => {
-      if (sortMode === 'votes') {
-        if (b.upvotesCount !== a.upvotesCount) return b.upvotesCount - a.upvotesCount;
-        if (b.repliesCount !== a.repliesCount) return b.repliesCount - a.repliesCount;
-        const diff = getCreatedMillis(b) - getCreatedMillis(a);
-        return diff !== 0 ? diff : b.id.localeCompare(a.id);
-      }
-      if (sortMode === 'oldest') {
-        const diff = getCreatedMillis(a) - getCreatedMillis(b);
-        if (diff !== 0) return diff;
-        return a.id.localeCompare(b.id);
-      }
-      const diff = getCreatedMillis(b) - getCreatedMillis(a);
-      if (diff !== 0) return diff;
-      return b.id.localeCompare(a.id);
-    });
-  }, [sectionFilteredArticles, sortMode]);
+    return sortTopicsList(sectionFilteredArticles, sortMode, mixSeed);
+  }, [sectionFilteredArticles, sortMode, mixSeed]);
 
   const paginatedArticles = useMemo(
     () => displayedArticles.slice(0, visibleCount),
@@ -299,14 +297,81 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
       ? tr('Pendwa Zaidi', 'Most Liked')
       : sortMode === 'oldest'
         ? tr('Zilizotangulia', 'Earlier')
-        : tr('Mpya Zaidi', 'Newest');
+        : sortMode === 'mixed'
+          ? tr('Mchanganyiko', 'Mixed')
+          : tr('Mpya Zaidi', 'Newest');
 
   const leadKickerLabel =
     sortMode === 'votes'
       ? tr('Inayopendwa Zaidi', 'Most Liked')
       : sortMode === 'oldest'
         ? tr('Makala ya Awali', 'Earlier Story')
-        : tr('Habari Kuu', 'Top Story');
+        : sortMode === 'mixed'
+          ? tr('Mchanganyiko', 'Mixed Feed')
+          : tr('Habari Kuu', 'Top Story');
+
+  const renderVisibilityBadge = (art: Topic) => {
+    if (art.status !== 'private' && art.status !== 'archived') return null;
+    return (
+      <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-900">
+        <EyeOff className="h-3 w-3 shrink-0" aria-hidden="true" />
+        <span>
+          {tr(
+            'Imeondolewa kwa wengine · Unaiona wewe tu',
+            'Hidden from others · Visible to you only'
+          )}
+        </span>
+      </span>
+    );
+  };
+
+  const renderVisibilityToggle = (art: Topic) => {
+    const isAuthor = Boolean(userUid && art.authorId === userUid);
+    if (!isAuthor && !isAdmin) return null;
+    const isHidden = art.status === 'private' || art.status === 'archived';
+    const handleClick = () => {
+      if (art.status === 'archived') {
+        if (isAdmin) onToggleArchive?.(art);
+        return;
+      }
+      if (isAuthor && onTogglePrivate) {
+        onTogglePrivate(art);
+      } else if (isAdmin && onToggleArchive) {
+        onToggleArchive(art);
+      }
+    };
+    if (art.status === 'archived' && !isAdmin) {
+      return null;
+    }
+    return (
+      <button
+        type="button"
+        onClick={handleClick}
+        className={`inline-flex min-h-[34px] items-center gap-1 border px-2 py-1 text-[11px] font-bold transition-colors whitespace-nowrap shrink-0 ${
+          isHidden
+            ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+            : 'border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100'
+        }`}
+        title={
+          isHidden
+            ? tr('Rejesha ionekane kwa wote', 'Restore for everyone')
+            : tr('Ondoa kwa wengine (ibaki kwako tu)', 'Hide from others (keep for yourself)')
+        }
+      >
+        {isHidden ? (
+          <>
+            <RotateCcw className="h-3 w-3" aria-hidden="true" />
+            <span>{tr('Rejesha', 'Restore')}</span>
+          </>
+        ) : (
+          <>
+            <Eye className="h-3 w-3" aria-hidden="true" />
+            <span>{tr('Ondoa kwa Wengine', 'Hide')}</span>
+          </>
+        )}
+      </button>
+    );
+  };
 
   return (
     <div className="mx-auto max-w-6xl px-3.5 py-4 sm:px-6 sm:py-6">
@@ -465,19 +530,25 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
           <div
             role="group"
             aria-label={tr('Mpangilio wa makala', 'Article sorting')}
-            className="grid grid-cols-3 border border-slate-300 bg-white p-0.5 sm:inline-flex shrink-0"
+            className="grid grid-cols-2 border border-slate-300 bg-white p-0.5 sm:inline-flex shrink-0"
           >
             {(
               [
                 { id: 'newest', label: tr('Mpya Zaidi', 'Newest') },
                 { id: 'votes', label: tr('Pendwa Zaidi', 'Most Liked') },
                 { id: 'oldest', label: tr('Zilizotangulia', 'Earlier') },
+                { id: 'mixed', label: tr('Mchanganyiko', 'Mixed') },
               ] as { id: SortMode; label: string }[]
             ).map((opt) => (
               <button
                 key={opt.id}
                 type="button"
-                onClick={() => onChangeSort(opt.id)}
+                onClick={() => {
+                  if (opt.id === 'mixed') {
+                    setMixSeed((s) => s + 1);
+                  }
+                  onChangeSort(opt.id);
+                }}
                 className={`min-h-[36px] px-3 py-1 text-xs font-bold transition-colors whitespace-nowrap shrink-0 ${
                   sortMode === opt.id
                     ? 'bg-[#141414] text-white'
@@ -664,6 +735,7 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                             getMakalaSection(leadArticle.tags, leadArticle.title)
                           )}
                         </span>
+                        {renderVisibilityBadge(leadArticle)}
                       </div>
 
                       <button
@@ -789,14 +861,17 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                           </button>
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() => onOpenTopic(leadArticle.id)}
-                          className="bbc-read-more-btn inline-flex min-h-[40px] items-center gap-1.5 px-4 py-2 text-xs font-extrabold tracking-wide uppercase whitespace-nowrap shrink-0"
-                        >
-                          <span>{tr('Soma Zaidi', 'Read More')}</span>
-                          <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
-                        </button>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {renderVisibilityToggle(leadArticle)}
+                          <button
+                            type="button"
+                            onClick={() => onOpenTopic(leadArticle.id)}
+                            className="bbc-read-more-btn inline-flex min-h-[40px] items-center gap-1.5 px-4 py-2 text-xs font-extrabold tracking-wide uppercase whitespace-nowrap shrink-0"
+                          >
+                            <span>{tr('Soma Zaidi', 'Read More')}</span>
+                            <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -872,6 +947,7 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                               <span>
                                 {tr(`Dakika ${readMins}`, `${readMins} min read`)}
                               </span>
+                              {renderVisibilityBadge(article)}
                             </div>
 
                             <button
@@ -942,14 +1018,17 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                               </button>
                             </div>
 
-                            <button
-                              type="button"
-                              onClick={() => onOpenTopic(article.id)}
-                              className="bbc-read-more-btn inline-flex min-h-[38px] items-center gap-1 px-3.5 py-1.5 text-[11px] font-extrabold tracking-wide uppercase whitespace-nowrap shrink-0"
-                            >
-                              <span>{tr('Soma Zaidi', 'Read More')}</span>
-                              <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
-                            </button>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {renderVisibilityToggle(article)}
+                              <button
+                                type="button"
+                                onClick={() => onOpenTopic(article.id)}
+                                className="bbc-read-more-btn inline-flex min-h-[38px] items-center gap-1 px-3.5 py-1.5 text-[11px] font-extrabold tracking-wide uppercase whitespace-nowrap shrink-0"
+                              >
+                                <span>{tr('Soma Zaidi', 'Read More')}</span>
+                                <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
+                              </button>
+                            </div>
                           </div>
                         </div>
                       </article>
@@ -994,7 +1073,7 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                         </button>
                         <div className="flex min-w-0 flex-1 flex-col justify-between px-3.5 sm:px-0">
                           <div>
-                            <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-slate-500">
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
                               <span className="font-bold text-[#B80000] uppercase">
                                 {getMakalaSectionLabel(getMakalaSection(art.tags, art.title))}
                               </span>
@@ -1004,6 +1083,7 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                               <span>
                                 {tr(`Dakika ${artReadMins}`, `${artReadMins} min`)}
                               </span>
+                              {renderVisibilityBadge(art)}
                             </div>
                             <button
                               type="button"
@@ -1068,14 +1148,17 @@ export const MakalaNewsroom: React.FC<MakalaNewsroomProps> = ({
                               </button>
                             </div>
 
-                            <button
-                              type="button"
-                              onClick={() => onOpenTopic(art.id)}
-                              className="bbc-read-more-btn inline-flex min-h-[38px] items-center gap-1 px-3.5 py-1.5 text-[11px] font-extrabold tracking-wide uppercase whitespace-nowrap shrink-0"
-                            >
-                              <span>{tr('Soma Zaidi', 'Read More')}</span>
-                              <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
-                            </button>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {renderVisibilityToggle(art)}
+                              <button
+                                type="button"
+                                onClick={() => onOpenTopic(art.id)}
+                                className="bbc-read-more-btn inline-flex min-h-[38px] items-center gap-1 px-3.5 py-1.5 text-[11px] font-extrabold tracking-wide uppercase whitespace-nowrap shrink-0"
+                              >
+                                <span>{tr('Soma Zaidi', 'Read More')}</span>
+                                <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
+                              </button>
+                            </div>
                           </div>
                         </div>
                       </article>

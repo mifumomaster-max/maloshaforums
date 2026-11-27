@@ -83,11 +83,11 @@ export default defineConfig(() => {
               options: {
                 cacheName: 'malosha-media-cache',
                 expiration: {
-                  maxEntries: 60,
-                  maxAgeSeconds: 60 * 60 * 24 * 14,
+                  maxEntries: 300,
+                  maxAgeSeconds: 60 * 60 * 24 * 30,
                 },
                 cacheableResponse: {
-                  statuses: [200],
+                  statuses: [0, 200],
                 },
               },
             },

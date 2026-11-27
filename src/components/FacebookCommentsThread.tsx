@@ -31,6 +31,7 @@ import { useUserPresence } from '../context/UserPresenceContext';
 import { AuthorName, Avatar, OnlineStatusPill } from './Avatar';
 import { renderLinkedInline } from './RichText';
 import { AuthorVerificationBadge } from './VerificationBadge';
+import { scrollCommentInputAboveKeyboard } from '../utils/mobileKeyboard';
 
 interface FacebookCommentsThreadProps {
   topic: Topic;
@@ -174,6 +175,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
     if (autoFocus && userUid && topic.status === 'open') {
       const timer = window.setTimeout(() => {
         mainInputRef.current?.focus({ preventScroll: true });
+        scrollCommentInputAboveKeyboard(mainInputRef.current);
       }, 60);
       return () => window.clearTimeout(timer);
     }
@@ -183,6 +185,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
     if (activeReplyThreadId) {
       const timer = window.setTimeout(() => {
         nestedInputRef.current?.focus({ preventScroll: true });
+        scrollCommentInputAboveKeyboard(nestedInputRef.current);
       }, 40);
       return () => window.clearTimeout(timer);
     }
@@ -1012,6 +1015,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
                             rows={1}
                             maxLength={3900}
                             value={nestedReplyText}
+                            onFocus={(e) => scrollCommentInputAboveKeyboard(e.currentTarget)}
                             onChange={(e) => {
                               const nextVal = e.target.value;
                               setNestedReplyText(nextVal);
@@ -1164,6 +1168,7 @@ export const FacebookCommentsThread: React.FC<FacebookCommentsThreadProps> = ({
                 rows={1}
                 maxLength={4000}
                 value={newComment}
+                onFocus={(e) => scrollCommentInputAboveKeyboard(e.currentTarget)}
                 onChange={(e) => {
                   const nextVal = e.target.value;
                   setNewComment(nextVal);

@@ -527,6 +527,47 @@ async function startServer() {
     res.status(200).json({ ok: true });
   });
 
+  app.get('/api/proxy-pdf', async (req, res) => {
+    try {
+      const rawUrl = typeof req.query.url === 'string' ? req.query.url.trim() : '';
+      if (!rawUrl || !rawUrl.startsWith('https://res.cloudinary.com/')) {
+        res.status(400).json({ error: 'Invalid or disallowed attachment URL' });
+        return;
+      }
+      const parsed = new URL(rawUrl);
+      if (parsed.hostname !== 'res.cloudinary.com' || parsed.protocol !== 'https:') {
+        res.status(400).json({ error: 'Invalid Cloudinary host' });
+        return;
+      }
+
+      const upstream = await fetch(parsed.toString(), {
+        method: 'GET',
+        headers: {
+          Accept: '*/*',
+          'User-Agent': 'MaloshaForums/1.0',
+        },
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (!upstream.ok) {
+        res.status(upstream.status).json({ error: `Upstream HTTP ${upstream.status}` });
+        return;
+      }
+
+      const arrayBuf = await upstream.arrayBuffer();
+      const ct = upstream.headers.get('content-type') || 'application/octet-stream';
+      res
+        .status(200)
+        .set({
+          'Content-Type': ct,
+          'Cache-Control': 'public, max-age=3600',
+        })
+        .send(Buffer.from(arrayBuf));
+    } catch {
+      res.status(502).json({ error: 'Proxy fetch failed' });
+    }
+  });
+
   if (!IS_PRODUCTION && vite) {
     app.use(vite.middlewares);
   } else if (fs.existsSync(distDir)) {

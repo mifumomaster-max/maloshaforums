@@ -2,6 +2,8 @@ import { User } from 'firebase/auth';
 import {
   DocumentReference,
   Timestamp,
+  arrayRemove,
+  arrayUnion,
   collection,
   deleteDoc,
   doc,
@@ -20,6 +22,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { ADMIN_EMAIL, auth, db, handleFirestoreError, OperationType } from '../firebase';
+import { isFirestoreChatFileUrl } from './chatFileStorage';
 import {
   AccountStatus,
   ChatAttachmentType,
@@ -1436,7 +1439,11 @@ export async function sendChatMessage(
     ? sanitizeTextInput(input.forwardedFromName, 80)
     : undefined;
 
-  if (text.length === 0 && (attachmentType === 'none' || !attachmentUrl.startsWith('https://'))) {
+  if (
+    text.length === 0 &&
+    (attachmentType === 'none' ||
+      (!attachmentUrl.startsWith('https://') && !isFirestoreChatFileUrl(attachmentUrl)))
+  ) {
     throw new Error('Andika ujumbe au ambatanisha picha/sauti/nyaraka kabla ya kutuma.');
   }
 
@@ -1531,6 +1538,19 @@ export async function softDeleteChatMessage(messageId: string): Promise<void> {
       attachmentName: '',
       attachmentSize: 0,
       attachmentMime: '',
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function deleteChatMessageForMe(messageId: string, uid: string): Promise<void> {
+  if (!uid) return;
+  const path = `forum_chat_messages/${messageId}`;
+  try {
+    await updateDoc(doc(db, 'forum_chat_messages', messageId), {
+      deletedForUids: arrayUnion(uid),
       updatedAt: serverTimestamp(),
     });
   } catch (error) {
@@ -2317,9 +2337,9 @@ export async function createMchartNote(
   }
 ): Promise<string> {
   const cleanPdfUrl = sanitizeTextInput(input.pdfUrl || '', 500);
-  const hasPdf = cleanPdfUrl.startsWith('https://');
+  const hasPdf = cleanPdfUrl.startsWith('https://') || isFirestoreChatFileUrl(cleanPdfUrl);
   const cleanPdfName = hasPdf
-    ? sanitizeTextInput(input.pdfFileName || 'malosha-notes.pdf', 140)
+    ? sanitizeTextInput(input.pdfFileName || 'malosha-slide.pdf', 140)
     : '';
   const cleanPdfSize = hasPdf
     ? Math.max(0, Math.min(Math.floor(Number(input.pdfSize || 0)), 20_971_520))
@@ -2329,7 +2349,7 @@ export async function createMchartNote(
   const hasText = rawTextClean.length >= 5;
 
   if (!hasText && !hasPdf) {
-    throw new Error('Weka maudhui ya notes au pakia faili la PDF kabla ya kuchapisha.');
+    throw new Error('Weka maudhui ya Slide au pakia faili la PDF kabla ya kuchapisha.');
   }
 
   const derivedTitle =
@@ -3368,8 +3388,20 @@ export async function sendDirectMessage(
     ? sanitizeTextInput(input.forwardedFromName, 80)
     : undefined;
 
-  if (text.length === 0 && (attachmentType === 'none' || !attachmentUrl.startsWith('https://'))) {
+  if (
+    text.length === 0 &&
+    (attachmentType === 'none' ||
+      (!attachmentUrl.startsWith('https://') && !isFirestoreChatFileUrl(attachmentUrl)))
+  ) {
     throw new Error('Andika ujumbe au ambatanisha picha/sauti/nyaraka kabla ya kutuma.');
+  }
+
+  if (Array.isArray(thread.blockedByUids) && thread.blockedByUids.length > 0) {
+    throw new Error(
+      thread.blockedByUids.includes(user.uid)
+        ? 'Umemzuia mtu huyu. Ondoa kizuizi kwanza ili uweze kutuma ujumbe.'
+        : 'Huwezi kutuma ujumbe kwa mtumiaji huyu kwa sasa.'
+    );
   }
 
   const chatId = thread.chatId;
@@ -3435,6 +3467,23 @@ export async function sendDirectMessage(
     return msgRef.id;
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function toggleBlockDirectChatUser(
+  chatId: string,
+  uid: string,
+  shouldBlock: boolean
+): Promise<void> {
+  if (!chatId || !uid) return;
+  const path = `direct_chats/${chatId}`;
+  try {
+    await updateDoc(doc(db, 'direct_chats', chatId), {
+      blockedByUids: shouldBlock ? arrayUnion(uid) : arrayRemove(uid),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 
@@ -3522,6 +3571,23 @@ export async function softDeleteDirectMessage(
       attachmentName: '',
       attachmentSize: 0,
       attachmentMime: '',
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function deleteDirectMessageForMe(
+  chatId: string,
+  messageId: string,
+  uid: string
+): Promise<void> {
+  if (!uid) return;
+  const path = `direct_chats/${chatId}/messages/${messageId}`;
+  try {
+    await updateDoc(doc(db, 'direct_chats', chatId, 'messages', messageId), {
+      deletedForUids: arrayUnion(uid),
       updatedAt: serverTimestamp(),
     });
   } catch (error) {
