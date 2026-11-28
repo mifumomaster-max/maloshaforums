@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Lock, Plus } from 'lucide-react';
+import { Lock, LogOut, Plus, ShieldAlert, Unlock } from 'lucide-react';
 import {
   User,
   onAuthStateChanged,
@@ -16,6 +16,7 @@ import {
   onSnapshot,
   orderBy,
   query,
+  updateDoc,
   where,
 } from 'firebase/firestore';
 import {
@@ -39,6 +40,7 @@ import {
   MemberDirectoryCandidate,
   NavTab,
   NavUnreadCounts,
+  PlatformLockSettings,
   Poll,
   PollBallot,
   PresenceArea,
@@ -63,6 +65,7 @@ import {
 import {
   DEFAULT_CONTENT_RETENTION_SETTINGS,
   DEFAULT_MCHART_GROUP_SETTINGS,
+  DEFAULT_PLATFORM_LOCK_SETTINGS,
   READ_NOTIFICATION_TTL_MS,
   checkUserVideoLikesBatch,
   cleanupExpiredReadNotifications,
@@ -73,6 +76,7 @@ import {
   fetchPlatformUsersCount,
   getPrivateUserInfo,
   incrementTopicShareCount,
+  lockEntirePlatform,
   markAllUserNotificationsRead,
   markUserNotificationRead,
   propagateUserIdentityAcrossAccount,
@@ -83,10 +87,12 @@ import {
   subscribeContentRetentionSettings,
   subscribeMchartGroupReadCursors,
   subscribeMchartGroupSettings,
+  subscribePlatformLockSettings,
   subscribeSiteNavSettings,
   syncUserProfile,
   toggleTopicPin,
   toggleTopicVote,
+  unlockEntirePlatform,
   updateContentRetentionSettings,
   updateHideVideoTabForUsers,
   updatePrivatePhoneNumber,
@@ -94,6 +100,7 @@ import {
   updateSiteNavSettings,
   updateTopicStatus,
   updateUserProfile,
+  updateUserProfileDetailsVisibility,
   updateUserProfilePhoto,
   writeUserPresence,
 } from './services/forumService';
@@ -254,6 +261,16 @@ function ForumShell() {
   const [userNotifications, setUserNotifications] = useState<UserNotification[]>([]);
   const [hideVideoTabForUsers, setHideVideoTabForUsers] = useState(false);
   const [hideMpollTabForUsers, setHideMpollTabForUsers] = useState(false);
+  const [platformLock, setPlatformLock] = useState<PlatformLockSettings>(() => ({
+    ...DEFAULT_PLATFORM_LOCK_SETTINGS,
+  }));
+  const [platformLockLoaded, setPlatformLockLoaded] = useState(false);
+  const [pendingPlatformUnlockToken, setPendingPlatformUnlockToken] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    const raw = new URLSearchParams(window.location.search).get('unlock_platform');
+    return raw && raw.trim() ? raw.trim() : '';
+  });
+  const [unlockingPlatformBusy, setUnlockingPlatformBusy] = useState(false);
   const [retentionSettings, setRetentionSettings] = useState<ContentRetentionSettings>(() => ({
     ...DEFAULT_CONTENT_RETENTION_SETTINGS,
   }));
@@ -495,6 +512,7 @@ function ForumShell() {
     return 'Kijiweni';
   });
   const [sortMode, setSortMode] = useState<SortMode>('newest');
+  const [kijiweniEntryToken, setKijiweniEntryToken] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [onlyMine, setOnlyMine] = useState(false);
 
@@ -658,6 +676,7 @@ function ForumShell() {
           topicsCount: Number(d.topicsCount || 0),
           repliesCount: Number(d.repliesCount || 0),
           followersCount: Number(d.followersCount || 0),
+          profileDetailsPublic: Boolean(d.profileDetailsPublic),
           createdAt: d.createdAt || null,
           updatedAt: d.updatedAt || null,
         });
@@ -677,28 +696,32 @@ function ForumShell() {
   }, [authReady, user, setLocalUserIdentity]);
 
   const topics = useMemo(() => {
-    if (
-      (sortMode !== 'oldest' && sortMode !== 'mixed') ||
-      olderArchiveTopics.length === 0
-    ) {
-      return baseTopics;
+    const rawList =
+      (sortMode !== 'oldest' && sortMode !== 'mixed') || olderArchiveTopics.length === 0
+        ? baseTopics
+        : (() => {
+            const byId = new Map<string, Topic>();
+            for (const item of baseTopics) {
+              byId.set(item.id, item);
+            }
+            for (const item of olderArchiveTopics) {
+              if (item.status === 'archived') continue;
+              if (!byId.has(item.id)) {
+                byId.set(item.id, item);
+              }
+            }
+            return Array.from(byId.values()).sort((a, b) => {
+              const msA = a.createdAt ? a.createdAt.toMillis() : Date.now();
+              const msB = b.createdAt ? b.createdAt.toMillis() : Date.now();
+              return msB - msA;
+            });
+          })();
+
+    if (isSuspended) {
+      return rawList.filter((item) => normalizeBoardCategory(item.category) === 'Kijiweni');
     }
-    const byId = new Map<string, Topic>();
-    for (const item of baseTopics) {
-      byId.set(item.id, item);
-    }
-    for (const item of olderArchiveTopics) {
-      if (item.status === 'archived') continue;
-      if (!byId.has(item.id)) {
-        byId.set(item.id, item);
-      }
-    }
-    return Array.from(byId.values()).sort((a, b) => {
-      const msA = a.createdAt ? a.createdAt.toMillis() : Date.now();
-      const msB = b.createdAt ? b.createdAt.toMillis() : Date.now();
-      return msB - msA;
-    });
-  }, [baseTopics, olderArchiveTopics, sortMode]);
+    return rawList;
+  }, [baseTopics, olderArchiveTopics, sortMode, isSuspended]);
 
   useEffect(() => {
     if (!authReady) return;
@@ -854,7 +877,11 @@ function ForumShell() {
 
   // Real-time Malosha Reels short videos & photo-music feed listener (plus signed-in author's private posts)
   useEffect(() => {
-    if (!authReady) return;
+    if (!authReady || isSuspended) {
+      setVideos([]);
+      setLoadingVideos(false);
+      return;
+    }
     setLoadingVideos(true);
     const path = 'videos';
     const mapVideoDoc = (d: { id: string; data: () => Record<string, unknown> }): VideoPost => {
@@ -950,7 +977,7 @@ function ForumShell() {
       unsubPublic();
       if (unsubOwn) unsubOwn();
     };
-  }, [authReady, user?.uid]);
+  }, [authReady, user?.uid, isSuspended]);
 
   // Sync user's liked videos
   useEffect(() => {
@@ -977,7 +1004,11 @@ function ForumShell() {
 
   // Real-time community polls listener (open & closed public polls + own drafts)
   useEffect(() => {
-    if (!authReady) return;
+    if (!authReady || isSuspended) {
+      setPolls([]);
+      setLoadingPolls(false);
+      return;
+    }
     setLoadingPolls(true);
     const unsub = subscribePolls(
       isAdmin,
@@ -991,7 +1022,7 @@ function ForumShell() {
       }
     );
     return () => unsub();
-  }, [authReady, isAdmin, user?.uid]);
+  }, [authReady, isAdmin, user?.uid, isSuspended]);
 
   // Sync current user's ballots across loaded polls
   useEffect(() => {
@@ -1121,9 +1152,9 @@ function ForumShell() {
     return () => unsub();
   }, [authReady, user]);
 
-  // Real-time community group chat listener (signed-in members only; filtered live by disappearing timer)
+  // Real-time community group chat listener (signed-in permitted members only; filtered live by disappearing timer)
   useEffect(() => {
-    if (!authReady || !user) {
+    if (!authReady || !user || isSuspended) {
       setRawChatMessages([]);
       setLoadingChat(false);
       return;
@@ -1238,7 +1269,7 @@ function ForumShell() {
     );
 
     return () => unsub();
-  }, [authReady, user?.uid, showToast, tr]);
+  }, [authReady, user?.uid, isSuspended, showToast, tr]);
 
   // Apply dynamic disappearing-messages filter in real time
   const chatMessages = useMemo(() => {
@@ -1248,107 +1279,215 @@ function ForumShell() {
     return rawChatMessages.filter((m) => !m.createdAt || m.createdAt.toMillis() >= cutoffMs);
   }, [rawChatMessages, mchartGroupSettings.disappearAfterSeconds, nowTickMs]);
 
-  // Real-time Mchart Notes listener (signed-in members only)
+  // Real-time Mchart Notes listener (signed-in members: public notes + own private notes; owner sees all)
+  const backfilledNoteVisibilityRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!authReady || !user) {
+    if (!authReady || !user || isSuspended) {
       setMchartNotes([]);
       setLoadingNotes(false);
       return;
     }
     const path = 'mchart_notes';
-    const q = query(
-      collection(db, path),
-      orderBy('createdAt', 'desc'),
-      limit(50)
-    );
 
-    const unsub = onSnapshot(
-      q,
-      (snapshot) => {
-        const list: MchartNote[] = snapshot.docs.map((d) => {
-          const data = d.data();
-          const noteType =
-            data.noteType === 'pdf' || data.noteType === 'mixed' || data.noteType === 'text'
-              ? data.noteType
-              : typeof data.pdfUrl === 'string' && data.pdfUrl
-                ? 'mixed'
-                : 'text';
-          return {
-            id: d.id,
-            title: String(data.title || 'Note'),
-            subtitle: typeof data.subtitle === 'string' ? data.subtitle : '',
-            body: String(data.body || ''),
-            summary: String(data.summary || ''),
-            fileName: String(data.fileName || 'malosha-note.pdf'),
-            wordCount: Number(data.wordCount || 0),
-            authorId: String(data.authorId || ''),
-            authorName: String(data.authorName || 'Mmiliki'),
-            isPinned: Boolean(data.isPinned),
-            isArchived: Boolean(data.isArchived),
-            pdfUrl: typeof data.pdfUrl === 'string' ? data.pdfUrl : '',
-            pdfFileName: typeof data.pdfFileName === 'string' ? data.pdfFileName : '',
-            pdfSize: Number(data.pdfSize || 0),
-            noteType,
-            isLocked: Boolean(data.isLocked),
-            lockedTargetMode: data.lockedTargetMode === 'selected' ? 'selected' : 'all',
-            lockPrice: Number(data.lockPrice || 0),
-            lockCurrency: typeof data.lockCurrency === 'string' ? data.lockCurrency : 'TZS',
-            paymentInstructions:
-              typeof data.paymentInstructions === 'string' ? data.paymentInstructions : '',
-            createdAt: data.createdAt || null,
-            updatedAt: data.updatedAt || null,
-          };
-        });
+    const mapNoteDoc = (d: {
+      id: string;
+      data: () => Record<string, unknown>;
+    }): MchartNote => {
+      const data = d.data();
+      const noteType =
+        data.noteType === 'pdf' || data.noteType === 'mixed' || data.noteType === 'text'
+          ? data.noteType
+          : typeof data.pdfUrl === 'string' && data.pdfUrl
+            ? 'mixed'
+            : 'text';
+      const visibility: 'public' | 'private' =
+        data.visibility === 'private' ? 'private' : 'public';
+      return {
+        id: d.id,
+        title: String(data.title || 'Note'),
+        subtitle: typeof data.subtitle === 'string' ? data.subtitle : '',
+        body: String(data.body || ''),
+        summary: String(data.summary || ''),
+        fileName: String(data.fileName || 'malosha-note.pdf'),
+        wordCount: Number(data.wordCount || 0),
+        authorId: String(data.authorId || ''),
+        authorName: String(data.authorName || 'Mmiliki'),
+        isPinned: Boolean(data.isPinned),
+        isArchived: Boolean(data.isArchived),
+        pdfUrl: typeof data.pdfUrl === 'string' ? data.pdfUrl : '',
+        pdfFileName: typeof data.pdfFileName === 'string' ? data.pdfFileName : '',
+        pdfSize: Number(data.pdfSize || 0),
+        noteType,
+        isLocked: Boolean(data.isLocked),
+        lockedTargetMode: data.lockedTargetMode === 'selected' ? 'selected' : 'all',
+        lockPrice: Number(data.lockPrice || 0),
+        lockCurrency: typeof data.lockCurrency === 'string' ? data.lockCurrency : 'TZS',
+        paymentInstructions:
+          typeof data.paymentInstructions === 'string' ? data.paymentInstructions : '',
+        visibility,
+        createdAt: (data.createdAt as MchartNote['createdAt']) || null,
+        updatedAt: (data.updatedAt as MchartNote['updatedAt']) || null,
+      };
+    };
 
-        setMchartNotes(list);
-        setLoadingNotes(false);
+    const handleNotesListUpdate = (list: MchartNote[]) => {
+      setMchartNotes(list);
+      setLoadingNotes(false);
 
-        if (!initialNotesLoadedRef.current) {
-          knownNoteIdsRef.current = new Set(list.map((n) => n.id));
-          initialNotesLoadedRef.current = true;
-          return;
-        }
+      if (!initialNotesLoadedRef.current) {
+        knownNoteIdsRef.current = new Set(list.map((n) => n.id));
+        initialNotesLoadedRef.current = true;
+        return;
+      }
 
-        const newestNote = list.find(
-          (n) => !knownNoteIdsRef.current.has(n.id) && !n.isArchived && n.authorId !== user?.uid
-        );
-        list.forEach((n) => knownNoteIdsRef.current.add(n.id));
+      const newestNote = list.find(
+        (n) =>
+          !knownNoteIdsRef.current.has(n.id) &&
+          !n.isArchived &&
+          n.visibility !== 'private' &&
+          n.authorId !== user?.uid
+      );
+      list.forEach((n) => knownNoteIdsRef.current.add(n.id));
 
-        if (newestNote) {
-          const isViewingNotes =
-            activeTabRef.current === 'chat' &&
-            mchartSubTabRef.current === 'notes' &&
-            !selectedTopicIdRef.current &&
-            typeof document !== 'undefined' &&
-            !document.hidden;
+      if (newestNote) {
+        const isViewingNotes =
+          activeTabRef.current === 'chat' &&
+          mchartSubTabRef.current === 'notes' &&
+          !selectedTopicIdRef.current &&
+          typeof document !== 'undefined' &&
+          !document.hidden;
 
-          if (!isViewingNotes) {
-            const alertTitle = tr('Slide Mpya · Mchart (Malosha)', 'New Slide · Malosha Mchart');
-            if (typeof document !== 'undefined' && !document.hidden) {
-              showToast(`${alertTitle}: ${newestNote.title}`);
-            } else {
-              latestBgAlertSummaryRef.current = `${alertTitle}: ${newestNote.title}`;
-            }
-            void sendPhoneNotification({
-              title: alertTitle,
-              body: newestNote.title,
-              url: '/?tab=mchart&view=notes',
-              tag: 'malosha-mchart-note',
-              badgeCount: !isAppVisibleRef.current
-                ? Math.max(1, totalAppUnreadCountRef.current + 1 - (acknowledgedUnreadTotalRef.current ?? 0))
-                : undefined,
-            });
+        if (!isViewingNotes) {
+          const alertTitle = tr('Slide Mpya · Mchart (Malosha)', 'New Slide · Malosha Mchart');
+          if (typeof document !== 'undefined' && !document.hidden) {
+            showToast(`${alertTitle}: ${newestNote.title}`);
+          } else {
+            latestBgAlertSummaryRef.current = `${alertTitle}: ${newestNote.title}`;
           }
+          void sendPhoneNotification({
+            title: alertTitle,
+            body: newestNote.title,
+            url: '/?tab=mchart&view=notes',
+            tag: 'malosha-mchart-note',
+            badgeCount: !isAppVisibleRef.current
+              ? Math.max(1, totalAppUnreadCountRef.current + 1 - (acknowledgedUnreadTotalRef.current ?? 0))
+              : undefined,
+          });
         }
+      }
+    };
+
+    if (isAdmin) {
+      const qAdmin = query(
+        collection(db, path),
+        orderBy('createdAt', 'desc'),
+        limit(120)
+      );
+      const unsub = onSnapshot(
+        qAdmin,
+        (snapshot) => {
+          snapshot.docs.forEach((d) => {
+            const rawVis = d.data().visibility;
+            if (
+              rawVis !== 'public' &&
+              rawVis !== 'private' &&
+              !backfilledNoteVisibilityRef.current.has(d.id)
+            ) {
+              backfilledNoteVisibilityRef.current.add(d.id);
+              void updateDoc(doc(db, path, d.id), { visibility: 'public' }).catch(() => {});
+            }
+          });
+          const list = snapshot.docs.map((d) => mapNoteDoc(d));
+          handleNotesListUpdate(list);
+        },
+        (error) => {
+          setLoadingNotes(false);
+          handleFirestoreError(error, OperationType.LIST, path);
+        }
+      );
+      return () => unsub();
+    }
+
+    let publicNotes: MchartNote[] = [];
+    let ownNotes: MchartNote[] = [];
+    let publicReady = false;
+    let ownReady = false;
+
+    const mergeAndPublish = () => {
+      if (!publicReady && !ownReady) return;
+      const byId = new Map<string, MchartNote>();
+      publicNotes.forEach((n) => byId.set(n.id, n));
+      ownNotes.forEach((n) => byId.set(n.id, n));
+      const merged = Array.from(byId.values()).sort((a, b) => {
+        const msA = a.createdAt ? a.createdAt.toMillis() : Number.MAX_SAFE_INTEGER;
+        const msB = b.createdAt ? b.createdAt.toMillis() : Number.MAX_SAFE_INTEGER;
+        return msB - msA;
+      });
+      handleNotesListUpdate(merged);
+    };
+
+    const qPublicOrdered = query(
+      collection(db, path),
+      where('visibility', '==', 'public'),
+      orderBy('createdAt', 'desc'),
+      limit(80)
+    );
+    let unsubPublicFallback: (() => void) | null = null;
+    const unsubPublic = onSnapshot(
+      qPublicOrdered,
+      (snapshot) => {
+        publicNotes = snapshot.docs.map((d) => mapNoteDoc(d));
+        publicReady = true;
+        mergeAndPublish();
       },
       (error) => {
+        if ((error as { code?: string })?.code === 'failed-precondition') {
+          const qPublicUnordered = query(
+            collection(db, path),
+            where('visibility', '==', 'public')
+          );
+          unsubPublicFallback = onSnapshot(
+            qPublicUnordered,
+            (snapshot) => {
+              publicNotes = snapshot.docs.map((d) => mapNoteDoc(d));
+              publicReady = true;
+              mergeAndPublish();
+            },
+            (fallbackErr) => {
+              setLoadingNotes(false);
+              handleFirestoreError(fallbackErr, OperationType.LIST, path);
+            }
+          );
+          return;
+        }
         setLoadingNotes(false);
         handleFirestoreError(error, OperationType.LIST, path);
       }
     );
 
-    return () => unsub();
-  }, [authReady, user?.uid, showToast, tr]);
+    const qOwn = query(
+      collection(db, path),
+      where('authorId', '==', user.uid)
+    );
+    const unsubOwn = onSnapshot(
+      qOwn,
+      (snapshot) => {
+        ownNotes = snapshot.docs.map((d) => mapNoteDoc(d));
+        ownReady = true;
+        mergeAndPublish();
+      },
+      () => {
+        ownReady = true;
+        mergeAndPublish();
+      }
+    );
+
+    return () => {
+      unsubPublic();
+      unsubPublicFallback?.();
+      unsubOwn();
+    };
+  }, [authReady, user?.uid, isAdmin, isSuspended, showToast, tr]);
 
   const markNoteRead = useCallback((noteId: string) => {
     setReadNoteIds((prev) => {
@@ -1487,7 +1626,7 @@ function ForumShell() {
     initialDmLoadedRef.current = false;
     lastDmUpdateByThreadRef.current = {};
 
-    if (!authReady || !user) {
+    if (!authReady || !user || isSuspended) {
       setDirectChats([]);
       setActiveDirectChatId(null);
       return;
@@ -1588,11 +1727,11 @@ function ForumShell() {
     );
 
     return () => unsub();
-  }, [authReady, user, showToast, tr]);
+  }, [authReady, user, isSuspended, showToast, tr]);
 
   // Real-time 24h Mchart Photo Statuses (Members + Personal audience + Author's own statuses)
   useEffect(() => {
-    if (!authReady || !user) {
+    if (!authReady || !user || isSuspended) {
       setMchartStatuses([]);
       setLoadingStatuses(false);
       return;
@@ -1701,7 +1840,7 @@ function ForumShell() {
       unsubTargeted();
       unsubOwn();
     };
-  }, [authReady, user]);
+  }, [authReady, user, isSuspended]);
 
   // Read shared photo from OS Share Sheet (Service Worker Cache) on launch or focus
   useEffect(() => {
@@ -1970,13 +2109,14 @@ function ForumShell() {
 
     return {
       kijiweni: countBoard('Kijiweni'),
-      video: unreadVideoCount,
-      fursa: countBoard('Fursa'),
-      makala: countBoard('Makala'),
-      chat: unreadChatCount + unreadNotesCount + unreadDirectCount,
-      votes: unvotedOpenPollsCount,
+      video: isSuspended ? 0 : unreadVideoCount,
+      fursa: isSuspended ? 0 : countBoard('Fursa'),
+      makala: isSuspended ? 0 : countBoard('Makala'),
+      chat: isSuspended ? 0 : unreadChatCount + unreadNotesCount + unreadDirectCount,
+      votes: isSuspended ? 0 : unvotedOpenPollsCount,
     };
   }, [
+    isSuspended,
     isAppVisible,
     currentlyViewedBoard,
     boardLastSeen,
@@ -2009,6 +2149,55 @@ function ForumShell() {
     });
     return () => unsub();
   }, [authReady]);
+
+  // Real-time global platform lock listener
+  useEffect(() => {
+    const unsub = subscribePlatformLockSettings((settings) => {
+      setPlatformLock(settings);
+      setPlatformLockLoaded(true);
+    });
+    return () => unsub();
+  }, []);
+
+  // Auto-unlock entire platform when verified owner opens the email unlock link (?unlock_platform=...)
+  useEffect(() => {
+    if (!pendingPlatformUnlockToken || !authReady || !platformLockLoaded) return;
+    if (!user || !isAdmin) return;
+    let cancelled = false;
+    setUnlockingPlatformBusy(true);
+    void unlockEntirePlatform(user, pendingPlatformUnlockToken)
+      .then(() => {
+        if (cancelled) return;
+        setPendingPlatformUnlockToken('');
+        if (typeof window !== 'undefined') {
+          const url = new URL(window.location.href);
+          url.searchParams.delete('unlock_platform');
+          window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+        }
+        showToast(
+          tr(
+            'Jukwaa lote limefunguliwa kikamilifu kupitia kiungo cha email!',
+            'Entire platform unlocked successfully via your email link!'
+          )
+        );
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          showToast(
+            err instanceof Error
+              ? err.message
+              : tr('Imeshindwa kufungua jukwaa.', 'Failed to unlock platform.'),
+            'error'
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setUnlockingPlatformBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingPlatformUnlockToken, authReady, platformLockLoaded, user, isAdmin, showToast, tr]);
 
   const refreshPlatformUsersCount = useCallback(async () => {
     setLoadingUsersCount(true);
@@ -2794,6 +2983,13 @@ function ForumShell() {
           return;
         }
         const data = snap.data();
+        if (isSuspended && normalizeBoardCategory(String(data.category || '')) !== 'Kijiweni') {
+          setSharedTopicFallback(null);
+          setSelectedTopicId(null);
+          setActiveTab('kijiweni');
+          setSelectedCategory('Kijiweni');
+          return;
+        }
         const isAuthorViewingOwnPrivate =
           Boolean(user?.uid) && data.authorId === user?.uid && data.status === 'private';
         const isPublicStatus = data.status === 'open' || data.status === 'locked';
@@ -2849,7 +3045,7 @@ function ForumShell() {
     return () => {
       cancelled = true;
     };
-  }, [authReady, selectedTopicId, topics, isAdmin, user?.uid]);
+  }, [authReady, selectedTopicId, topics, isAdmin, user?.uid, isSuspended]);
 
   useEffect(() => {
     if (!authReady || !user) {
@@ -3141,7 +3337,59 @@ function ForumShell() {
     }
   }, []);
 
+  const handleLockPlatform = useCallback(
+    async (reason: string) => {
+      if (!user || !isAdmin) {
+        throw new Error(tr('Mmiliki pekee ndiye anayeweza kufunga jukwaa.', 'Owner only.'));
+      }
+      const res = await lockEntirePlatform(user, reason);
+      if (res.sent) {
+        showToast(
+          tr(
+            `Jukwaa lote limefungwa na email ya kufungua imetumwa kwenda ${res.recipient}.`,
+            `Entire platform locked and unlock email sent to ${res.recipient}.`
+          )
+        );
+      } else {
+        showToast(
+          tr(
+            'Jukwaa lote limefungwa! Tumia kitufe cha Email kilichoonyeshwa kutuma kiungo cha kufungua.',
+            'Entire platform locked! Use the email button shown to send your unlock link.'
+          )
+        );
+      }
+      return res;
+    },
+    [user, isAdmin, showToast, tr]
+  );
+
+  const handleUnlockPlatform = useCallback(async () => {
+    if (!user || !isAdmin) {
+      throw new Error(tr('Mmiliki pekee ndiye anayeweza kufungua jukwaa.', 'Owner only.'));
+    }
+    await unlockEntirePlatform(user);
+    showToast(
+      tr(
+        'Jukwaa limefunguliwa kikamilifu! Watumiaji wote sasa wanaweza kulitumia.',
+        'Platform unlocked! Everyone can use the platform again.'
+      )
+    );
+  }, [user, isAdmin, showToast, tr]);
+
   const handleSelectTab = (tab: NavTab) => {
+    if (isSuspended && tab !== 'kijiweni' && tab !== 'safety' && tab !== 'auth') {
+      showToast(
+        tr(
+          'Akaunti yako imefungwa. Unaweza kusoma Kijiweni pekee (bila kuandika chochote).',
+          'Your account is closed. You can only read Kijiweni (read-only).'
+        ),
+        'error'
+      );
+      setActiveTab('kijiweni');
+      setSelectedCategory('Kijiweni');
+      setSelectedTopicId(null);
+      return;
+    }
     if (tab === 'video' && hideVideoTabForCurrentUser) {
       return;
     }
@@ -3177,6 +3425,7 @@ function ForumShell() {
     setSelectedTopicId(null);
     if (tab === 'kijiweni') {
       setSelectedCategory('Kijiweni');
+      setKijiweniEntryToken((n) => n + 1);
     } else if (tab === 'fursa') {
       setSelectedCategory('Fursa');
     } else if (tab === 'makala') {
@@ -3191,17 +3440,36 @@ function ForumShell() {
 
   const handleSelectBoard = (board: TopicCategory) => {
     const normalized = normalizeBoardCategory(board);
+    if (isSuspended && normalized !== 'Kijiweni') {
+      showToast(
+        tr(
+          'Akaunti yako imefungwa. Unaweza kusoma Kijiweni pekee.',
+          'Your account is closed. You can only read Kijiweni.'
+        ),
+        'error'
+      );
+      setSelectedCategory('Kijiweni');
+      setSelectedTopicId(null);
+      setActiveTab('kijiweni');
+      return;
+    }
     setSelectedCategory(normalized);
     setSelectedTopicId(null);
-    if (normalized === 'Kijiweni') setActiveTab('kijiweni');
-    else if (normalized === 'Fursa') setActiveTab('fursa');
-    else setActiveTab('makala');
+    if (normalized === 'Kijiweni') {
+      setActiveTab('kijiweni');
+      setKijiweniEntryToken((n) => n + 1);
+    } else if (normalized === 'Fursa') {
+      setActiveTab('fursa');
+    } else {
+      setActiveTab('makala');
+    }
     if (typeof window !== 'undefined') {
       window.scrollTo({ top: 0, behavior: 'auto' });
     }
   };
 
   const latestMakala = useMemo(() => {
+    if (isSuspended) return [];
     return topics
       .filter(
         (t) =>
@@ -3214,10 +3482,23 @@ function ForumShell() {
         const bm = b.createdAt ? b.createdAt.toMillis() : Date.now();
         return bm - am;
       });
-  }, [topics]);
+  }, [topics, isSuspended]);
 
   const openTopicFromFeed = useCallback(
     (topicId: string) => {
+      if (isSuspended) {
+        const match = topics.find((t) => t.id === topicId);
+        if (match && normalizeBoardCategory(match.category) !== 'Kijiweni') {
+          showToast(
+            tr(
+              'Akaunti yako imefungwa. Unaweza kusoma Kijiweni pekee.',
+              'Your account is closed. Only Kijiweni reading is allowed.'
+            ),
+            'error'
+          );
+          return;
+        }
+      }
       markTopicRead(topicId);
       if (typeof window !== 'undefined') {
         feedScrollYRef.current = window.scrollY || window.pageYOffset || 0;
@@ -3225,8 +3506,22 @@ function ForumShell() {
       }
       setSelectedTopicId(topicId);
     },
-    [markTopicRead]
+    [markTopicRead, isSuspended, topics, showToast, tr]
   );
+
+  // Clamp active section & open topics strictly to Kijiweni (or safety profile) when suspended
+  useEffect(() => {
+    if (!isSuspended) return;
+    if (activeTab !== 'kijiweni' && activeTab !== 'safety' && activeTab !== 'auth') {
+      setActiveTab('kijiweni');
+      setSelectedCategory('Kijiweni');
+      setSelectedTopicId(null);
+    }
+    if (selectedTopic && normalizeBoardCategory(selectedTopic.category) !== 'Kijiweni') {
+      setSelectedTopicId(null);
+      setSharedTopicFallback(null);
+    }
+  }, [isSuspended, activeTab, selectedTopic]);
 
   // When a topic detail is open (e.g. via deep link or notification), mark topic + its reply alerts read
   useEffect(() => {
@@ -3286,6 +3581,9 @@ function ForumShell() {
 
     if (newlyPublished && newlyPublished.authorId !== user?.uid && newlyPublished.status !== 'private') {
       const board = normalizeBoardCategory(newlyPublished.category);
+      if (isSuspended && board !== 'Kijiweni') {
+        return;
+      }
       const alertTitle =
         board === 'Makala'
           ? tr('Habari Mpya · Malosha', 'Breaking News · Malosha')
@@ -3308,7 +3606,7 @@ function ForumShell() {
           : undefined,
       });
     }
-  }, [loadingTopics, topics, user?.uid, showToast, tr]);
+  }, [loadingTopics, topics, user?.uid, isSuspended, showToast, tr]);
 
   const blockIfSuspended = useCallback(() => {
     if (!isSuspended) return false;
@@ -3723,6 +4021,23 @@ function ForumShell() {
     await propagateUserIdentityAcrossAccount(user.uid, { photoURL: cleanUrl }).catch(() => {});
   };
 
+  const handleToggleProfileDetailsPublic = async (isPublic: boolean) => {
+    if (!user || blockIfSuspended()) return;
+    const saved = await updateUserProfileDetailsVisibility(user.uid, isPublic);
+    setUserProfile((prev) => (prev ? { ...prev, profileDetailsPublic: saved } : prev));
+    showToast(
+      saved
+        ? tr(
+            'Taarifa za wasifu sasa zinaonekana kwa wanachama wengine.',
+            'Profile details are now visible to other members.'
+          )
+        : tr(
+            'Taarifa za wasifu zimefichwa kwa wengine. Picha ya profile bado inaonekana.',
+            'Profile details are now hidden from others. Profile photo stays visible.'
+          )
+    );
+  };
+
   const composerDefaultCategory: TopicCategory | 'all' =
     activeTab === 'kijiweni'
       ? 'Kijiweni'
@@ -3739,6 +4054,13 @@ function ForumShell() {
   const isMpollDarkBlue = isMpollView && mpollBgTheme === 'darkblue';
   const isAuthView = activeTab === 'auth' && authReady && !user;
   const isFullStageView = isMchartView || isVideoView;
+  const isKijiweniView =
+    !isFullStageView &&
+    !isAuthView &&
+    (selectedTopic
+      ? normalizeBoardCategory(selectedTopic.category) === 'Kijiweni'
+      : activeTab === 'kijiweni' ||
+        (activeTab === 'all' && selectedCategory === 'Kijiweni'));
   const lockViewportToScreen = isFullStageView || isAuthView;
   const { isKeyboardOpen: mobileKeyboardOpen, keyboardHeight } = useMobileKeyboardState();
 
@@ -3765,6 +4087,127 @@ function ForumShell() {
     };
   }, [lockViewportToScreen]);
 
+  if (platformLock.isLocked && !isAdmin) {
+    if (activeTab === 'auth' && authReady && !user) {
+      return (
+        <div className="min-h-screen bg-slate-950 flex flex-col">
+          <div className="border-b border-red-800/50 bg-red-950/90 px-4 py-2.5 text-center text-xs font-semibold text-red-100">
+            {pendingPlatformUnlockToken
+              ? tr(
+                  `Ingia kama Mmiliki (${ADMIN_EMAIL}) kuthibitisha kiungo cha kufungua jukwaa.`,
+                  `Sign in as Owner (${ADMIN_EMAIL}) to verify the platform unlock link.`
+                )
+              : tr(
+                  `Jukwaa limefungwa kwa muda — Ingia kama Mmiliki (${ADMIN_EMAIL}) pekee.`,
+                  `Platform is locked — Owner sign-in (${ADMIN_EMAIL}) only.`
+                )}
+          </div>
+          <div className="flex-1 overflow-hidden">
+            <AuthView
+              promptReason={null}
+              onBack={() => setActiveTab('kijiweni')}
+              onSuccess={() => {
+                setActiveTab('kijiweni');
+              }}
+            />
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-[#061322] via-[#0E2640] to-[#163A5F] px-4 py-10 flex items-center justify-center text-slate-900">
+        <div className="w-full max-w-lg rounded-2xl border border-white/15 bg-white p-6 sm:p-8 shadow-2xl">
+          <div className="flex items-center gap-3">
+            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-red-100 text-red-700 ring-1 ring-red-200">
+              <ShieldAlert className="h-6 w-6" aria-hidden="true" />
+            </span>
+            <div>
+              <p className="text-[11px] font-extrabold tracking-widest text-red-700 uppercase">
+                Malosha Forums
+              </p>
+              <h1 className="font-display text-xl font-bold text-slate-900 sm:text-2xl">
+                {tr('Jukwaa Limefungwa Kwa Muda', 'Platform Temporarily Locked')}
+              </h1>
+            </div>
+          </div>
+
+          <p className="mt-4 text-sm leading-relaxed text-slate-600">
+            {tr(
+              'Mmiliki wa mfumo amefunga jukwaa lote kwa muda. Hakuna mtumiaji anayeweza kusoma au kutumia kipengele chochote hadi lifunguliwe tena.',
+              'The platform owner has temporarily locked the entire platform. All sections are unavailable until the owner reopens it.'
+            )}
+          </p>
+
+          <div className="mt-4 rounded-xl border border-red-200 bg-red-50/70 p-4">
+            <p className="text-[11px] font-extrabold tracking-wide text-red-800 uppercase">
+              {tr('Sababu kutoka kwa Mmiliki', 'Reason from Platform Owner')}
+            </p>
+            <p className="mt-1.5 text-sm font-semibold whitespace-pre-wrap text-slate-900">
+              {platformLock.reason || tr('Matengenezo ya mfumo.', 'System maintenance.')}
+            </p>
+          </div>
+
+          {pendingPlatformUnlockToken && (
+            <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 p-3.5 text-xs text-sky-950">
+              <p className="font-bold">
+                {tr(
+                  'Kiungo cha kufungua jukwaa kutoka email kimetambuliwa!',
+                  'Platform unlock link from email detected!'
+                )}
+              </p>
+              <p className="mt-0.5 text-[11px] text-sky-800">
+                {tr(
+                  `Bofya kitufe hapa chini uingie na akaunti ya mmiliki (${ADMIN_EMAIL}) ili kulifungua jukwaa papo hapo.`,
+                  `Sign in with the owner account (${ADMIN_EMAIL}) below to immediately unlock the platform.`
+                )}
+              </p>
+            </div>
+          )}
+
+          {user && !isAdmin && (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs text-slate-700">
+              <span className="truncate">
+                {tr('Umeingia kama:', 'Signed in as:')}{' '}
+                <strong className="text-slate-900">{user.email || user.displayName}</strong>
+              </span>
+              <button
+                type="button"
+                onClick={() => void handleSignOut()}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+              >
+                <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>{tr('Toka', 'Sign Out')}</span>
+              </button>
+            </div>
+          )}
+
+          <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+            <span className="text-xs text-slate-500">
+              {unlockingPlatformBusy
+                ? tr('Inafungua jukwaa...', 'Unlocking platform...')
+                : tr('Mmiliki pekee anaweza kufungua.', 'Only the owner can unlock.')}
+            </span>
+            {!user && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('auth')}
+                className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-[#0E2640] px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-[#163A5F]"
+              >
+                <Lock className="h-3.5 w-3.5 text-amber-300" aria-hidden="true" />
+                <span>
+                  {pendingPlatformUnlockToken
+                    ? tr('Ingia kama Mmiliki & Fungua', 'Owner Sign-In & Unlock')
+                    : tr('Mmiliki? Ingia Kufungua', 'Owner? Sign In to Unlock')}
+                </span>
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <UserPresenceProvider
       authReady={authReady}
@@ -3777,7 +4220,9 @@ function ForumShell() {
       className={`min-h-screen flex flex-col text-slate-900 transition-colors duration-300 ${
         isMpollDarkBlue
           ? 'bg-gradient-to-b from-[#041024] via-[#081D3A] to-[#0D2B54]'
-          : 'bg-[#F1F4F8]'
+          : isKijiweniView
+            ? 'bg-[#E5E9EF]'
+            : 'bg-[#F1F4F8]'
       }`}
     >
       <AppLaunchLoader ready={appReady} />
@@ -3834,6 +4279,33 @@ function ForumShell() {
                 : `pt-[var(--malosha-header-h,118px)] ${isFullStageView ? '' : 'pb-16 md:pb-0'}`
         }`}
       >
+        {platformLock.isLocked && isAdmin && !isFullStageView && !isAuthView && (
+          <div className="border-b border-red-300 bg-red-700 px-4 py-2.5 text-white">
+            <div className="mx-auto flex max-w-6xl flex-col items-start justify-between gap-2 sm:flex-row sm:items-center">
+              <div className="flex items-start gap-2 text-xs sm:text-sm">
+                <Lock className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" aria-hidden="true" />
+                <div>
+                  <span className="font-extrabold">
+                    {tr(
+                      'JUKWAA LOTE LIMEFUNGWA KWA WATUMIAJI WOTE:',
+                      'ENTIRE PLATFORM LOCKED FOR ALL USERS:'
+                    )}
+                  </span>{' '}
+                  <span className="text-red-100">{platformLock.reason}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleUnlockPlatform()}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-xs font-extrabold text-red-800 shadow-sm hover:bg-red-50"
+              >
+                <Unlock className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>{tr('Fungua Jukwaa Sasa', 'Unlock Platform Now')}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {isSuspended && !isFullStageView && !isAuthView && (
           <div className="border-b border-red-200 bg-red-50 px-4 py-3 text-red-900">
             <div className="mx-auto flex max-w-6xl flex-col items-start justify-between gap-2 sm:flex-row sm:items-center">
@@ -3853,8 +4325,8 @@ function ForumShell() {
                   })()}
                   <span>
                     {tr(
-                      'Huwezi kupost, ku-comment, wala kupenda.',
-                      'You cannot post, comment, or like.'
+                      'Makala, Fursa, Mchart na Mpoll zimefichwa. Unaweza kusoma Kijiweni pekee bila kuandika chochote.',
+                      'Articles, Opportunities, Mchart, and Mpoll are hidden. You can only read Kijiweni in read-only mode.'
                     )}
                   </span>
                   {userProfile?.suspendedReason && (
@@ -3875,10 +4347,10 @@ function ForumShell() {
           </div>
         )}
 
-        {selectedTopic ? (
+        {selectedTopic && (!isSuspended || normalizeBoardCategory(selectedTopic.category) === 'Kijiweni') ? (
           <TopicDetail
             topic={selectedTopic}
-            latestMakala={latestMakala}
+            latestMakala={isSuspended ? [] : latestMakala}
             onOpenTopic={openTopicFromFeed}
             userUid={user?.uid || null}
             userDisplayName={userProfile?.displayName || user?.displayName || 'Mwanachama'}
@@ -4010,6 +4482,7 @@ function ForumShell() {
             userNotifications={userNotifications}
             onSaveProfile={handleSaveProfile}
             onUpdateProfilePhoto={handleUpdateProfilePhoto}
+            onToggleProfileDetailsPublic={handleToggleProfileDetailsPublic}
             onPublishPosterTopic={async (data) => {
               if (!user) throw new Error('Ingia kwanza.');
               return await createTopic(
@@ -4047,8 +4520,11 @@ function ForumShell() {
             }
             openAdminMembersSignal={openAdminMembersSignal}
             signupLastSeenMs={adminSignupLastSeenMs}
+            platformLock={platformLock}
+            onLockPlatform={isAdmin ? handleLockPlatform : undefined}
+            onUnlockPlatform={isAdmin ? handleUnlockPlatform : undefined}
           />
-        ) : activeTab === 'chat' ? (
+        ) : activeTab === 'chat' && !isSuspended ? (
           <ForumChatView
             messages={chatMessages}
             loading={loadingChat}
@@ -4083,7 +4559,7 @@ function ForumShell() {
             onToast={showToast}
             onRequestConfirm={(opts) => setConfirmState(opts)}
           />
-        ) : activeTab === 'video' ? (
+        ) : activeTab === 'video' && !isSuspended ? (
           <VideosFeedView
             videos={videos}
             loading={loadingVideos}
@@ -4100,7 +4576,7 @@ function ForumShell() {
             onToast={showToast}
             onRequestConfirm={(opts) => setConfirmState(opts)}
           />
-        ) : activeTab === 'votes' ? (
+        ) : activeTab === 'votes' && !isSuspended ? (
           <VotingPollsView
             polls={polls}
             loading={loadingPolls}
@@ -4183,6 +4659,7 @@ function ForumShell() {
             hasMoreCloudTopics={hasMoreCloudTopics}
             loadingMoreCloudTopics={loadingMoreCloudTopics}
             onLoadMoreCloudTopics={handleLoadMoreCloudTopics}
+            kijiweniEntryToken={kijiweniEntryToken}
           />
         )}
       </main>
@@ -4192,14 +4669,21 @@ function ForumShell() {
           className={`border-t py-6 pb-20 md:pb-6 transition-colors duration-300 ${
             isMpollDarkBlue
               ? 'border-[#1D4E89]/40 bg-[#041226] text-slate-300'
-              : 'border-slate-200 bg-white text-slate-500'
+              : isKijiweniView
+                ? 'border-[#D0D8E2] bg-[#EAEEF3] text-slate-600'
+                : 'border-slate-200 bg-white text-slate-500'
           }`}
         >
           <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 text-xs sm:flex-row sm:px-6">
             <p>
               © {new Date().getFullYear()} Malosha Forums. Kijiweni
-              {!hideVideoTabForCurrentUser && ' · Video'} · {tr('Fursa', 'Opportunities')} ·{' '}
-              {tr('Makala', 'Articles')} · Mchart · Mpoll.
+              {!isSuspended && (
+                <>
+                  {!hideVideoTabForCurrentUser && ' · Video'} · {tr('Fursa', 'Opportunities')} ·{' '}
+                  {tr('Makala', 'Articles')} · Mchart · Mpoll
+                </>
+              )}
+              .
             </p>
             <div className="flex flex-wrap items-center justify-center gap-5">
               <button
@@ -4209,43 +4693,47 @@ function ForumShell() {
               >
                 Kijiweni
               </button>
-              {!hideVideoTabForCurrentUser && (
-                <button
-                  type="button"
-                  onClick={() => handleSelectTab('video')}
-                  className={isMpollDarkBlue ? 'hover:text-white hover:underline' : 'hover:text-slate-900 hover:underline'}
-                >
-                  Video
-                </button>
+              {!isSuspended && (
+                <>
+                  {!hideVideoTabForCurrentUser && (
+                    <button
+                      type="button"
+                      onClick={() => handleSelectTab('video')}
+                      className={isMpollDarkBlue ? 'hover:text-white hover:underline' : 'hover:text-slate-900 hover:underline'}
+                    >
+                      Video
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleSelectTab('fursa')}
+                    className={isMpollDarkBlue ? 'hover:text-white hover:underline' : 'hover:text-slate-900 hover:underline'}
+                  >
+                    {tr('Fursa', 'Opportunities')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectTab('makala')}
+                    className={isMpollDarkBlue ? 'hover:text-white hover:underline' : 'hover:text-slate-900 hover:underline'}
+                  >
+                    {tr('Makala', 'Articles')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectTab('chat')}
+                    className={isMpollDarkBlue ? 'hover:text-white hover:underline' : 'hover:text-slate-900 hover:underline'}
+                  >
+                    Mchart
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectTab('votes')}
+                    className={isMpollDarkBlue ? 'hover:text-white hover:underline' : 'hover:text-slate-900 hover:underline'}
+                  >
+                    Mpoll
+                  </button>
+                </>
               )}
-              <button
-                type="button"
-                onClick={() => handleSelectTab('fursa')}
-                className={isMpollDarkBlue ? 'hover:text-white hover:underline' : 'hover:text-slate-900 hover:underline'}
-              >
-                {tr('Fursa', 'Opportunities')}
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSelectTab('makala')}
-                className={isMpollDarkBlue ? 'hover:text-white hover:underline' : 'hover:text-slate-900 hover:underline'}
-              >
-                {tr('Makala', 'Articles')}
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSelectTab('chat')}
-                className={isMpollDarkBlue ? 'hover:text-white hover:underline' : 'hover:text-slate-900 hover:underline'}
-              >
-                Mchart
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSelectTab('votes')}
-                className={isMpollDarkBlue ? 'hover:text-white hover:underline' : 'hover:text-slate-900 hover:underline'}
-              >
-                Mpoll
-              </button>
               <button
                 type="button"
                 onClick={() => handleSelectTab('safety')}
@@ -4267,39 +4755,35 @@ function ForumShell() {
           darkTheme={isVideoView}
           hideVideoTab={hideVideoTabForCurrentUser}
           hideMpollTab={false}
+          isSuspended={isSuspended}
+          isAdmin={isAdmin}
         />
       )}
 
       {!isFullStageView && !isAuthView && (
-        <FloatingScrollButton resetKey={`${activeTab}:${selectedTopicId || ''}`} />
+        <FloatingScrollButton
+          resetKey={`${activeTab}:${selectedTopicId || ''}`}
+          hasBottomRightFab={
+            !isFullStageView &&
+            !isAuthView &&
+            !isKijiweniView &&
+            !isSuspended &&
+            activeTab !== 'votes' &&
+            !mobileKeyboardOpen
+          }
+        />
       )}
 
-      {/* Floating Add Topic / Post Action Icon */}
-      {!isFullStageView && !isAuthView && activeTab !== 'votes' && !mobileKeyboardOpen && (
+      {/* Floating Add Topic / Post Action Icon (hidden on Kijiweni and for suspended accounts) */}
+      {!isFullStageView && !isAuthView && !isKijiweniView && !isSuspended && activeTab !== 'votes' && !mobileKeyboardOpen && (
         <button
           type="button"
           onClick={handleOpenNewTopic}
-          aria-label={
-            isSuspended && !isAdmin
-              ? tr('Akaunti Imefungwa', 'Account Closed')
-              : tr('Ongeza Mada Mpya', 'Add New Post')
-          }
-          title={
-            isSuspended && !isAdmin
-              ? tr('Akaunti Imefungwa', 'Account Closed')
-              : tr('Ongeza Mada', 'Add Post')
-          }
-          className={`fixed right-4 bottom-[calc(86px+env(safe-area-inset-bottom,0px))] z-[42] flex h-[54px] w-[54px] items-center justify-center rounded-full text-white shadow-[0_10px_26px_rgba(14,38,64,0.34)] ring-2 ring-white/85 transition-transform hover:scale-105 active:scale-95 md:right-6 md:bottom-6 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-amber-400 ${
-            isSuspended && !isAdmin
-              ? 'bg-red-800 hover:bg-red-700'
-              : 'bg-gradient-to-br from-[#F59E0B] via-[#D97706] to-[#B45309] hover:brightness-105'
-          }`}
+          aria-label={tr('Ongeza Mada Mpya', 'Add New Post')}
+          title={tr('Ongeza Mada', 'Add Post')}
+          className="fixed right-4 bottom-[calc(86px+env(safe-area-inset-bottom,0px))] z-[42] flex h-[54px] w-[54px] items-center justify-center rounded-full bg-gradient-to-br from-[#F59E0B] via-[#D97706] to-[#B45309] text-white shadow-[0_10px_26px_rgba(14,38,64,0.34)] ring-2 ring-white/85 transition-transform hover:scale-105 hover:brightness-105 active:scale-95 md:right-6 md:bottom-6 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-amber-400"
         >
-          {isSuspended && !isAdmin ? (
-            <Lock className="h-5 w-5" aria-hidden="true" />
-          ) : (
-            <Plus className="h-6 w-6 stroke-[2.6]" aria-hidden="true" />
-          )}
+          <Plus className="h-6 w-6 stroke-[2.6]" aria-hidden="true" />
         </button>
       )}
 

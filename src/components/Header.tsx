@@ -321,7 +321,10 @@ export const Header: React.FC<HeaderProps> = ({
     return readAt !== null && nowMs - readAt >= NOTIF_READ_TTL_MS;
   };
 
+  const isRestrictedSuspended = Boolean(isSuspended && !isAdmin);
+
   const newsNotifications = useMemo(() => {
+    if (isRestrictedSuspended) return [];
     return topics
       .filter(
         (t) =>
@@ -336,11 +339,17 @@ export const Header: React.FC<HeaderProps> = ({
       })
       .slice(0, 20);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [topics, readTimestamps, clearedAtMs, nowMs]);
+  }, [topics, readTimestamps, clearedAtMs, nowMs, isRestrictedSuspended]);
 
   const allNotifications = useMemo(() => {
     return topics
-      .filter((t) => t.status !== 'private' && !isExpiredReadTopic(t))
+      .filter((t) => {
+        if (t.status === 'private' || isExpiredReadTopic(t)) return false;
+        if (isRestrictedSuspended && normalizeBoardCategory(t.category) !== 'Kijiweni') {
+          return false;
+        }
+        return true;
+      })
       .sort((a, b) => {
         const am = a.createdAt ? a.createdAt.toMillis() : Date.now();
         const bm = b.createdAt ? b.createdAt.toMillis() : Date.now();
@@ -348,10 +357,19 @@ export const Header: React.FC<HeaderProps> = ({
       })
       .slice(0, 20);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [topics, readTimestamps, clearedAtMs, nowMs]);
+  }, [topics, readTimestamps, clearedAtMs, nowMs, isRestrictedSuspended]);
 
   const visibleUserNotifications = useMemo(() => {
     return userNotifications.filter((n) => {
+      if (isRestrictedSuspended) {
+        const isModeration =
+          n.type === 'account_moderation' ||
+          n.type === 'video_moderation' ||
+          n.type === 'post_moderation';
+        if (!isModeration && normalizeBoardCategory(n.topicCategory) !== 'Kijiweni') {
+          return false;
+        }
+      }
       if (!n.isRead) return true;
       const readMs = n.readAt
         ? n.readAt.toMillis()
@@ -360,7 +378,7 @@ export const Header: React.FC<HeaderProps> = ({
           : 0;
       return readMs === 0 || nowMs - readMs < NOTIF_READ_TTL_MS;
     });
-  }, [userNotifications, nowMs]);
+  }, [userNotifications, nowMs, isRestrictedSuspended]);
 
   const unreadNewsCount = useMemo(() => {
     return newsNotifications.filter((t) => isUnread(t)).length;
@@ -532,6 +550,7 @@ export const Header: React.FC<HeaderProps> = ({
   ];
 
   const navItems = allNavItems.filter((item) => {
+    if (isRestrictedSuspended) return item.id === 'kijiweni';
     if (hideVideoTab && item.id === 'video') return false;
     if (hideMpollTab && item.id === 'votes') return false;
     return true;
@@ -779,28 +798,30 @@ export const Header: React.FC<HeaderProps> = ({
                       </span>
                     )}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setNotifFilter('news')}
-                    className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors ${
-                      notifFilter === 'news'
-                        ? 'bg-[#B80000] text-white'
-                        : 'text-slate-600 hover:bg-slate-100'
-                    }`}
-                  >
-                    <span>{tr('Habari', 'News')}</span>
-                    {unreadNewsCount > 0 && (
-                      <span
-                        className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none tabular-nums ${
-                          notifFilter === 'news'
-                            ? 'bg-white text-[#B80000]'
-                            : 'bg-[#B80000] text-white'
-                        }`}
-                      >
-                        {unreadNewsCount}
-                      </span>
-                    )}
-                  </button>
+                  {!isRestrictedSuspended && (
+                    <button
+                      type="button"
+                      onClick={() => setNotifFilter('news')}
+                      className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors ${
+                        notifFilter === 'news'
+                          ? 'bg-[#B80000] text-white'
+                          : 'text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      <span>{tr('Habari', 'News')}</span>
+                      {unreadNewsCount > 0 && (
+                        <span
+                          className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none tabular-nums ${
+                            notifFilter === 'news'
+                              ? 'bg-white text-[#B80000]'
+                              : 'bg-[#B80000] text-white'
+                          }`}
+                        >
+                          {unreadNewsCount}
+                        </span>
+                      )}
+                    </button>
+                  )}
                   {isAdmin && (
                     <button
                       type="button"
@@ -1318,11 +1339,15 @@ export const Header: React.FC<HeaderProps> = ({
                     type="button"
                     onClick={() => {
                       setNotifOpen(false);
-                      onSelectTab('makala');
+                      onSelectTab(isRestrictedSuspended ? 'kijiweni' : 'makala');
                     }}
                     className="flex w-full items-center justify-between rounded-lg py-1 text-xs font-bold text-[#163A5F] transition-colors hover:text-[#B80000]"
                   >
-                    <span>{tr('Fungua Chumba cha Habari (Makala)', 'Open Newsroom (Articles)')}</span>
+                    <span>
+                      {isRestrictedSuspended
+                        ? tr('Rudi Kijiweni (Kusoma Tu)', 'Back to Kijiweni (Read-Only)')
+                        : tr('Fungua Chumba cha Habari (Makala)', 'Open Newsroom (Articles)')}
+                    </span>
                     <ChevronRight className="h-4 w-4" aria-hidden="true" />
                   </button>
                 </div>

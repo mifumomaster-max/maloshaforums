@@ -117,13 +117,13 @@ export function renderLinkedInline(text: string): React.ReactNode[] {
       }
     } else if (token.startsWith('**') && token.endsWith('**')) {
       tokens.push(
-        <strong key={keyIdx++} className="font-semibold text-slate-900">
+        <strong key={keyIdx++} className="font-bold text-[#0B0F14]">
           {renderLinkedInline(token.slice(2, -2))}
         </strong>
       );
     } else if (token.startsWith('*') && token.endsWith('*')) {
       tokens.push(
-        <em key={keyIdx++} className="italic text-slate-800">
+        <em key={keyIdx++} className="italic text-[#0B0F14]">
           {renderLinkedInline(token.slice(1, -1))}
         </em>
       );
@@ -131,7 +131,7 @@ export function renderLinkedInline(text: string): React.ReactNode[] {
       tokens.push(
         <code
           key={keyIdx++}
-          className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[0.85em] text-slate-800"
+          className="rounded bg-[#E5EBF2] px-1.5 py-0.5 font-mono text-[0.85em] text-[#0F1419]"
         >
           {token.slice(1, -1)}
         </code>
@@ -205,7 +205,7 @@ export const RichText: React.FC<RichTextProps> = ({
     blocks.push(
       <ul
         key={`list-${keyPrefix}`}
-        className={`${scholarly ? 'my-3 space-y-2 leading-[1.72]' : 'my-2.5 space-y-1.5'} list-disc pl-5 text-slate-800`}
+        className={`${scholarly ? 'my-3 space-y-2 leading-[1.72]' : 'my-2.5 space-y-1.5'} list-disc pl-5 font-medium text-[#0B0F14]`}
       >
         {listItems.map((item, idx) => (
           <li key={idx}>{renderLinkedInline(item)}</li>
@@ -220,7 +220,7 @@ export const RichText: React.FC<RichTextProps> = ({
     blocks.push(
       <ol
         key={`num-${keyPrefix}`}
-        className={`${scholarly ? 'my-3 space-y-2 leading-[1.72]' : 'my-2.5 space-y-1.5'} list-decimal pl-5 text-slate-800`}
+        className={`${scholarly ? 'my-3 space-y-2 leading-[1.72]' : 'my-2.5 space-y-1.5'} list-decimal pl-5 font-medium text-[#0B0F14]`}
       >
         {numberedItems.map((item, idx) => (
           <li key={idx}>{renderLinkedInline(item.text)}</li>
@@ -237,8 +237,8 @@ export const RichText: React.FC<RichTextProps> = ({
         key={`quote-${keyPrefix}`}
         className={
           scholarly
-            ? 'my-4 border-y border-slate-200 bg-[#FAF8F5] px-5 py-3.5 text-[#0E2640] italic leading-[1.72]'
-            : 'my-3.5 border-y border-slate-200 bg-slate-50 px-4 py-3 text-slate-700 italic'
+            ? 'my-4 border-y border-[#D5DCE4] bg-[#EAEEF3] px-5 py-3.5 font-medium text-[#0B0F14] italic leading-[1.72]'
+            : 'my-3.5 border-y border-[#D5DCE4] bg-[#EAEEF3] px-4 py-3 font-medium text-[#0B0F14] italic'
         }
       >
         {quoteLines.map((q, idx) => (
@@ -350,7 +350,7 @@ export const RichText: React.FC<RichTextProps> = ({
               className="block max-h-[480px] w-full bg-slate-100 object-contain"
             />
             {showCaption && (
-              <figcaption className="border-t border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
+              <figcaption className="border-t border-[#D5DCE4] bg-[#EAEEF3] px-3 py-1.5 text-xs font-medium text-[#3B4A59]">
                 {mediaToken.caption}
               </figcaption>
             )}
@@ -372,7 +372,7 @@ export const RichText: React.FC<RichTextProps> = ({
               className="block max-h-[480px] w-full bg-black object-contain"
             />
             {mediaToken.caption && (
-              <figcaption className="border-t border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
+              <figcaption className="border-t border-[#D5DCE4] bg-[#EAEEF3] px-3 py-1.5 text-xs font-medium text-[#3B4A59]">
                 {mediaToken.caption}
               </figcaption>
             )}
@@ -397,7 +397,7 @@ export const RichText: React.FC<RichTextProps> = ({
         key={`p-${index}`}
         className={`${
           scholarly ? 'my-3 leading-[1.75]' : 'my-2 leading-relaxed'
-        } text-slate-800 ${
+        } font-medium text-[#0B0F14] ${
           useDropCap
             ? 'first-letter:float-left first-letter:mr-2.5 first-letter:mt-1 first-letter:font-display first-letter:text-[2.45rem] first-letter:font-bold first-letter:leading-[0.82] first-letter:text-[#0E2640]'
             : ''

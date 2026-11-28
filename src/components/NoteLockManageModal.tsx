@@ -285,6 +285,18 @@ export const NoteLockManageModal: React.FC<NoteLockManageModalProps> = ({
 
         {/* Scrollable Content */}
         <div className="flex-1 space-y-6 overflow-y-auto px-4 py-4 sm:px-6">
+          {note.visibility === 'private' && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs leading-relaxed text-amber-950">
+              <strong className="font-bold">
+                {tr('Note ya Siri (Private):', 'Private Member Note:')}
+              </strong>{' '}
+              {tr(
+                `Note hii iliandaliwa na ${note.authorName} kwa hali ya Private. Ukiifunga hapa (Funga Kabisa au Kwa Malipo), hata mwenyewe (${note.authorName}) hataweza kuisoma, kuihariri, wala kuifuta mpaka umfungulie.`,
+                `Created privately by ${note.authorName}. Locking it here prevents even ${note.authorName} from reading, editing, or deleting it until you unlock it.`
+              )}
+            </div>
+          )}
+
           {/* Lock & Price Settings Form */}
           <form onSubmit={(e) => void handleSaveSettings(e)} className="space-y-4 border-b border-slate-200 pb-5">
             <div className="flex flex-wrap items-center justify-between gap-2">

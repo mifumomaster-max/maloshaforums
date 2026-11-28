@@ -81,7 +81,12 @@ service cloud.firestore {
     function canReadProtectedNoteContent(noteId) {
       return isAdmin() || (
         isSignedIn() &&
-        exists(/databases/$(database)/documents/mchart_notes/$(noteId)) && (
+        exists(/databases/$(database)/documents/mchart_notes/$(noteId)) &&
+        (
+          !('visibility' in get(/databases/$(database)/documents/mchart_notes/$(noteId)).data) ||
+          get(/databases/$(database)/documents/mchart_notes/$(noteId)).data.visibility != 'private' ||
+          get(/databases/$(database)/documents/mchart_notes/$(noteId)).data.authorId == request.auth.uid
+        ) && (
           !('isLocked' in get(/databases/$(database)/documents/mchart_notes/$(noteId)).data) ||
           get(/databases/$(database)/documents/mchart_notes/$(noteId)).data.isLocked == false ||
           (
@@ -164,7 +169,7 @@ service cloud.firestore {
         allow get, list: if isSignedIn();
         allow create: if isNotSuspended() && isValidId(userId) && isValidId(followerId) && (followerId == request.auth.uid || isAdmin());
         allow update: if false;
-        allow delete: if isSignedIn() && (followerId == request.auth.uid || isAdmin());
+        allow delete: if isSignedIn() && (isAdmin() || (isNotSuspended() && followerId == request.auth.uid));
       }
     }
 
@@ -172,9 +177,14 @@ service cloud.firestore {
     match /topics/{topicId} {
       allow get: if isValidId(topicId)
         && (
-          existing().status in ['open', 'locked'] ||
-          (isAdmin() && existing().status != 'private') ||
-          (isSignedIn() && existing().authorId == request.auth.uid)
+          isAdmin() ||
+          (
+            (!isSignedIn() || isNotSuspended() || existing().category == 'Kijiweni' || existing().category == 'kijiweni') &&
+            (
+              existing().status in ['open', 'locked'] ||
+              (isSignedIn() && existing().authorId == request.auth.uid)
+            )
+          )
         );
 
       allow list: if resource.data.status in ['open', 'locked']
@@ -211,7 +221,7 @@ service cloud.firestore {
         allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
         allow create: if isNotSuspended() && isValidId(topicId) && isValidId(userId) && userId == request.auth.uid;
         allow update: if false;
-        allow delete: if isSignedIn() && isValidId(topicId) && isValidId(userId) && (isAdmin() || userId == request.auth.uid);
+        allow delete: if isSignedIn() && isValidId(topicId) && isValidId(userId) && (isAdmin() || (isNotSuspended() && userId == request.auth.uid));
       }
 
       match /replies/{replyId} {
@@ -250,7 +260,7 @@ service cloud.firestore {
           allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
           allow create: if isNotSuspended() && isValidId(topicId) && isValidId(replyId) && isValidId(userId) && userId == request.auth.uid;
           allow update: if false;
-          allow delete: if isSignedIn() && isValidId(topicId) && isValidId(replyId) && isValidId(userId) && (isAdmin() || userId == request.auth.uid);
+          allow delete: if isSignedIn() && isValidId(topicId) && isValidId(replyId) && isValidId(userId) && (isAdmin() || (isNotSuspended() && userId == request.auth.uid));
         }
       }
     }
@@ -265,7 +275,7 @@ service cloud.firestore {
 
     // 7. Mchart Community Group Chat & Read Cursors
     match /forum_chat_messages/{messageId} {
-      allow get: if isSignedIn() && isValidId(messageId);
+      allow get: if isNotSuspended() && isValidId(messageId);
       allow list: if isSignedIn();
 
       allow create: if isNotSuspended()
@@ -302,10 +312,61 @@ service cloud.firestore {
       allow delete: if isSignedIn() && (isAdmin() || isOwner(userId));
     }
 
-    // 8. Mchart Notes & Protected Paid Content
+    // 8. Mchart Notes & Protected Paid Content (Public/Private member slides + full Owner lock/payment/delete control)
     match /mchart_notes/{noteId} {
-      allow get, list: if isSignedIn();
-      allow create, update, delete: if isAdmin() && isValidId(noteId);
+      allow get: if isValidId(noteId) && (
+        isAdmin() ||
+        (
+          isNotSuspended() && (
+            !('visibility' in existing()) ||
+            existing().visibility != 'private' ||
+            existing().authorId == request.auth.uid
+          )
+        )
+      );
+
+      allow list: if isAdmin() || (
+        isSignedIn() && (
+          resource.data.visibility == 'public' ||
+          resource.data.authorId == request.auth.uid
+        )
+      );
+
+      allow create: if isValidId(noteId) && isNotSuspended() && (
+        isAdmin() ||
+        (
+          incoming().authorId == request.auth.uid &&
+          incoming().visibility in ['public', 'private'] &&
+          incoming().title is string && incoming().title.size() <= 160 &&
+          incoming().body is string && incoming().body.size() <= 50000 &&
+          (!('isLocked' in incoming()) || incoming().isLocked == false) &&
+          (!('lockPrice' in incoming()) || incoming().lockPrice == 0)
+        )
+      );
+
+      allow update: if isSignedIn() && isValidId(noteId) && (
+        isAdmin() ||
+        (
+          isNotSuspended() &&
+          existing().authorId == request.auth.uid &&
+          existing().isLocked != true &&
+          incoming().authorId == existing().authorId &&
+          (!('visibility' in incoming()) || incoming().visibility in ['public', 'private']) &&
+          (!('title' in incoming()) || (incoming().title is string && incoming().title.size() <= 160)) &&
+          (!('body' in incoming()) || (incoming().body is string && incoming().body.size() <= 50000)) &&
+          (!('isLocked' in incoming()) || incoming().isLocked == existing().isLocked) &&
+          (!('lockPrice' in incoming()) || !('lockPrice' in existing()) || incoming().lockPrice == existing().lockPrice)
+        )
+      );
+
+      allow delete: if isSignedIn() && isValidId(noteId) && (
+        isAdmin() ||
+        (
+          isNotSuspended() &&
+          existing().authorId == request.auth.uid &&
+          existing().isLocked != true
+        )
+      );
 
       match /content/{docId} {
         allow get: if isValidId(noteId) && docId == 'full' && canReadProtectedNoteContent(noteId);
@@ -316,7 +377,15 @@ service cloud.firestore {
       match /access/{userId} {
         allow get: if isValidId(noteId) && isValidId(userId) && (isAdmin() || isOwner(userId));
         allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
-        allow create, update: if isSignedIn() && isValidId(noteId) && isValidId(userId) && (isAdmin() || (isNotSuspended() && isOwner(userId)));
+        allow create, update: if isSignedIn() && isValidId(noteId) && isValidId(userId) && (
+          isAdmin() ||
+          (
+            isNotSuspended() &&
+            isOwner(userId) &&
+            incoming().userId == request.auth.uid &&
+            incoming().status == 'pending'
+          )
+        );
         allow delete: if isAdmin() && isValidId(noteId) && isValidId(userId);
       }
     }
@@ -343,7 +412,7 @@ service cloud.firestore {
 
     // 10. Private 1-on-1 Direct Chats (Strictly Participant-Only)
     match /direct_chats/{chatId} {
-      allow get: if isSignedIn() && isValidId(chatId) && request.auth.uid in existing().participants;
+      allow get: if isNotSuspended() && isValidId(chatId) && request.auth.uid in existing().participants;
       allow list: if isSignedIn() && request.auth.uid in resource.data.participants;
       allow create: if isNotSuspended() && isValidId(chatId) && request.auth.uid in incoming().participants;
       allow update: if isNotSuspended()
@@ -353,7 +422,7 @@ service cloud.firestore {
       allow delete: if false;
 
       match /messages/{messageId} {
-        allow get: if isSignedIn() && isValidId(chatId) && isValidId(messageId) && request.auth.uid in existing().participants;
+        allow get: if isNotSuspended() && isValidId(chatId) && isValidId(messageId) && request.auth.uid in existing().participants;
         allow list: if isSignedIn() && request.auth.uid in resource.data.participants;
         allow create: if isNotSuspended()
           && isValidId(chatId)
@@ -373,7 +442,7 @@ service cloud.firestore {
     // 11. WhatsApp-Style 24h Photo & Video Statuses
     match /mchart_statuses/{statusId} {
       allow get: if isValidId(statusId)
-        && isSignedIn()
+        && isNotSuspended()
         && (
           existing().authorId == request.auth.uid ||
           '__MEMBERS__' in existing().audienceTokens ||
@@ -406,6 +475,7 @@ service cloud.firestore {
     // 12. Videos & Reels
     match /videos/{videoId} {
       allow get: if isValidId(videoId)
+        && (!isSignedIn() || isNotSuspended())
         && (existing().isArchived == false || isAdmin() || (isSignedIn() && existing().authorId == request.auth.uid));
 
       allow list: if resource.data.isArchived == false
@@ -454,6 +524,7 @@ service cloud.firestore {
         settingId == 'navigation' ||
         settingId == 'community_stats' ||
         settingId == 'mchart_group' ||
+        settingId == 'platform_lock' ||
         isAdmin()
       );
       allow list: if false;
@@ -490,15 +561,16 @@ service cloud.firestore {
     // 15. Community Polls & Voting
     match /polls/{pollId} {
       allow get: if isValidId(pollId)
+        && (!isSignedIn() || isNotSuspended())
         && (existing().status in ['open', 'closed'] || isAdmin() || (isSignedIn() && existing().createdBy == request.auth.uid));
 
       allow list: if resource.data.status in ['open', 'closed']
         || isAdmin()
         || (isSignedIn() && resource.data.createdBy == request.auth.uid);
 
-      allow create: if isSignedIn() && isValidId(pollId) && incoming().createdBy == request.auth.uid;
+      allow create: if isNotSuspended() && isValidId(pollId) && incoming().createdBy == request.auth.uid;
 
-      allow update: if isSignedIn()
+      allow update: if isNotSuspended()
         && isValidId(pollId)
         && (
           isAdmin() ||
@@ -509,71 +581,73 @@ service cloud.firestore {
 
       allow delete: if isSignedIn()
         && isValidId(pollId)
-        && (isAdmin() || ('createdBy' in existing() && existing().createdBy == request.auth.uid));
+        && (isAdmin() || (isNotSuspended() && 'createdBy' in existing() && existing().createdBy == request.auth.uid));
 
       match /tallies/{optionId} {
         allow list: if isValidId(pollId);
-        allow get: if isValidId(pollId) && isValidId(optionId);
-        allow create, update: if isSignedIn() && isValidId(pollId) && isValidId(optionId);
+        allow get: if isValidId(pollId) && isValidId(optionId) && (!isSignedIn() || isNotSuspended());
+        allow create, update: if isNotSuspended() && isValidId(pollId) && isValidId(optionId);
         allow delete: if isSignedIn() && isValidId(pollId) && isValidId(optionId) && (
           isAdmin() ||
-          (exists(/databases/$(database)/documents/polls/$(pollId)) && 'createdBy' in pollDocData(pollId) && pollDocData(pollId).createdBy == request.auth.uid)
+          (isNotSuspended() && exists(/databases/$(database)/documents/polls/$(pollId)) && 'createdBy' in pollDocData(pollId) && pollDocData(pollId).createdBy == request.auth.uid)
         );
       }
 
       match /ballots/{userId} {
-        allow get: if isSignedIn() && isValidId(pollId) && isValidId(userId) && (isOwner(userId) || isAdmin());
+        allow get: if isNotSuspended() && isValidId(pollId) && isValidId(userId) && (isOwner(userId) || isAdmin());
         allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
-        allow create, update: if isSignedIn() && isValidId(pollId) && isValidId(userId) && isOwner(userId);
+        allow create, update: if isNotSuspended() && isValidId(pollId) && isValidId(userId) && isOwner(userId);
         allow delete: if isAdmin() && isValidId(pollId) && isValidId(userId);
       }
 
       match /comments/{commentId} {
-        allow get: if isValidId(pollId) && isValidId(commentId);
+        allow get: if isValidId(pollId) && isValidId(commentId) && (!isSignedIn() || isNotSuspended());
         allow list: if true;
-        allow create: if isSignedIn() && isValidId(pollId) && isValidId(commentId) && incoming().authorId == request.auth.uid;
-        allow update: if isSignedIn() && isValidId(pollId) && isValidId(commentId) && (
+        allow create: if isNotSuspended() && isValidId(pollId) && isValidId(commentId) && incoming().authorId == request.auth.uid;
+        allow update: if isNotSuspended() && isValidId(pollId) && isValidId(commentId) && (
           isAdmin() ||
           existing().authorId == request.auth.uid ||
           incoming().diff(existing()).affectedKeys().hasOnly(['likesCount'])
         );
         allow delete: if isSignedIn() && isValidId(pollId) && isValidId(commentId) && (
           isAdmin() ||
-          existing().authorId == request.auth.uid ||
-          (exists(/databases/$(database)/documents/polls/$(pollId)) && 'createdBy' in pollDocData(pollId) && pollDocData(pollId).createdBy == request.auth.uid)
+          (isNotSuspended() && (
+            existing().authorId == request.auth.uid ||
+            (exists(/databases/$(database)/documents/polls/$(pollId)) && 'createdBy' in pollDocData(pollId) && pollDocData(pollId).createdBy == request.auth.uid)
+          ))
         );
 
         match /likes/{userId} {
           allow get, list: if isSignedIn();
-          allow create: if isSignedIn() && isValidId(pollId) && isValidId(commentId) && isValidId(userId) && userId == request.auth.uid;
+          allow create: if isNotSuspended() && isValidId(pollId) && isValidId(commentId) && isValidId(userId) && userId == request.auth.uid;
           allow update: if false;
-          allow delete: if isSignedIn() && isValidId(pollId) && isValidId(commentId) && isValidId(userId) && (isAdmin() || userId == request.auth.uid);
+          allow delete: if isSignedIn() && isValidId(pollId) && isValidId(commentId) && isValidId(userId) && (isAdmin() || (isNotSuspended() && userId == request.auth.uid));
         }
       }
     }
 
     // 16. Poll Tournaments
     match /poll_tournaments/{tournamentId} {
-      allow get: if isValidId(tournamentId);
+      allow get: if isValidId(tournamentId) && (!isSignedIn() || isNotSuspended());
       allow list: if true;
-      allow create: if isSignedIn() && isValidId(tournamentId) && incoming().createdBy == request.auth.uid;
-      allow update, delete: if isSignedIn() && isValidId(tournamentId) && (isAdmin() || ('createdBy' in existing() && existing().createdBy == request.auth.uid));
+      allow create: if isNotSuspended() && isValidId(tournamentId) && incoming().createdBy == request.auth.uid;
+      allow update, delete: if isSignedIn() && isValidId(tournamentId) && (isAdmin() || (isNotSuspended() && 'createdBy' in existing() && existing().createdBy == request.auth.uid));
     }
 
     // 17. Mchart & Slide Binary Document Storage (Zero HTTP 401)
     match /chat_files/{fileId} {
-      allow get: if isSignedIn() && isValidId(fileId);
+      allow get: if isNotSuspended() && isValidId(fileId);
       allow list: if isSignedIn() && (resource.data.uploaderId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn() && isValidId(fileId) && incoming().uploaderId == request.auth.uid;
+      allow create: if isNotSuspended() && isValidId(fileId) && incoming().uploaderId == request.auth.uid;
       allow update: if false;
-      allow delete: if isSignedIn() && isValidId(fileId) && (isAdmin() || existing().uploaderId == request.auth.uid);
+      allow delete: if isSignedIn() && isValidId(fileId) && (isAdmin() || (isNotSuspended() && existing().uploaderId == request.auth.uid));
 
       match /chunks/{chunkId} {
-        allow get: if isSignedIn() && isValidId(fileId) && isValidId(chunkId);
+        allow get: if isNotSuspended() && isValidId(fileId) && isValidId(chunkId);
         allow list: if isSignedIn() && (resource.data.uploaderId == request.auth.uid || isAdmin());
-        allow create: if isSignedIn() && isValidId(fileId) && isValidId(chunkId) && incoming().uploaderId == request.auth.uid;
+        allow create: if isNotSuspended() && isValidId(fileId) && isValidId(chunkId) && incoming().uploaderId == request.auth.uid;
         allow update: if false;
-        allow delete: if isSignedIn() && isValidId(fileId) && isValidId(chunkId) && (isAdmin() || existing().uploaderId == request.auth.uid);
+        allow delete: if isSignedIn() && isValidId(fileId) && isValidId(chunkId) && (isAdmin() || (isNotSuspended() && existing().uploaderId == request.auth.uid));
       }
     }
   }

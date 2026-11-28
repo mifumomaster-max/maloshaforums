@@ -632,7 +632,7 @@ export const KijiweniInlineComposer: React.FC<KijiweniInlineComposerProps> = ({
       {/* Inline Header */}
       <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3 sm:px-5">
         <div className="flex items-center gap-2.5">
-          <Avatar name={userDisplayName} photoURL={userPhoto} size="md" />
+          <Avatar name={userDisplayName} photoURL={userPhoto} uid={userUid} size="md" />
           <div>
             <div className="flex items-center gap-1.5">
               <p className="text-sm font-bold text-slate-900">{userDisplayName}</p>

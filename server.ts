@@ -5,6 +5,9 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ViteDevServer } from 'vite';
+import nodemailer from 'nodemailer';
+
+const OWNER_ADMIN_EMAIL = 'mifumomaster@gmail.com';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -270,8 +273,13 @@ function escapeHtmlAttr(value: string): string {
   return value
     .replace(/&/g, '&amp;')
     .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+function escapeHtml(value: string): string {
+  return escapeHtmlAttr(value);
 }
 
 function escapeJsonLd(value: unknown): string {
@@ -523,8 +531,256 @@ async function startServer() {
     await renderHtmlWithSocialMeta(req, res, queryTopicId);
   });
 
+  app.use(express.json({ limit: '64kb' }));
+
   app.get('/healthz', (_req, res) => {
     res.status(200).json({ ok: true });
+  });
+
+  app.post('/api/platform-lock-email', async (req, res) => {
+    try {
+      const authHeader = String(req.headers.authorization || '');
+      const match = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
+      const idToken = match ? match[1].trim() : '';
+      if (!idToken || !firebaseCfg?.apiKey) {
+        res.status(401).json({ ok: false, error: 'Unauthorized' });
+        return;
+      }
+
+      const lookupRes = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(
+          firebaseCfg.apiKey
+        )}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ idToken }),
+          signal: AbortSignal.timeout(8000),
+        }
+      );
+
+      if (!lookupRes.ok) {
+        res.status(401).json({ ok: false, error: 'Invalid authentication token' });
+        return;
+      }
+
+      const lookupData = (await lookupRes.json()) as {
+        users?: Array<{ localId?: string; email?: string; emailVerified?: boolean }>;
+      };
+      const authUser = Array.isArray(lookupData.users) ? lookupData.users[0] : undefined;
+      if (
+        !authUser ||
+        String(authUser.email || '').toLowerCase() !== OWNER_ADMIN_EMAIL ||
+        authUser.emailVerified !== true
+      ) {
+        res.status(403).json({ ok: false, error: 'Owner account required' });
+        return;
+      }
+
+      const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<
+        string,
+        unknown
+      >;
+      const reason = typeof body.reason === 'string' ? body.reason.trim().slice(0, 1000) : '';
+      const unlockToken =
+        typeof body.unlockToken === 'string' ? body.unlockToken.trim() : '';
+
+      if (!reason || !/^[a-f0-9-]{16,128}$/i.test(unlockToken)) {
+        res.status(400).json({ ok: false, error: 'Invalid reason or unlock token' });
+        return;
+      }
+
+      let safeOrigin = getRequestOrigin(req);
+      if (typeof body.origin === 'string' && body.origin.trim()) {
+        try {
+          const parsedOrigin = new URL(body.origin.trim());
+          if (parsedOrigin.protocol === 'https:' || parsedOrigin.protocol === 'http:') {
+            safeOrigin = parsedOrigin.origin;
+          }
+        } catch {
+          // Keep request origin fallback
+        }
+      }
+
+      const unlockUrl = `${safeOrigin}/?unlock_platform=${encodeURIComponent(unlockToken)}`;
+      const lockedAtLabel = new Date().toLocaleString('en-GB', {
+        timeZone: 'Africa/Dar_es_Salaam',
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      });
+
+      const subject = 'Malosha Forums: Jukwaa Limefungwa — Kiungo cha Kufungua';
+      const textBody = [
+        'Habari Mmiliki wa Malosha Forums,',
+        '',
+        'Jukwaa lote la Malosha Forums limefungwa kwa watumiaji wote.',
+        `Muda: ${lockedAtLabel} (EAT)`,
+        `Sababu uliyoweka: ${reason}`,
+        '',
+        'Bofya kiungo hiki kufungua jukwaa liendelee kufanya kazi tena:',
+        unlockUrl,
+        '',
+        'Kwa usalama wako, uthibitisho wa akaunti ya mmiliki (mifumomaster@gmail.com) utatumika unapofungua.',
+      ].join('\n');
+
+      const htmlBody = `
+        <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px;margin:0 auto;padding:24px;background:#f8fafc;color:#0f172a;">
+          <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;padding:24px;">
+            <div style="display:inline-block;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:8px;padding:4px 10px;font-size:12px;font-weight:700;">
+              MALOSHA FORUMS · PLATFORM LOCK
+            </div>
+            <h1 style="margin:14px 0 8px;font-size:20px;color:#0e2640;">Jukwaa Lote Limefungwa</h1>
+            <p style="margin:0 0 12px;font-size:14px;line-height:1.5;color:#334155;">
+              Ulifunga jukwaa lote la Malosha Forums tarehe <strong>${escapeHtml(lockedAtLabel)} (EAT)</strong>. Hakuna mtumiaji asiye mmiliki anayeweza kulitumia kwa sasa.
+            </p>
+            <div style="background:#f1f5f9;border-left:4px solid #b91c1c;border-radius:8px;padding:12px 14px;margin:14px 0;">
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#64748b;margin-bottom:4px;">Sababu ya Kufunga</div>
+              <div style="font-size:14px;color:#0f172a;white-space:pre-wrap;">${escapeHtml(reason)}</div>
+            </div>
+            <p style="margin:18px 0 10px;font-size:14px;color:#334155;">
+              Ukiwa tayari kulifungua jukwaa liendelee kufanya kazi, bonyeza kitufe hapa chini:
+            </p>
+            <a href="${escapeHtml(unlockUrl)}" style="display:inline-block;background:#0e2640;color:#ffffff;text-decoration:none;font-weight:700;font-size:14px;padding:12px 20px;border-radius:10px;">
+              Fungua Jukwaa Sasa
+            </a>
+            <p style="margin:16px 0 0;font-size:12px;color:#64748b;word-break:break-all;">
+              Au nakili kiungo hiki: ${escapeHtml(unlockUrl)}
+            </p>
+          </div>
+        </div>
+      `;
+
+      const mailtoUrl = `mailto:${OWNER_ADMIN_EMAIL}?subject=${encodeURIComponent(
+        subject
+      )}&body=${encodeURIComponent(textBody)}`;
+
+      const resendApiKey = String(process.env.RESEND_API_KEY || '').trim();
+      const smtpHost = String(process.env.SMTP_HOST || '').trim();
+      const smtpUser = String(process.env.SMTP_USER || '').trim();
+      const smtpPass = String(process.env.SMTP_PASS || '').trim();
+      const gmailUser = String(process.env.GMAIL_USER || '').trim();
+      const gmailPass = String(process.env.GMAIL_APP_PASSWORD || '').trim();
+      const emailFrom =
+        String(process.env.EMAIL_FROM || '').trim() ||
+        gmailUser ||
+        smtpUser ||
+        'Malosha Forums <onboarding@resend.dev>';
+
+      if (resendApiKey) {
+        try {
+          const resendRes = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${resendApiKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              from: emailFrom,
+              to: [OWNER_ADMIN_EMAIL],
+              subject,
+              text: textBody,
+              html: htmlBody,
+            }),
+            signal: AbortSignal.timeout(10000),
+          });
+          if (resendRes.ok) {
+            res.status(200).json({
+              ok: true,
+              sent: true,
+              configured: true,
+              provider: 'resend',
+              recipient: OWNER_ADMIN_EMAIL,
+              mailtoUrl,
+              unlockUrl,
+            });
+            return;
+          }
+          const errText = await resendRes.text().catch(() => '');
+          res.status(200).json({
+            ok: true,
+            sent: false,
+            configured: true,
+            provider: 'resend',
+            recipient: OWNER_ADMIN_EMAIL,
+            mailtoUrl,
+            unlockUrl,
+            errorDetail: `Resend HTTP ${resendRes.status}: ${errText.slice(0, 160)}`,
+          });
+          return;
+        } catch (err) {
+          res.status(200).json({
+            ok: true,
+            sent: false,
+            configured: true,
+            provider: 'resend',
+            recipient: OWNER_ADMIN_EMAIL,
+            mailtoUrl,
+            unlockUrl,
+            errorDetail: err instanceof Error ? err.message : 'Resend request failed',
+          });
+          return;
+        }
+      }
+
+      if ((smtpHost && smtpUser && smtpPass) || (gmailUser && gmailPass)) {
+        try {
+          const transporter =
+            smtpHost && smtpUser && smtpPass
+              ? nodemailer.createTransport({
+                  host: smtpHost,
+                  port: Number(process.env.SMTP_PORT || 587),
+                  secure: String(process.env.SMTP_SECURE || '').toLowerCase() === 'true',
+                  auth: { user: smtpUser, pass: smtpPass },
+                })
+              : nodemailer.createTransport({
+                  service: 'gmail',
+                  auth: { user: gmailUser, pass: gmailPass },
+                });
+
+          await transporter.sendMail({
+            from: emailFrom,
+            to: OWNER_ADMIN_EMAIL,
+            subject,
+            text: textBody,
+            html: htmlBody,
+          });
+
+          res.status(200).json({
+            ok: true,
+            sent: true,
+            configured: true,
+            provider: smtpHost ? 'smtp' : 'gmail',
+            recipient: OWNER_ADMIN_EMAIL,
+            mailtoUrl,
+            unlockUrl,
+          });
+          return;
+        } catch (err) {
+          res.status(200).json({
+            ok: true,
+            sent: false,
+            configured: true,
+            provider: smtpHost ? 'smtp' : 'gmail',
+            recipient: OWNER_ADMIN_EMAIL,
+            mailtoUrl,
+            unlockUrl,
+            errorDetail: err instanceof Error ? err.message : 'SMTP delivery failed',
+          });
+          return;
+        }
+      }
+
+      res.status(200).json({
+        ok: true,
+        sent: false,
+        configured: false,
+        recipient: OWNER_ADMIN_EMAIL,
+        mailtoUrl,
+        unlockUrl,
+      });
+    } catch {
+      res.status(500).json({ ok: false, error: 'Failed to prepare unlock email' });
+    }
   });
 
   app.get('/api/proxy-pdf', async (req, res) => {

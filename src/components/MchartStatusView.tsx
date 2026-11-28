@@ -663,7 +663,7 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
                         />
                       ) : (
                         <div className="flex h-full w-full items-center justify-center">
-                          <Avatar name={userDisplayName} photoURL={userPhoto} size="md" />
+                          <Avatar name={userDisplayName} photoURL={userPhoto} uid={user?.uid || null} size="md" />
                         </div>
                       )}
                     </div>
@@ -812,7 +812,7 @@ export const MchartStatusTab: React.FC<MchartStatusTabProps> = ({
                         />
                       ) : (
                         <div className="flex h-full w-full items-center justify-center">
-                          <Avatar name={userDisplayName} photoURL={userPhoto} size="md" />
+                          <Avatar name={userDisplayName} photoURL={userPhoto} uid={user?.uid || null} size="md" />
                         </div>
                       )}
                     </div>

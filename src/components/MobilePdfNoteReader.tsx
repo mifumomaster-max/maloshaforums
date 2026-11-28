@@ -498,7 +498,7 @@ export const MobilePdfNoteReader: React.FC<MobilePdfNoteReaderProps> = ({
             }`}
           >
             <Type className="h-3.5 w-3.5" aria-hidden="true" />
-            <span>{tr('Soma kama Notes', 'Mobile Notes Mode')}</span>
+            <span>{tr('Soma kama Slide', 'Mobile Slide Mode')}</span>
           </button>
           <button
             type="button"

@@ -2,9 +2,11 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
+  Download,
   Heart,
   Images,
   LayoutGrid,
+  Loader2,
   Maximize2,
   Pause,
   Play,
@@ -12,6 +14,7 @@ import {
 } from 'lucide-react';
 import { optimizeCloudinaryUrl } from '../services/cloudinaryService';
 import { useLanguage } from '../context/LanguageContext';
+import { downloadPhotoWithMaloshaWatermark } from '../utils/watermarkedDownload';
 
 interface OrderedPhotoAlbumProps {
   images: string[];
@@ -20,6 +23,8 @@ interface OrderedPhotoAlbumProps {
   className?: string;
   enableDoubleTapLike?: boolean;
   onDoubleTapLike?: () => void;
+  enableWatermarkedDownload?: boolean;
+  onToast?: (message: string, kind?: 'success' | 'error') => void;
 }
 
 interface FloatingHeart {
@@ -41,11 +46,14 @@ export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
   className = '',
   enableDoubleTapLike = false,
   onDoubleTapLike,
+  enableWatermarkedDownload = false,
+  onToast,
 }) => {
   const { tr } = useLanguage();
   const [expanded, setExpanded] = useState(false);
   const [expandedLimit, setExpandedLimit] = useState(30);
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
+  const [downloadingIdx, setDownloadingIdx] = useState<number | null>(null);
   const [failedUrls, setFailedUrls] = useState<Set<number>>(() => new Set());
   const [viewMode, setViewMode] = useState<'slide' | 'grid'>('slide');
   const [activeSlide, setActiveSlide] = useState(0);
@@ -246,6 +254,33 @@ export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
     [enableDoubleTapLike, onDoubleTapLike, spawnFloatingHeart]
   );
 
+  const handleDownloadWatermarked = useCallback(
+    async (imageUrl: string, idx: number) => {
+      if (!imageUrl || downloadingIdx !== null) return;
+      setDownloadingIdx(idx);
+      try {
+        await downloadPhotoWithMaloshaWatermark(imageUrl, altBase);
+        onToast?.(
+          tr(
+            'Picha imepakuliwa ikiwa na alama ya @maloshadavid.',
+            'Photo downloaded with @maloshadavid watermark.'
+          )
+        );
+      } catch {
+        onToast?.(
+          tr(
+            'Imeshindwa kupakua picha hii. Tafadhali jaribu tena.',
+            'Failed to download this photo. Please try again.'
+          ),
+          'error'
+        );
+      } finally {
+        setDownloadingIdx(null);
+      }
+    },
+    [altBase, downloadingIdx, onToast, tr]
+  );
+
   const renderFloatingHeartsOverlay = () => {
     if (floatingHearts.length === 0) return null;
     return (
@@ -305,6 +340,26 @@ export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
             )}
           </button>
           {renderFloatingHeartsOverlay()}
+          {enableWatermarkedDownload && (
+            <button
+              type="button"
+              disabled={downloadingIdx !== null}
+              onClick={(e) => {
+                e.stopPropagation();
+                void handleDownloadWatermarked(images[0], 0);
+              }}
+              aria-label={tr('Pakua picha yenye nembo ya @maloshadavid', 'Download watermarked photo')}
+              title={tr('Pakua picha', 'Download photo')}
+              className="absolute right-2.5 bottom-2.5 z-10 inline-flex min-h-[34px] items-center gap-1.5 rounded-full bg-black/70 px-3 py-1.5 text-[11px] font-bold text-white ring-1 ring-white/25 backdrop-blur-xs transition-colors hover:bg-black/90 disabled:opacity-60"
+            >
+              {downloadingIdx === 0 ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Download className="h-3.5 w-3.5 text-amber-300" aria-hidden="true" />
+              )}
+              <span>{downloadingIdx === 0 ? tr('Inapakua...', 'Saving...') : tr('Pakua', 'Download')}</span>
+            </button>
+          )}
         </div>
 
         {lightboxIdx !== null && (
@@ -316,6 +371,9 @@ export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
             onPrev={handlePrev}
             onNext={handleNext}
             onSelectIndex={setLightboxIdx}
+            enableWatermarkedDownload={enableWatermarkedDownload}
+            downloading={downloadingIdx === lightboxIdx}
+            onDownloadActive={() => void handleDownloadWatermarked(images[lightboxIdx] || '', lightboxIdx)}
           />
         )}
       </>
@@ -454,20 +512,38 @@ export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
 
               {renderFloatingHeartsOverlay()}
 
-              {/* Top Slide Counter & Fullscreen Hint */}
+              {/* Top Slide Counter & Fullscreen / Download Controls */}
               <div className="pointer-events-none absolute top-2.5 right-2.5 left-2.5 z-10 flex items-center justify-between gap-2">
                 <span className="rounded-md bg-black/70 px-2 py-0.5 text-[11px] font-bold text-white tabular-nums backdrop-blur-xs">
                   #{safeSlideIndex + 1} / {total}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => setLightboxIdx(safeSlideIndex)}
-                  aria-label={tr('Panua picha', 'Expand photo')}
-                  className="pointer-events-auto inline-flex h-8 items-center gap-1 rounded-full bg-black/65 px-2.5 text-[11px] font-semibold text-white ring-1 ring-white/20 backdrop-blur-xs hover:bg-black/85"
-                >
-                  <Maximize2 className="h-3 w-3" aria-hidden="true" />
-                  <span className="hidden sm:inline">{tr('Kuza', 'Zoom')}</span>
-                </button>
+                <div className="pointer-events-auto flex items-center gap-1.5">
+                  {enableWatermarkedDownload && currentSlideUrl && !slideFailed && (
+                    <button
+                      type="button"
+                      disabled={downloadingIdx !== null}
+                      onClick={() => void handleDownloadWatermarked(currentSlideUrl, safeSlideIndex)}
+                      aria-label={tr('Pakua picha hii', 'Download this photo')}
+                      className="inline-flex h-8 items-center gap-1 rounded-full bg-black/70 px-2.5 text-[11px] font-semibold text-white ring-1 ring-white/25 backdrop-blur-xs hover:bg-black/90 disabled:opacity-60"
+                    >
+                      {downloadingIdx === safeSlideIndex ? (
+                        <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <Download className="h-3 w-3 text-amber-300" aria-hidden="true" />
+                      )}
+                      <span>{downloadingIdx === safeSlideIndex ? tr('Inapakua...', 'Saving...') : tr('Pakua', 'Download')}</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setLightboxIdx(safeSlideIndex)}
+                    aria-label={tr('Panua picha', 'Expand photo')}
+                    className="inline-flex h-8 items-center gap-1 rounded-full bg-black/65 px-2.5 text-[11px] font-semibold text-white ring-1 ring-white/20 backdrop-blur-xs hover:bg-black/85"
+                  >
+                    <Maximize2 className="h-3 w-3" aria-hidden="true" />
+                    <span className="hidden sm:inline">{tr('Kuza', 'Zoom')}</span>
+                  </button>
+                </div>
               </div>
 
               {/* Left / Right Manual Navigation Buttons */}
@@ -674,6 +750,9 @@ export const OrderedPhotoAlbum: React.FC<OrderedPhotoAlbumProps> = ({
           onPrev={handlePrev}
           onNext={handleNext}
           onSelectIndex={setLightboxIdx}
+          enableWatermarkedDownload={enableWatermarkedDownload}
+          downloading={downloadingIdx === lightboxIdx}
+          onDownloadActive={() => void handleDownloadWatermarked(images[lightboxIdx] || '', lightboxIdx)}
         />
       )}
     </>
@@ -688,6 +767,9 @@ interface LightboxModalProps {
   onPrev: () => void;
   onNext: () => void;
   onSelectIndex: (idx: number) => void;
+  enableWatermarkedDownload?: boolean;
+  downloading?: boolean;
+  onDownloadActive?: () => void;
 }
 
 const LightboxModal: React.FC<LightboxModalProps> = ({
@@ -698,6 +780,9 @@ const LightboxModal: React.FC<LightboxModalProps> = ({
   onPrev,
   onNext,
   onSelectIndex,
+  enableWatermarkedDownload = false,
+  downloading = false,
+  onDownloadActive,
 }) => {
   const { tr } = useLanguage();
   const total = images.length;
@@ -723,7 +808,7 @@ const LightboxModal: React.FC<LightboxModalProps> = ({
       {/* Top Bar */}
       <div
         onClick={(e) => e.stopPropagation()}
-        className="flex items-center justify-between border-b border-white/10 px-4 py-3"
+        className="flex items-center justify-between gap-2 border-b border-white/10 px-4 py-3"
       >
         <div className="flex items-center gap-2">
           <span className="rounded-lg bg-white/10 px-3 py-1 text-xs font-bold tabular-nums">
@@ -753,14 +838,32 @@ const LightboxModal: React.FC<LightboxModalProps> = ({
             </button>
           )}
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label={tr('Funga picha', 'Close viewer')}
-          className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25"
-        >
-          <X className="h-5 w-5" />
-        </button>
+        <div className="flex items-center gap-2">
+          {enableWatermarkedDownload && onDownloadActive && (
+            <button
+              type="button"
+              disabled={downloading}
+              onClick={onDownloadActive}
+              aria-label={tr('Pakua picha yenye nembo ya @maloshadavid', 'Download watermarked photo')}
+              className="inline-flex h-10 items-center gap-1.5 rounded-full bg-amber-500 px-3.5 text-xs font-bold text-[#0B1F35] transition-colors hover:bg-amber-400 disabled:opacity-60"
+            >
+              {downloading ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <Download className="h-4 w-4" aria-hidden="true" />
+              )}
+              <span>{downloading ? tr('Inapakua...', 'Downloading...') : tr('Pakua Picha', 'Download')}</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={tr('Funga picha', 'Close viewer')}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
       </div>
 
       {/* Main Image Stage */}

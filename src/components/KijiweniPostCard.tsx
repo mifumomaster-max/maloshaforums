@@ -14,7 +14,7 @@ import {
   Share2,
   Trash2,
 } from 'lucide-react';
-import { AuthPromptReason, Topic, getKijiweniFontMeta, normalizeKijiweniFontStyle } from '../types';
+import { AuthPromptReason, Topic, formatMemberCode } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 import { useUserPresence } from '../context/UserPresenceContext';
 import { buildKijiweniExcerpt } from '../utils/editorialFormatter';
@@ -78,8 +78,6 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
   const [expandedText, setExpandedText] = useState(false);
   const typingUsers = getTopicCommentTypingUsers(post.id);
 
-  const bodyFontStyle = normalizeKijiweniFontStyle(post.bodyFontStyle);
-  const bodyFontMeta = getKijiweniFontMeta(bodyFontStyle);
   const excerpt = useMemo(() => buildKijiweniExcerpt(post.body, 145, 2), [post.body]);
   const displayedBody =
     excerpt.isTruncated && !expandedText ? excerpt.previewText : post.body;
@@ -108,18 +106,18 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
 
   return (
     <article
-      className={`overflow-hidden rounded-xl border bg-white sm:rounded-lg ${
+      className={`overflow-hidden rounded-xl border sm:rounded-lg ${
         isPrivate
-          ? 'border-amber-300 bg-amber-50/15'
+          ? 'border-amber-300 bg-[#F4F2EC]'
           : post.isPinned
-            ? 'border-slate-200 bg-amber-50/25'
-            : 'border-slate-200'
+            ? 'border-[#D5DCE4] bg-[#F1F3F6]'
+            : 'border-[#D5DCE4] bg-[#F3F5F8]'
       }`}
     >
-      {/* Post Header — Scholarly Editorial Masthead */}
-      <div className="px-5 pt-5 sm:px-7 sm:pt-6">
-        <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3.5">
-          <div className="flex min-w-0 items-center gap-3">
+      {/* Post Header — Crisp X-Style Horizontal Author Line */}
+      <div className="px-4 pt-4 sm:px-6 sm:pt-5">
+        <div className="flex items-start justify-between gap-2.5 border-b border-[#DFE5ED] pb-3">
+          <div className="flex min-w-0 flex-1 items-center gap-2.5">
             <button
               type="button"
               onClick={() =>
@@ -140,8 +138,8 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
                 size="md"
               />
             </button>
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 flex-nowrap items-center gap-1.5">
                 <button
                   type="button"
                   onClick={() =>
@@ -151,12 +149,24 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
                       photoURL: post.authorPhoto,
                     })
                   }
-                  className="truncate text-left text-[15px] font-bold text-slate-900 hover:text-[#1D4E89] hover:underline"
+                  className="min-w-0 truncate whitespace-nowrap text-left text-[14.5px] font-bold text-[#0F1419] hover:text-[#1D4E89] hover:underline"
                 >
                   <AuthorName uid={post.authorId} fallback={post.authorName} />
                 </button>
-                <AuthorVerificationBadge uid={post.authorId} size="sm" />
+                <span className="inline-flex shrink-0 items-center">
+                  <AuthorVerificationBadge uid={post.authorId} size="sm" />
+                </span>
+                <span className="hidden shrink-0 font-mono text-[11.5px] text-[#536471] sm:inline">
+                  @{formatMemberCode(post.authorId).toLowerCase()}
+                </span>
+                <span className="shrink-0 text-xs text-[#536471]">· {formatTime(post.createdAt)}</span>
+              </div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11.5px] text-[#536471]">
                 <OnlineStatusPill uid={post.authorId} />
+                <span>{getBoardLabel('Kijiweni')}</span>
+                {excerpt.visibleLength > 280 && (
+                  <span>· {readingMinutes} {tr('dak. kusoma', 'min read')}</span>
+                )}
                 {isPrivate && (
                   <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10.5px] font-bold text-amber-900">
                     <EyeOff className="h-3 w-3" aria-hidden="true" />
@@ -174,11 +184,6 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
                   </span>
                 )}
               </div>
-              <p className="mt-0.5 text-xs text-slate-500">
-                {formatTime(post.createdAt)} · {getBoardLabel('Kijiweni')}
-                {excerpt.visibleLength > 280 && ` · ${readingMinutes} ${tr('dak. kusoma', 'min read')}`}
-                {bodyFontStyle !== 'sans' && ` · ${tr(bodyFontMeta.labelSw, bodyFontMeta.labelEn)}`}
-              </p>
             </div>
           </div>
 
@@ -261,24 +266,24 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
           </div>
         </div>
 
-        {/* Scholarly Title & Short Excerpt / Full Formatted Body */}
-        <div className="mt-4">
+        {/* Compact Attractive Title & Crisp Ink Description */}
+        <div className="mt-3.5">
           {post.title.trim() && (
             <button
               type="button"
               onClick={() => handleToggleComments(false)}
-              className="block w-full text-left font-display text-[19px] font-bold leading-[1.28] tracking-[-0.015em] text-[#0E2640] hover:text-[#1D4E89] sm:text-[21px]"
+              className="block w-full text-left font-sans text-[15.5px] font-bold leading-[1.35] tracking-[-0.01em] text-[#0F1419] hover:text-[#1D4E89] sm:text-[17px]"
             >
               {post.title}
             </button>
           )}
 
           {post.body.trim() && (
-            <div className={`${post.title.trim() ? 'mt-2.5' : ''} text-slate-800`}>
+            <div className={`${post.title.trim() ? 'mt-2' : ''} text-[#0B0F14]`}>
               <RichText
                 content={displayedBody}
-                fontStyle={bodyFontStyle}
-                scholarly={expandedText || !excerpt.isTruncated}
+                fontStyle="sans"
+                scholarly={false}
               />
               {excerpt.isTruncated && (
                 <div className="mt-2.5">
@@ -286,7 +291,7 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
                     type="button"
                     aria-expanded={expandedText}
                     onClick={() => setExpandedText((prev) => !prev)}
-                    className="inline-flex items-center gap-1.5 rounded-md border border-[#1D4E89]/25 bg-[#F4F8FC] px-3 py-1.5 text-xs font-bold text-[#0E2640] transition-colors hover:border-[#1D4E89] hover:bg-[#1D4E89] hover:text-white"
+                    className="inline-flex items-center gap-1.5 rounded-md border border-[#C6D1DE] bg-[#E5EBF2] px-3 py-1.5 text-xs font-semibold text-[#0F1419] transition-colors hover:border-[#1D4E89] hover:bg-[#1D4E89] hover:text-white"
                   >
                     {expandedText ? (
                       <>
@@ -311,8 +316,11 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
               altBase={post.title.trim() || tr('Picha iliyochapishwa Kijiweni', 'Kijiweni photo post')}
               initialPreviewLimit={6}
               className={post.title.trim() || post.body.trim() ? 'mt-4' : ''}
-              enableDoubleTapLike
+              enableDoubleTapLike={!(isSuspended && !isAdmin)}
+              enableWatermarkedDownload
+              onToast={onToast}
               onDoubleTapLike={() => {
+                if (isSuspended && !isAdmin) return;
                 if (!hasVoted) {
                   onToggleVote(post);
                 }
@@ -360,16 +368,20 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
       </div>
 
       {/* Facebook-style 3-Button Social Action Row with Counts Directly on Icons */}
-      <div className="mt-3 grid grid-cols-3 border-t border-slate-100 px-2 py-1 text-xs sm:px-3">
+      <div className="mt-3 grid grid-cols-3 border-t border-[#DFE5ED] px-2 py-1 text-xs sm:px-3">
         <button
           type="button"
-          onClick={() => onToggleVote(post)}
+          disabled={Boolean(isSuspended && !isAdmin)}
+          onClick={() => {
+            if (isSuspended && !isAdmin) return;
+            onToggleVote(post);
+          }}
           aria-pressed={hasVoted}
           aria-label={tr(`Penda (${post.upvotesCount})`, `Like (${post.upvotesCount})`)}
-          className={`inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg font-semibold transition-colors ${
+          className={`inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
             hasVoted
               ? 'text-rose-600 hover:bg-rose-50/70'
-              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              : 'text-[#3B4A59] hover:bg-[#E5EBF2] hover:text-[#0F1419]'
           }`}
         >
           <Heart
@@ -389,8 +401,8 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
           aria-label={tr(`Maoni (${post.repliesCount})`, `Comments (${post.repliesCount})`)}
           className={`inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg font-semibold transition-colors ${
             commentsOpen
-              ? 'bg-sky-50 text-[#1D4E89]'
-              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              ? 'bg-[#DCE6F2] text-[#1D4E89]'
+              : 'text-[#3B4A59] hover:bg-[#E5EBF2] hover:text-[#0F1419]'
           }`}
         >
           <MessageCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -402,12 +414,16 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
 
         <button
           type="button"
-          onClick={() => onShareTopic(post)}
+          disabled={Boolean(isSuspended && !isAdmin)}
+          onClick={() => {
+            if (isSuspended && !isAdmin) return;
+            onShareTopic(post);
+          }}
           aria-label={tr(
             `Shiriki (${post.sharesCount ?? 0})`,
             `Share (${post.sharesCount ?? 0})`
           )}
-          className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
+          className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg font-semibold text-[#3B4A59] transition-colors hover:bg-[#E5EBF2] hover:text-[#0F1419] disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Share2 className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span>{tr('Shiriki', 'Share')}</span>
@@ -419,7 +435,7 @@ export const KijiweniPostCard: React.FC<KijiweniPostCardProps> = ({
 
       {/* Inline Facebook-Style Threadlike Comments Drawer */}
       {commentsOpen && (
-        <div className="border-t border-slate-200 bg-white px-4 pt-3.5 pb-4 sm:px-5">
+        <div className="border-t border-[#D5DCE4] bg-[#EAEFF4] px-4 pt-3.5 pb-4 sm:px-5">
           <FacebookCommentsThread
             topic={post}
             userUid={userUid}

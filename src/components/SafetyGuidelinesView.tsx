@@ -21,6 +21,7 @@ import {
   ClipboardList,
   Copy,
   CreditCard,
+  ExternalLink,
   Eye,
   EyeOff,
   FileText,
@@ -31,6 +32,7 @@ import {
   LayoutTemplate,
   Loader2,
   Lock,
+  Mail,
   MessageCircle,
   PenTool,
   Share2,
@@ -38,6 +40,7 @@ import {
   ShieldCheck,
   Sparkles,
   Trash2,
+  Unlock,
   UserCheck,
   UserPlus,
   Users,
@@ -61,6 +64,8 @@ import {
   ContentRetentionSettings,
   MONETIZATION_PAYOUT_RATES,
   MONETIZATION_REQUIREMENTS,
+  PlatformLockEmailResult,
+  PlatformLockSettings,
   PrimaryBoard,
   Report,
   Topic,
@@ -105,6 +110,7 @@ interface SafetyGuidelinesViewProps {
   userNotifications?: UserNotification[];
   onSaveProfile: (displayName: string, bio: string, phoneNumber?: string) => Promise<void>;
   onUpdateProfilePhoto?: (photoURL: string) => Promise<void>;
+  onToggleProfileDetailsPublic?: (isPublic: boolean) => Promise<void>;
   onPublishPosterTopic?: (data: {
     title: string;
     body: string;
@@ -141,6 +147,9 @@ interface SafetyGuidelinesViewProps {
   onRunRetentionNow?: (target: 'kijiweni' | 'video' | 'both') => void;
   openAdminMembersSignal?: number;
   signupLastSeenMs?: number;
+  platformLock?: PlatformLockSettings;
+  onLockPlatform?: (reason: string) => Promise<PlatformLockEmailResult>;
+  onUnlockPlatform?: () => Promise<void>;
 }
 
 const BADGE_LEGEND_ORDER: VerificationBadgeType[] = [
@@ -177,6 +186,7 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
   userNotifications = [],
   onSaveProfile,
   onUpdateProfilePhoto,
+  onToggleProfileDetailsPublic,
   onPublishPosterTopic,
   onSelectBoard,
   onSignIn,
@@ -194,6 +204,9 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
   onRunRetentionNow,
   openAdminMembersSignal = 0,
   signupLastSeenMs = 0,
+  platformLock,
+  onLockPlatform,
+  onUnlockPlatform,
 }) => {
   const { lang, setLang, tr, formatTime, getReportReasonLabel, getBadgeLabel, getBadgeDescription } =
     useLanguage();
@@ -213,6 +226,7 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
   const photoInputRef = useRef<HTMLInputElement>(null);
   const [pendingPhotoFile, setPendingPhotoFile] = useState<File | null>(null);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [togglingDetailsPrivacy, setTogglingDetailsPrivacy] = useState(false);
 
   // Password Update / Setup State
   const [currentPassword, setCurrentPassword] = useState('');
@@ -236,8 +250,16 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
   });
   const [openAccordions, setOpenAccordions] = useState<Record<string, boolean>>({
     profile_edit: true,
+    admin_platform_lock: Boolean(platformLock?.isLocked),
   });
   const [openPayoutsSignal, setOpenPayoutsSignal] = useState(0);
+  const [platformLockReasonDraft, setPlatformLockReasonDraft] = useState(
+    () => platformLock?.reason || ''
+  );
+  const [platformLockBusy, setPlatformLockBusy] = useState(false);
+  const [platformLockEmailResult, setPlatformLockEmailResult] =
+    useState<PlatformLockEmailResult | null>(null);
+  const [copiedUnlockUrl, setCopiedUnlockUrl] = useState(false);
 
   const selectProfileTab = (next: 'profile' | 'poster' | 'cartoon') => {
     setProfileTab(next);
@@ -744,23 +766,27 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
                 )}
               </div>
               <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="truncate text-sm font-bold text-slate-900">
+                <div className="flex min-w-0 flex-nowrap items-center gap-1.5">
+                  <span className="min-w-0 truncate whitespace-nowrap text-sm font-bold text-[#0F1419]">
                     {userProfile.displayName}
                   </span>
-                  <VerificationBadge badge={userProfile.verificationBadge} size="sm" />
-                  <OnlineStatusPill uid={userUid} />
+                  <span className="inline-flex shrink-0 items-center">
+                    <VerificationBadge badge={userProfile.verificationBadge} size="sm" />
+                  </span>
                 </div>
-                <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
-                  {tr('Mada', 'Posts')} {userProfile.topicsCount} · {tr('Majibu', 'Replies')}{' '}
-                  {userProfile.repliesCount}
-                  {isAdmin && (
-                    <span className="font-semibold text-[#1D4E89]">
-                      {' '}
-                      · {tr('Msimamizi', 'Admin')}
-                    </span>
-                  )}
-                </p>
+                <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-slate-500 tabular-nums">
+                  <OnlineStatusPill uid={userUid} />
+                  <span>
+                    {tr('Mada', 'Posts')} {userProfile.topicsCount} · {tr('Majibu', 'Replies')}{' '}
+                    {userProfile.repliesCount}
+                    {isAdmin && (
+                      <span className="font-semibold text-[#1D4E89]">
+                        {' '}
+                        · {tr('Msimamizi', 'Admin')}
+                      </span>
+                    )}
+                  </span>
+                </div>
               </div>
             </div>
           )}
@@ -1227,6 +1253,96 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
                           </button>
                         )}
                       </div>
+                    </div>
+                  )}
+
+                  {userProfile && onToggleProfileDetailsPublic && (
+                    <div
+                      className={`mt-4 flex flex-col justify-between gap-3 rounded-xl border p-4 sm:flex-row sm:items-center ${
+                        userProfile.profileDetailsPublic
+                          ? 'border-emerald-200 bg-emerald-50/70'
+                          : 'border-amber-200 bg-amber-50/70'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div
+                          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                            userProfile.profileDetailsPublic
+                              ? 'bg-emerald-600 text-white'
+                              : 'bg-slate-900 text-amber-300'
+                          }`}
+                        >
+                          {userProfile.profileDetailsPublic ? (
+                            <Eye className="h-4.5 w-4.5" aria-hidden="true" />
+                          ) : (
+                            <Lock className="h-4.5 w-4.5" aria-hidden="true" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-bold text-slate-900">
+                              {tr(
+                                'Faragha ya Taarifa za Kina za Wasifu',
+                                'Profile Details Privacy'
+                              )}
+                            </p>
+                            <span
+                              className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-bold ${
+                                userProfile.profileDetailsPublic
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-amber-100 text-amber-900'
+                              }`}
+                            >
+                              {userProfile.profileDetailsPublic
+                                ? tr('Wazi kwa Wote', 'Public')
+                                : tr('Zimefichwa (Faragha)', 'Private')}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                            {userProfile.profileDetailsPublic
+                              ? tr(
+                                  'Wanachama wengine wanaweza kuona bio, takwimu (Wafuasi, Video, Post, Likes, Maoni), na machapisho yako ya hivi karibuni wakigusa jina lako. Picha ya profile itaendelea kuonekana.',
+                                  'Other members can see your bio, stats, and recent posts when clicking your profile. Profile photo is always visible.'
+                                )
+                              : tr(
+                                  'Picha yako ya profile inaonekana, lakini bio, takwimu (Wafuasi, Video, Post, Likes, Maoni) na machapisho ya wasifu yamefichwa kwa wengine mpaka uweke wazi.',
+                                  'Your profile photo stays visible, while your bio, stats, and recent posts remain hidden from other members until you make them public.'
+                                )}
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={togglingDetailsPrivacy || isSuspended}
+                        onClick={async () => {
+                          if (togglingDetailsPrivacy) return;
+                          setTogglingDetailsPrivacy(true);
+                          try {
+                            await onToggleProfileDetailsPublic(!userProfile.profileDetailsPublic);
+                          } finally {
+                            setTogglingDetailsPrivacy(false);
+                          }
+                        }}
+                        className={`inline-flex min-h-[44px] shrink-0 items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-bold transition-colors disabled:opacity-60 ${
+                          userProfile.profileDetailsPublic
+                            ? 'border border-slate-300 bg-white text-slate-800 hover:bg-slate-100'
+                            : 'bg-[#0E2640] text-white hover:bg-[#163A5F]'
+                        }`}
+                      >
+                        {togglingDetailsPrivacy ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                        ) : userProfile.profileDetailsPublic ? (
+                          <EyeOff className="h-3.5 w-3.5 text-amber-600" aria-hidden="true" />
+                        ) : (
+                          <Eye className="h-3.5 w-3.5 text-emerald-300" aria-hidden="true" />
+                        )}
+                        <span>
+                          {userProfile.profileDetailsPublic
+                            ? tr('Ficha Taarifa', 'Hide Details')
+                            : tr('Weka Wazi Kwa Wote', 'Make Details Public')}
+                        </span>
+                      </button>
                     </div>
                   )}
 
@@ -2398,6 +2514,335 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* Accordion 7A (Owner): Global Platform Lock & Email Recovery */}
+          {userUid && isAdmin && onLockPlatform && onUnlockPlatform && (
+            <section
+              className={`overflow-hidden rounded-xl border bg-white ${
+                platformLock?.isLocked ? 'border-red-300 ring-1 ring-red-200' : 'border-rose-200'
+              }`}
+            >
+              <button
+                type="button"
+                aria-expanded={Boolean(openAccordions.admin_platform_lock)}
+                onClick={() => toggleAccordion('admin_platform_lock')}
+                className={`flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors sm:px-5 ${
+                  platformLock?.isLocked ? 'bg-red-50/70 hover:bg-red-50' : 'hover:bg-rose-50/40'
+                }`}
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span
+                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ring-1 ${
+                      platformLock?.isLocked
+                        ? 'bg-red-600 text-white ring-red-700'
+                        : 'bg-rose-50 text-rose-700 ring-rose-200'
+                    }`}
+                  >
+                    {platformLock?.isLocked ? (
+                      <Lock className="h-5 w-5" aria-hidden="true" />
+                    ) : (
+                      <ShieldAlert className="h-5 w-5" aria-hidden="true" />
+                    )}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="truncate font-display text-sm font-bold text-slate-900 sm:text-base">
+                        {tr('Funga Jukwaa Lote (Mmiliki Pekee)', 'Global Platform Lock (Owner Only)')}
+                      </h2>
+                      <span
+                        className={`rounded-md px-2 py-0.5 text-[10.5px] font-extrabold uppercase ${
+                          platformLock?.isLocked
+                            ? 'bg-red-600 text-white'
+                            : 'bg-emerald-100 text-emerald-800'
+                        }`}
+                      >
+                        {platformLock?.isLocked
+                          ? tr('Jukwaa Limefungwa', 'Platform Locked')
+                          : tr('Jukwaa Liko Wazi', 'Platform Active')}
+                      </span>
+                    </div>
+                    <p className="truncate text-xs text-slate-500">
+                      {tr(
+                        `Funga jukwaa lote na utumiwe ujumbe wa kufungua kwenda ${ADMIN_EMAIL}`,
+                        `Lock entire platform with reason & send unlock link to ${ADMIN_EMAIL}`
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <ChevronDown
+                  className={`h-5 w-5 shrink-0 text-slate-500 transition-transform duration-200 ${
+                    openAccordions.admin_platform_lock ? 'rotate-180 text-[#0E2640]' : ''
+                  }`}
+                  aria-hidden="true"
+                />
+              </button>
+
+              {openAccordions.admin_platform_lock && (
+                <div className="space-y-4 border-t border-slate-100 p-4 sm:p-5">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3.5 text-xs leading-relaxed text-slate-700">
+                    <p>
+                      {tr(
+                        'Ukifunga jukwaa lote, hakuna mtu yeyote (isipokuwa wewe mmiliki) atakayeweza kusoma au kutumia kipengele chochote cha Malosha Forums. Utaandika sababu itakayoonekana kwa watumiaji wote, kisha ujumbe wenye kiungo cha kufungua utatumwa kwenda:',
+                        'When locked, no one except you (the owner) can access any part of Malosha Forums. Visitors will see your reason, and an unlock link will be sent to:'
+                      )}{' '}
+                      <strong className="font-mono text-[#0E2640]">{ADMIN_EMAIL}</strong>
+                    </p>
+                  </div>
+
+                  {platformLock?.isLocked ? (
+                    <div className="space-y-4 rounded-xl border border-red-200 bg-red-50/60 p-4">
+                      <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+                        <div className="space-y-1">
+                          <p className="text-xs font-extrabold tracking-wide text-red-800 uppercase">
+                            {tr('Sababu Iliyowekwa Kwa Watumiaji', 'Active Lock Reason Shown to Users')}
+                          </p>
+                          <p className="text-sm font-semibold whitespace-pre-wrap text-slate-900">
+                            {platformLock.reason}
+                          </p>
+                          <p className="text-[11px] text-slate-500">
+                            {tr('Lilifungwa:', 'Locked:')}{' '}
+                            {formatFullDate(platformLock.lockedAt)}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={platformLockBusy}
+                          onClick={async () => {
+                            setPlatformLockBusy(true);
+                            try {
+                              await onUnlockPlatform();
+                              setPlatformLockEmailResult(null);
+                              setPlatformLockReasonDraft('');
+                            } catch (err) {
+                              onToast(
+                                err instanceof Error
+                                  ? err.message
+                                  : tr('Imeshindwa kufungua jukwaa.', 'Failed to unlock platform.'),
+                                'error'
+                              );
+                            } finally {
+                              setPlatformLockBusy(false);
+                            }
+                          }}
+                          className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 text-xs font-bold text-white shadow-sm transition-colors hover:bg-emerald-800 disabled:opacity-60 sm:text-sm"
+                        >
+                          {platformLockBusy ? (
+                            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <Unlock className="h-4 w-4" aria-hidden="true" />
+                          )}
+                          <span>
+                            {platformLockBusy
+                              ? tr('Inafungua...', 'Unlocking...')
+                              : tr('Fungua Jukwaa Lote Sasa', 'Unlock Entire Platform Now')}
+                          </span>
+                        </button>
+                      </div>
+
+                      {platformLockEmailResult && (
+                        <div
+                          className={`rounded-xl border p-3.5 text-xs ${
+                            platformLockEmailResult.sent
+                              ? 'border-emerald-200 bg-emerald-50 text-emerald-950'
+                              : 'border-amber-200 bg-amber-50 text-amber-950'
+                          }`}
+                        >
+                          {platformLockEmailResult.sent ? (
+                            <div className="flex items-start gap-2.5">
+                              <CheckCircle2
+                                className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700"
+                                aria-hidden="true"
+                              />
+                              <div>
+                                <p className="font-bold">
+                                  {tr(
+                                    `Email ya kufungua jukwaa imetumwa kwenda ${platformLockEmailResult.recipient}!`,
+                                    `Unlock email sent to ${platformLockEmailResult.recipient}!`
+                                  )}
+                                </p>
+                                <p className="mt-0.5 text-[11px] opacity-85">
+                                  {tr(
+                                    'Ukibofya kiungo ndani ya email yako, jukwaa litafunguka na kuendelea kufanya kazi.',
+                                    'Clicking the link in your email will unlock and restore the platform.'
+                                  )}
+                                </p>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="space-y-2.5">
+                              <div className="flex items-start gap-2">
+                                <Mail
+                                  className="mt-0.5 h-4 w-4 shrink-0 text-amber-800"
+                                  aria-hidden="true"
+                                />
+                                <div>
+                                  <p className="font-bold">
+                                    {tr(
+                                      'Jukwaa limefungwa! Tuma/Hifadhi ujumbe wa kufungua kwenye email yako:',
+                                      'Platform locked! Send/save the unlock link to your email:'
+                                    )}
+                                  </p>
+                                  <p className="mt-0.5 text-[11px] text-amber-900">
+                                    {platformLockEmailResult.configured
+                                      ? tr(
+                                          `Utumaji otomatiki ulipata hitilafu (${platformLockEmailResult.errorDetail || 'SMTP'}). Tumia kitufe hapa chini kutuma kwenda ${platformLockEmailResult.recipient}.`,
+                                          `Automatic dispatch failed (${platformLockEmailResult.errorDetail || 'SMTP'}). Use the button below to email ${platformLockEmailResult.recipient}.`
+                                        )
+                                      : tr(
+                                          `Ili mfumo utume email kiotomatiki bila kubofya, weka RESEND_API_KEY au GMAIL_USER & GMAIL_APP_PASSWORD kwenye .env. Kwa sasa tumia kitufe hapa chini kutuma kwenda ${platformLockEmailResult.recipient}.`,
+                                          `To auto-send emails without clicking, set RESEND_API_KEY or GMAIL_USER & GMAIL_APP_PASSWORD in .env. Meanwhile click below to send directly to ${platformLockEmailResult.recipient}.`
+                                        )}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div className="flex flex-wrap items-center gap-2">
+                                <a
+                                  href={platformLockEmailResult.mailtoUrl}
+                                  className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg bg-[#0E2640] px-3.5 py-1.5 text-xs font-bold text-white hover:bg-[#163A5F]"
+                                >
+                                  <Mail className="h-3.5 w-3.5" aria-hidden="true" />
+                                  <span>
+                                    {tr(
+                                      `Tuma Email kwenda ${platformLockEmailResult.recipient}`,
+                                      `Send Email to ${platformLockEmailResult.recipient}`
+                                    )}
+                                  </span>
+                                  <ExternalLink className="h-3 w-3 opacity-80" aria-hidden="true" />
+                                </a>
+
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    try {
+                                      await navigator.clipboard.writeText(
+                                        platformLockEmailResult.unlockUrl
+                                      );
+                                      setCopiedUnlockUrl(true);
+                                      onToast(
+                                        tr(
+                                          'Kiungo cha kufungua jukwaa kimenakiliwa!',
+                                          'Platform unlock link copied!'
+                                        )
+                                      );
+                                      window.setTimeout(() => setCopiedUnlockUrl(false), 2500);
+                                    } catch {
+                                      onToast(
+                                        tr('Imeshindwa kunakili kiungo.', 'Failed to copy link.'),
+                                        'error'
+                                      );
+                                    }
+                                  }}
+                                  className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-bold text-amber-950 hover:bg-amber-100"
+                                >
+                                  {copiedUnlockUrl ? (
+                                    <Check className="h-3.5 w-3.5 text-emerald-700" aria-hidden="true" />
+                                  ) : (
+                                    <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                                  )}
+                                  <span>
+                                    {copiedUnlockUrl
+                                      ? tr('Imenakiliwa', 'Copied')
+                                      : tr('Nakili Kiungo cha Kufungua', 'Copy Unlock Link')}
+                                  </span>
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <form
+                      onSubmit={async (e) => {
+                        e.preventDefault();
+                        const clean = platformLockReasonDraft.trim();
+                        if (!clean) {
+                          onToast(
+                            tr(
+                              'Tafadhali andika sababu ya kufunga jukwaa lote.',
+                              'Please enter a reason for locking the entire platform.'
+                            ),
+                            'error'
+                          );
+                          return;
+                        }
+                        setPlatformLockBusy(true);
+                        try {
+                          const res = await onLockPlatform(clean);
+                          setPlatformLockEmailResult(res);
+                        } catch (err) {
+                          onToast(
+                            err instanceof Error
+                              ? err.message
+                              : tr('Imeshindwa kufunga jukwaa.', 'Failed to lock platform.'),
+                            'error'
+                          );
+                        } finally {
+                          setPlatformLockBusy(false);
+                        }
+                      }}
+                      className="space-y-3"
+                    >
+                      <div>
+                        <label
+                          htmlFor="platform-lock-reason-input"
+                          className="block text-xs font-bold text-slate-800"
+                        >
+                          {tr(
+                            'Sababu ya Kufunga Jukwaa Lote (Itaonekana kwa watumiaji wote)',
+                            'Reason for Locking Entire Platform (Visible to all users)'
+                          )}
+                        </label>
+                        <textarea
+                          id="platform-lock-reason-input"
+                          rows={3}
+                          required
+                          maxLength={1000}
+                          disabled={platformLockBusy}
+                          value={platformLockReasonDraft}
+                          onChange={(e) => setPlatformLockReasonDraft(e.target.value)}
+                          placeholder={tr(
+                            'Mfano: Mfumo upo kwenye matengenezo makubwa ya kiusalama na maboresho. Tutarejea hewani hivi punde.',
+                            'Example: Platform is undergoing scheduled maintenance and security upgrades. We will be back soon.'
+                          )}
+                          className="mt-1.5 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-red-600 focus:outline-none disabled:bg-slate-100"
+                        />
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
+                          <Mail className="h-3.5 w-3.5 text-[#1D4E89]" aria-hidden="true" />
+                          <span>
+                            {tr(
+                              `Kiungo cha kufungua kitatumwa kwa ${ADMIN_EMAIL}`,
+                              `Unlock link will be sent to ${ADMIN_EMAIL}`
+                            )}
+                          </span>
+                        </span>
+                        <button
+                          type="submit"
+                          disabled={platformLockBusy || !platformLockReasonDraft.trim()}
+                          className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-red-700 px-4 py-2 text-xs font-bold text-white shadow-sm transition-colors hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm"
+                        >
+                          {platformLockBusy ? (
+                            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <Lock className="h-4 w-4" aria-hidden="true" />
+                          )}
+                          <span>
+                            {platformLockBusy
+                              ? tr('Inafunga Jukwaa & Kutuma Email...', 'Locking & Sending Email...')
+                              : tr('Funga Jukwaa Lote & Tuma Email', 'Lock Entire Platform & Send Email')}
+                          </span>
+                        </button>
+                      </div>
+                    </form>
+                  )}
                 </div>
               )}
             </section>

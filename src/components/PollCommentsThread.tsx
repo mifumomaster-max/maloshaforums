@@ -853,6 +853,7 @@ export const PollCommentsThread: React.FC<PollCommentsThreadProps> = ({
                       <div className="h-3 w-[1.5px] bg-slate-200" aria-hidden="true" />
                     </div>
                     <form
+                      data-comment-composer="true"
                       onSubmit={handleSubmitNestedReply}
                       className="flex min-w-0 flex-1 items-start gap-2 pt-1.5"
                     >
@@ -861,7 +862,7 @@ export const PollCommentsThread: React.FC<PollCommentsThreadProps> = ({
                       </div>
                       <div className="pt-0.5 shrink-0">
                         <span className="inline-flex h-6 w-6 overflow-hidden rounded-full">
-                          <Avatar name={userDisplayName} photoURL={userPhoto} size="sm" />
+                          <Avatar name={userDisplayName} photoURL={userPhoto} uid={userUid} size="sm" />
                         </span>
                       </div>
                       <div className="min-w-0 flex-1">
@@ -984,7 +985,11 @@ export const PollCommentsThread: React.FC<PollCommentsThreadProps> = ({
           </button>
         </div>
       ) : (
-        <form onSubmit={handleSubmitMainComment} className="flex items-start gap-2.5">
+        <form
+          data-comment-composer="true"
+          onSubmit={handleSubmitMainComment}
+          className="flex items-start gap-2.5"
+        >
           <div className="pt-0.5 shrink-0">
             <Avatar
               name={userDisplayName}

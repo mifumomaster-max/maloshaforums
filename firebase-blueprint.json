@@ -9,6 +9,7 @@
         "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "photoURL": { "type": "string", "maxLength": 500 },
         "bio": { "type": "string", "maxLength": 300 },
+        "profileDetailsPublic": { "type": "boolean", "description": "Whether the account owner chose to display profile stats and bio publicly." },
         "role": { "type": "string", "enum": ["member", "moderator"] },
         "verificationBadge": {
           "type": "string",
@@ -214,6 +215,7 @@
         "lockPrice": { "type": "integer" },
         "lockCurrency": { "type": "string", "maxLength": 10 },
         "paymentInstructions": { "type": "string", "maxLength": 500 },
+        "visibility": { "type": "string", "enum": ["public", "private"] },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -530,6 +532,22 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["kijiweniEnabled", "kijiweniPeriod", "videoEnabled", "videoPeriod", "updatedBy", "updatedAt"]
+    },
+    "PlatformLockSettings": {
+      "title": "PlatformLockSettings",
+      "description": "Owner-controlled global platform lock status with stated reason and email recovery tracking.",
+      "type": "object",
+      "properties": {
+        "isLocked": { "type": "boolean" },
+        "reason": { "type": "string", "maxLength": 1000 },
+        "lockedByUid": { "type": "string", "maxLength": 128 },
+        "lockedByEmail": { "type": "string", "maxLength": 160 },
+        "lockedByName": { "type": "string", "maxLength": 120 },
+        "lockedAt": { "type": "string", "format": "date-time" },
+        "unlockedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["isLocked", "reason", "updatedAt"]
     },
     "OwnerCustomIdCard": {
       "title": "OwnerCustomIdCard",
@@ -865,7 +883,7 @@
     },
     "/mchart_notes/{noteId}": {
       "schema": { "$ref": "#/entities/MchartNote" },
-      "description": "Owner-published formatted notes and archived note files for Mchart readers."
+      "description": "Public and private formatted notes/slides created by owner or members, with owner lock/payment/delete governance."
     },
     "/mchart_notes/{noteId}/content/{docId}": {
       "schema": { "$ref": "#/entities/MchartNoteContent" },
@@ -921,7 +939,7 @@
     },
     "/site_settings/{settingId}": {
       "schema": { "$ref": "#/entities/SiteNavSettings" },
-      "description": "Platform navigation visibility (navigation), Mchart group config (mchart_group), stats (community_stats), and owner content retention schedules (retention)."
+      "description": "Platform navigation visibility (navigation), Mchart group config (mchart_group), stats (community_stats), retention schedules (retention), and global owner platform lock (platform_lock)."
     },
     "/owner_id_cards/{cardId}": {
       "schema": { "$ref": "#/entities/OwnerCustomIdCard" },

@@ -447,6 +447,7 @@ export interface UserProfile {
   displayName: string;
   photoURL: string;
   bio: string;
+  profileDetailsPublic?: boolean;
   role: 'member' | 'moderator';
   verificationBadge: VerificationBadgeType;
   accountStatus?: AccountStatus;
@@ -1105,6 +1106,7 @@ export interface MchartNote {
   lockPrice?: number;
   lockCurrency?: string;
   paymentInstructions?: string;
+  visibility?: 'public' | 'private';
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }
@@ -1613,4 +1615,27 @@ export interface PollBallot {
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }
+
+export interface PlatformLockSettings {
+  isLocked: boolean;
+  reason: string;
+  lockedByUid: string;
+  lockedByEmail: string;
+  lockedByName: string;
+  lockedAt: Timestamp | null;
+  unlockedAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export interface PlatformLockEmailResult {
+  ok: boolean;
+  sent: boolean;
+  configured: boolean;
+  provider?: string;
+  recipient: string;
+  mailtoUrl: string;
+  unlockUrl: string;
+  errorDetail?: string;
+}
+
 

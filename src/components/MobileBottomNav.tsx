@@ -12,6 +12,8 @@ interface MobileBottomNavProps {
   darkTheme?: boolean;
   hideVideoTab?: boolean;
   hideMpollTab?: boolean;
+  isSuspended?: boolean;
+  isAdmin?: boolean;
 }
 
 export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
@@ -23,10 +25,14 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   darkTheme = false,
   hideVideoTab = false,
   hideMpollTab = false,
+  isSuspended = false,
+  isAdmin = false,
 }) => {
   const { tr } = useLanguage();
 
   if (hidden) return null;
+
+  const isRestrictedSuspended = isSuspended && !isAdmin;
 
   const counts: NavUnreadCounts = unreadCounts || {
     kijiweni: 0,
@@ -88,13 +94,24 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   ];
 
   const items = allItems.filter((item) => {
+    if (isRestrictedSuspended) return item.id === 'kijiweni';
     if (hideVideoTab && item.id === 'video') return false;
     if (hideMpollTab && item.id === 'votes') return false;
     return true;
   });
 
   const gridColsClass =
-    items.length <= 4 ? 'grid-cols-4' : items.length === 5 ? 'grid-cols-5' : 'grid-cols-6';
+    items.length <= 1
+      ? 'grid-cols-1'
+      : items.length === 2
+        ? 'grid-cols-2'
+        : items.length === 3
+          ? 'grid-cols-3'
+          : items.length === 4
+            ? 'grid-cols-4'
+            : items.length === 5
+              ? 'grid-cols-5'
+              : 'grid-cols-6';
 
   return (
     <nav

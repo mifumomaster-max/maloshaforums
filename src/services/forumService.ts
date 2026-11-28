@@ -43,6 +43,8 @@ import {
   OwnerCustomIdCardData,
   OwnerPhotoFolder,
   OwnerPrivatePhoto,
+  PlatformLockEmailResult,
+  PlatformLockSettings,
   PresenceArea,
   ReportReason,
   StatusPrivacyMode,
@@ -382,6 +384,22 @@ export async function updateUserProfile(
     );
     await Promise.all(mirrorWrites);
     return cleanName;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function updateUserProfileDetailsVisibility(
+  uid: string,
+  profileDetailsPublic: boolean
+): Promise<boolean> {
+  const path = `users/${uid}`;
+  try {
+    await updateDoc(doc(db, 'users', uid), {
+      profileDetailsPublic: Boolean(profileDetailsPublic),
+      updatedAt: serverTimestamp(),
+    });
+    return Boolean(profileDetailsPublic);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -2334,6 +2352,7 @@ export async function createMchartNote(
     lockCurrency?: string;
     paymentInstructions?: string;
     lockedUsers?: { uid: string; displayName: string }[];
+    visibility?: 'public' | 'private';
   }
 ): Promise<string> {
   const cleanPdfUrl = sanitizeTextInput(input.pdfUrl || '', 500);
@@ -2391,11 +2410,14 @@ export async function createMchartNote(
       ? `Imefungwa kwa malipo (${lockCurrency} ${lockPrice.toLocaleString()}). Lipia au omba ruhusa ya msimamizi kusoma.`
       : 'Imefungwa na msimamizi — haiwezi kusomwa mpaka upate ruhusa ya msimamizi.';
 
+  const visibility: 'public' | 'private' =
+    input.visibility === 'private' ? 'private' : 'public';
+
   try {
     await setDoc(noteRef, {
       authorId: user.uid,
       authorName:
-        sanitizeTextInput(displayName || user.displayName || 'Mmiliki', 80) || 'Mmiliki',
+        sanitizeTextInput(displayName || user.displayName || 'Mwanachama', 80) || 'Mwanachama',
       title: formatted.title,
       subtitle: formatted.subtitle,
       body: isLocked ? lockedPlaceholderBody : formatted.body,
@@ -2413,6 +2435,7 @@ export async function createMchartNote(
       lockPrice,
       lockCurrency,
       paymentInstructions,
+      visibility,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -2458,6 +2481,7 @@ export async function updateMchartNote(
     rawText?: string;
     isArchived?: boolean;
     isPinned?: boolean;
+    visibility?: 'public' | 'private';
   }
 ): Promise<{ updatedBody?: string }> {
   const path = `mchart_notes/${noteId}`;
@@ -2516,6 +2540,9 @@ export async function updateMchartNote(
     }
     if (updates.isPinned !== undefined) {
       payload.isPinned = Boolean(updates.isPinned);
+    }
+    if (updates.visibility === 'public' || updates.visibility === 'private') {
+      payload.visibility = updates.visibility;
     }
 
     await updateDoc(noteRef, payload);
@@ -2830,6 +2857,16 @@ export async function deleteMchartNote(noteId: string): Promise<void> {
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
+}
+
+export async function deleteMchartNotesBatch(noteIds: string[]): Promise<number> {
+  let deleted = 0;
+  for (const noteId of noteIds) {
+    if (!noteId) continue;
+    await deleteMchartNote(noteId);
+    deleted += 1;
+  }
+  return deleted;
 }
 
 export async function syncMemberIdRecord(profile: UserProfile): Promise<MemberIdRecord> {
@@ -3746,6 +3783,7 @@ export async function fetchMemberPublicProfile(targetUid: string): Promise<UserP
       displayName: String(d.displayName || 'Mwanachama'),
       photoURL: String(d.photoURL || ''),
       bio: String(d.bio || ''),
+      profileDetailsPublic: Boolean(d.profileDetailsPublic),
       role: d.role === 'moderator' ? 'moderator' : 'member',
       verificationBadge: normalizeVerificationBadge(d.verificationBadge),
       accountStatus: normalizeAccountStatus(d.accountStatus),
@@ -4301,6 +4339,210 @@ export async function updateHideVideoTabForUsers(
     hideVideoTabForUsers,
     hideMpollTabForUsers,
   });
+}
+
+export const DEFAULT_PLATFORM_LOCK_SETTINGS: PlatformLockSettings = {
+  isLocked: false,
+  reason: '',
+  lockedByUid: '',
+  lockedByEmail: '',
+  lockedByName: '',
+  lockedAt: null,
+  unlockedAt: null,
+  updatedAt: null,
+};
+
+async function sha256HexClient(input: string): Promise<string> {
+  if (typeof window !== 'undefined' && window.crypto?.subtle) {
+    const bytes = new TextEncoder().encode(input);
+    const digest = await window.crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(digest))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+  }
+  return input;
+}
+
+function generatePlatformUnlockToken(): string {
+  if (typeof window !== 'undefined' && window.crypto?.getRandomValues) {
+    const bytes = new Uint8Array(24);
+    window.crypto.getRandomValues(bytes);
+    return Array.from(bytes)
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+  }
+  return `${Date.now().toString(16)}${Math.random().toString(16).slice(2).padEnd(16, '0')}`;
+}
+
+export function subscribePlatformLockSettings(
+  onUpdate: (settings: PlatformLockSettings) => void
+): () => void {
+  const lockRef = doc(db, 'site_settings', 'platform_lock');
+  return onSnapshot(
+    lockRef,
+    (snap) => {
+      if (!snap.exists()) {
+        onUpdate(DEFAULT_PLATFORM_LOCK_SETTINGS);
+        return;
+      }
+      const data = snap.data();
+      onUpdate({
+        isLocked: Boolean(data?.isLocked),
+        reason: typeof data?.reason === 'string' ? data.reason : '',
+        lockedByUid: typeof data?.lockedByUid === 'string' ? data.lockedByUid : '',
+        lockedByEmail: typeof data?.lockedByEmail === 'string' ? data.lockedByEmail : '',
+        lockedByName: typeof data?.lockedByName === 'string' ? data.lockedByName : '',
+        lockedAt: (data?.lockedAt as Timestamp | null) || null,
+        unlockedAt: (data?.unlockedAt as Timestamp | null) || null,
+        updatedAt: (data?.updatedAt as Timestamp | null) || null,
+      });
+    },
+    () => {
+      onUpdate(DEFAULT_PLATFORM_LOCK_SETTINGS);
+    }
+  );
+}
+
+export async function lockEntirePlatform(
+  user: User,
+  reason: string
+): Promise<PlatformLockEmailResult> {
+  const cleanReason = sanitizeTextInput(reason, 1000).trim();
+  if (!cleanReason) {
+    throw new Error('Tafadhali andika sababu ya kufunga jukwaa lote.');
+  }
+  if ((user.email || '').toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+    throw new Error('Mmiliki wa mfumo pekee ndiye anayeweza kufunga jukwaa lote.');
+  }
+
+  const unlockToken = generatePlatformUnlockToken();
+  const unlockTokenHash = await sha256HexClient(unlockToken);
+
+  try {
+    await setDoc(doc(db, 'site_settings', 'platform_lock_secret'), {
+      unlockTokenHash,
+      updatedBy: user.uid,
+      updatedAt: serverTimestamp(),
+    });
+    await setDoc(doc(db, 'site_settings', 'platform_lock'), {
+      isLocked: true,
+      reason: cleanReason,
+      lockedByUid: user.uid,
+      lockedByEmail: user.email || ADMIN_EMAIL,
+      lockedByName: user.displayName || 'Mmiliki wa Mfumo',
+      lockedAt: serverTimestamp(),
+      unlockedAt: null,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'site_settings/platform_lock');
+  }
+
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const fallbackUnlockUrl = `${origin}/?unlock_platform=${encodeURIComponent(unlockToken)}`;
+  const subject = 'Malosha Forums: Jukwaa Limefungwa — Kiungo cha Kufungua';
+  const bodyText = [
+    'Habari Mmiliki wa Malosha Forums,',
+    '',
+    'Jukwaa lote la Malosha Forums limefungwa.',
+    `Sababu: ${cleanReason}`,
+    '',
+    'Bofya kiungo hiki kufungua jukwaa liendelee kufanya kazi:',
+    fallbackUnlockUrl,
+  ].join('\n');
+  const fallbackMailtoUrl = `mailto:${ADMIN_EMAIL}?subject=${encodeURIComponent(
+    subject
+  )}&body=${encodeURIComponent(bodyText)}`;
+
+  try {
+    const idToken = await user.getIdToken();
+    const res = await fetch('/api/platform-lock-email', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({
+        reason: cleanReason,
+        unlockToken,
+        origin,
+      }),
+    });
+    if (!res.ok) {
+      return {
+        ok: false,
+        sent: false,
+        configured: false,
+        recipient: ADMIN_EMAIL,
+        mailtoUrl: fallbackMailtoUrl,
+        unlockUrl: fallbackUnlockUrl,
+        errorDetail: `HTTP ${res.status}`,
+      };
+    }
+    const payload = (await res.json()) as PlatformLockEmailResult;
+    return payload;
+  } catch (err) {
+    return {
+      ok: false,
+      sent: false,
+      configured: false,
+      recipient: ADMIN_EMAIL,
+      mailtoUrl: fallbackMailtoUrl,
+      unlockUrl: fallbackUnlockUrl,
+      errorDetail: err instanceof Error ? err.message : 'Network error',
+    };
+  }
+}
+
+export async function unlockEntirePlatform(
+  user: User,
+  urlToken?: string
+): Promise<{ unlocked: boolean; tokenVerified: boolean }> {
+  if ((user.email || '').toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+    throw new Error('Mmiliki wa mfumo pekee ndiye anayeweza kufungua jukwaa.');
+  }
+
+  let tokenVerified = true;
+  if (urlToken && urlToken.trim()) {
+    try {
+      const secretSnap = await getDoc(doc(db, 'site_settings', 'platform_lock_secret'));
+      if (secretSnap.exists()) {
+        const expectedHash = String(secretSnap.data()?.unlockTokenHash || '');
+        if (expectedHash) {
+          const actualHash = await sha256HexClient(urlToken.trim());
+          tokenVerified = actualHash === expectedHash;
+        }
+      }
+    } catch {
+      tokenVerified = true;
+    }
+  }
+
+  try {
+    await setDoc(
+      doc(db, 'site_settings', 'platform_lock'),
+      {
+        isLocked: false,
+        reason: '',
+        unlockedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+    await setDoc(
+      doc(db, 'site_settings', 'platform_lock_secret'),
+      {
+        unlockTokenHash: '',
+        updatedBy: user.uid,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    ).catch(() => {});
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'site_settings/platform_lock');
+  }
+
+  return { unlocked: true, tokenVerified };
 }
 
 export async function fetchPlatformUsersCount(isAdmin: boolean): Promise<number> {

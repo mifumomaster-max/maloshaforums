@@ -311,7 +311,7 @@ export const MakalaInlineComposer: React.FC<MakalaInlineComposerProps> = ({
       {/* Editorial Crimson Top Bar */}
       <div className="flex items-center justify-between border-b-2 border-[#B80000] bg-[#141414] px-4 py-3 text-white sm:px-5">
         <div className="flex items-center gap-2.5">
-          <Avatar name={userDisplayName} photoURL={userPhoto} size="sm" />
+          <Avatar name={userDisplayName} photoURL={userPhoto} uid={userUid} size="sm" />
           <div>
             <div className="flex items-center gap-1.5">
               <p className="text-sm font-bold">{userDisplayName}</p>

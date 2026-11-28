@@ -17,7 +17,34 @@ function stableHash(input: string): number {
   return hash >>> 0;
 }
 
-export function sortTopicsList(list: Topic[], sortMode: SortMode, mixSeed = 1): Topic[] {
+function createMulberry32(seed: number): () => number {
+  let a = seed >>> 0 || 1;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function fisherYatesShuffle<T>(items: T[], seed: number): T[] {
+  const copy = [...items];
+  const rand = createMulberry32(seed);
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rand() * (i + 1));
+    const tmp = copy[i];
+    copy[i] = copy[j];
+    copy[j] = tmp;
+  }
+  return copy;
+}
+
+export function sortTopicsList(
+  list: Topic[],
+  sortMode: SortMode,
+  mixSeed = 1,
+  previousTopId?: string
+): Topic[] {
   if (sortMode === 'votes') {
     return [...list].sort((a, b) => {
       if (b.upvotesCount !== a.upvotesCount) {
@@ -47,6 +74,19 @@ export function sortTopicsList(list: Topic[], sortMode: SortMode, mixSeed = 1): 
   });
 
   if (sortMode !== 'mixed' || newestFirst.length <= 3) {
+    if (sortMode === 'newest' && newestFirst.length > 1) {
+      const first100 = fisherYatesShuffle(newestFirst.slice(0, 100), mixSeed);
+      if (previousTopId && first100.length > 1 && first100[0]?.id === previousTopId) {
+        const rand = createMulberry32(mixSeed ^ 0x9e3779b9);
+        const swapPool = Math.min(first100.length - 1, 20);
+        const swapIdx = 1 + Math.floor(rand() * swapPool);
+        const tmp = first100[0];
+        first100[0] = first100[swapIdx];
+        first100[swapIdx] = tmp;
+      }
+      const restOlder = newestFirst.slice(100);
+      return [...first100, ...restOlder];
+    }
     return newestFirst;
   }
 

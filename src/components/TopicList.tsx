@@ -41,6 +41,20 @@ import { sortTopicsList } from '../utils/topicSort';
 const INITIAL_VISIBLE_POSTS = 8;
 const SCROLL_STEP_POSTS = 8;
 const KIJIWENI_GATE_BATCH = 100;
+const KIJIWENI_LAST_TOP_ID_KEY = 'malosha_kijiweni_last_top_id_v1';
+
+function createRandomFeedSeed(): number {
+  return (Math.floor(Math.random() * 0x7fffffff) ^ (Date.now() & 0x7fffffff)) || 1;
+}
+
+function readStoredKijiweniTopId(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    return window.sessionStorage.getItem(KIJIWENI_LAST_TOP_ID_KEY) || '';
+  } catch {
+    return '';
+  }
+}
 
 interface TopicListProps {
   topics: Topic[];
@@ -120,6 +134,7 @@ interface TopicListProps {
   hasMoreCloudTopics?: boolean;
   loadingMoreCloudTopics?: boolean;
   onLoadMoreCloudTopics?: () => void;
+  kijiweniEntryToken?: number;
 }
 
 function getBoardIconSection(board: PrimaryBoard): NavIconSection {
@@ -178,6 +193,7 @@ export const TopicList: React.FC<TopicListProps> = ({
   hasMoreCloudTopics = false,
   loadingMoreCloudTopics = false,
   onLoadMoreCloudTopics,
+  kijiweniEntryToken = 0,
 }) => {
   const getBoardUnread = (board: PrimaryBoard): number => {
     if (!unreadCounts) return 0;
@@ -197,7 +213,8 @@ export const TopicList: React.FC<TopicListProps> = ({
   const [makalaInlineOpen, setMakalaInlineOpen] = useState(false);
   const [makalaExpandTrigger, setMakalaExpandTrigger] = useState(0);
   const lastHandledExpandRef = useRef<number>(inlineExpandRequest);
-  const [mixSeed, setMixSeed] = useState<number>(1);
+  const previousTopIdRef = useRef<string>(readStoredKijiweniTopId());
+  const [mixSeed, setMixSeed] = useState<number>(() => createRandomFeedSeed());
   const [visibleCount, setVisibleCount] = useState<number>(INITIAL_VISIBLE_POSTS);
   const [scrollCap, setScrollCap] = useState<number>(KIJIWENI_GATE_BATCH);
 
@@ -216,8 +233,11 @@ export const TopicList: React.FC<TopicListProps> = ({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const effectiveCategory: PrimaryBoard | 'all' =
-    activeTab === 'kijiweni'
+  const isRestrictedSuspended = Boolean(isSuspended && !isAdmin);
+
+  const effectiveCategory: PrimaryBoard | 'all' = isRestrictedSuspended
+    ? 'Kijiweni'
+    : activeTab === 'kijiweni'
       ? 'Kijiweni'
       : activeTab === 'fursa'
         ? 'Fursa'
@@ -228,6 +248,10 @@ export const TopicList: React.FC<TopicListProps> = ({
             : 'all';
 
   useEffect(() => {
+    if (effectiveCategory === 'Kijiweni') {
+      previousTopIdRef.current = readStoredKijiweniTopId();
+      setMixSeed(createRandomFeedSeed());
+    }
     if (effectiveCategory !== 'Fursa') {
       setSelectedJobType('all');
     }
@@ -241,7 +265,7 @@ export const TopicList: React.FC<TopicListProps> = ({
     } else {
       setMakalaInlineOpen(false);
     }
-  }, [effectiveCategory, sharedKijiweniPayload]);
+  }, [effectiveCategory, sharedKijiweniPayload, kijiweniEntryToken]);
 
   useEffect(() => {
     if (sharedKijiweniPayload && effectiveCategory === 'Kijiweni') {
@@ -349,7 +373,14 @@ export const TopicList: React.FC<TopicListProps> = ({
       return true;
     });
 
-    return sortTopicsList(list, sortMode, mixSeed);
+    return sortTopicsList(
+      list,
+      sortMode,
+      mixSeed,
+      effectiveCategory === 'Kijiweni' && sortMode === 'newest'
+        ? previousTopIdRef.current
+        : undefined
+    );
   }, [
     topics,
     activeTab,
@@ -366,12 +397,31 @@ export const TopicList: React.FC<TopicListProps> = ({
   useEffect(() => {
     setVisibleCount(INITIAL_VISIBLE_POSTS);
     setScrollCap(KIJIWENI_GATE_BATCH);
-  }, [activeTab, effectiveCategory, selectedJobType, sortMode, searchQuery, onlyMine, onlyPrivate]);
+  }, [
+    activeTab,
+    effectiveCategory,
+    selectedJobType,
+    sortMode,
+    searchQuery,
+    onlyMine,
+    onlyPrivate,
+    kijiweniEntryToken,
+  ]);
 
   const paginatedTopics = useMemo(
     () => filteredTopics.slice(0, Math.min(visibleCount, scrollCap)),
     [filteredTopics, visibleCount, scrollCap]
   );
+
+  useEffect(() => {
+    if (effectiveCategory === 'Kijiweni' && sortMode === 'newest' && paginatedTopics[0]?.id) {
+      try {
+        window.sessionStorage.setItem(KIJIWENI_LAST_TOP_ID_KEY, paginatedTopics[0].id);
+      } catch {
+        // Ignore storage errors
+      }
+    }
+  }, [effectiveCategory, sortMode, paginatedTopics]);
 
   const remainingTopicsCount = Math.max(0, filteredTopics.length - paginatedTopics.length);
   const reachedGateCap =
@@ -605,56 +655,67 @@ export const TopicList: React.FC<TopicListProps> = ({
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
         {/* Left/Primary Feed */}
         <div className="min-w-0 flex-1">
-          {/* Kijiweni Compact Top Action: ONLY "+ Chapisha Kijiweni" (or inline composer when open), then Search below */}
+          {/* Kijiweni Compact Top Action: Read-only notice for suspended accounts, otherwise "+ Chapisha Kijiweni" */}
           {effectiveCategory === 'Kijiweni' && (
             <div
               ref={inlineComposerAnchorRef}
               className="mb-3 scroll-mt-[calc(var(--malosha-header-h,106px)+14px)]"
             >
-              {!inlineComposerOpen && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!userUid) {
-                      onToast(
-                        tr(
-                          'Tengeneza akaunti au ingia ili kuchapisha Kijiweni.',
-                          'Create an account or sign in to post.'
-                        ),
-                        'error'
-                      );
-                      onSignIn('post');
-                      return;
-                    }
-                    if (isSuspended) {
-                      onToast(
-                        tr('Akaunti yako imefungwa na msimamizi.', 'Your account is suspended.'),
-                        'error'
-                      );
-                      return;
-                    }
-                    setInlineComposerOpen(true);
-                  }}
-                  className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-[#1D4E89] px-4 py-2.5 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-[#163A5F] sm:w-auto sm:rounded-lg"
-                >
-                  <Plus className="h-4 w-4 shrink-0" aria-hidden="true" />
-                  <span>{tr('Chapisha Kijiweni', 'Post to Kijiweni')}</span>
-                </button>
-              )}
+              {isRestrictedSuspended ? (
+                <div className="rounded-xl border border-red-200 bg-red-50/90 px-3.5 py-2.5 text-xs font-medium text-red-900">
+                  {tr(
+                    'Hali ya Kusoma Tu: Akaunti yako imefungwa — unaweza kusoma machapisho ya Kijiweni pekee bila kuandika, kulike au kutoa maoni.',
+                    'Read-Only Mode: Your account is closed — you can only read Kijiweni posts without posting, liking, or commenting.'
+                  )}
+                </div>
+              ) : (
+                <>
+                  {!inlineComposerOpen && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!userUid) {
+                          onToast(
+                            tr(
+                              'Tengeneza akaunti au ingia ili kuchapisha Kijiweni.',
+                              'Create an account or sign in to post.'
+                            ),
+                            'error'
+                          );
+                          onSignIn('post');
+                          return;
+                        }
+                        if (isSuspended) {
+                          onToast(
+                            tr('Akaunti yako imefungwa na msimamizi.', 'Your account is suspended.'),
+                            'error'
+                          );
+                          return;
+                        }
+                        setInlineComposerOpen(true);
+                      }}
+                      className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-[#1D4E89] px-4 py-2.5 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-[#163A5F] sm:w-auto sm:rounded-lg"
+                    >
+                      <Plus className="h-4 w-4 shrink-0" aria-hidden="true" />
+                      <span>{tr('Chapisha Kijiweni', 'Post to Kijiweni')}</span>
+                    </button>
+                  )}
 
-              <KijiweniInlineComposer
-                expanded={inlineComposerOpen}
-                onExpandedChange={setInlineComposerOpen}
-                userUid={userUid}
-                userDisplayName={userDisplayName}
-                userPhoto={userPhoto}
-                isSuspended={isSuspended}
-                sharedPayload={sharedKijiweniPayload}
-                onClearSharedPayload={onClearSharedKijiweniPayload}
-                onSignIn={onSignIn}
-                onSubmitPost={onCreateKijiweniPost}
-                onToast={onToast}
-              />
+                  <KijiweniInlineComposer
+                    expanded={inlineComposerOpen}
+                    onExpandedChange={setInlineComposerOpen}
+                    userUid={userUid}
+                    userDisplayName={userDisplayName}
+                    userPhoto={userPhoto}
+                    isSuspended={isSuspended}
+                    sharedPayload={sharedKijiweniPayload}
+                    onClearSharedPayload={onClearSharedKijiweniPayload}
+                    onSignIn={onSignIn}
+                    onSubmitPost={onCreateKijiweniPost}
+                    onToast={onToast}
+                  />
+                </>
+              )}
             </div>
           )}
 
@@ -672,14 +733,22 @@ export const TopicList: React.FC<TopicListProps> = ({
                 onChange={(e) => onChangeSearch(e.target.value)}
                 placeholder={searchPlaceholder}
                 aria-label={tr('Tafuta mada', 'Search topics')}
-                className="min-h-[44px] w-full rounded-lg border border-slate-300 bg-white py-2 pr-4 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#1D4E89] focus:outline-none sm:min-h-[40px]"
+                className={`min-h-[44px] w-full rounded-lg border py-2 pr-4 pl-10 text-sm text-[#0F1419] placeholder:text-slate-400 focus:border-[#1D4E89] focus:outline-none sm:min-h-[40px] ${
+                  effectiveCategory === 'Kijiweni'
+                    ? 'border-[#CFD7E1] bg-[#F3F5F8]'
+                    : 'border-slate-300 bg-white'
+                }`}
               />
             </div>
 
             <div
               role="group"
               aria-label={tr('Mpangilio wa mada', 'Topic sorting')}
-              className="grid grid-cols-2 rounded-lg border border-slate-300 bg-white p-1 sm:inline-flex shrink-0"
+              className={`grid grid-cols-2 rounded-lg border p-1 sm:inline-flex shrink-0 ${
+                effectiveCategory === 'Kijiweni'
+                  ? 'border-[#CFD7E1] bg-[#F3F5F8]'
+                  : 'border-slate-300 bg-white'
+              }`}
             >
               {(
                 [
@@ -693,10 +762,14 @@ export const TopicList: React.FC<TopicListProps> = ({
                   key={opt.id}
                   type="button"
                   onClick={() => {
-                    if (opt.id === 'mixed') {
-                      setMixSeed((s) => s + 1);
+                    if (opt.id === 'mixed' || opt.id === 'newest') {
+                      previousTopIdRef.current = paginatedTopics[0]?.id || readStoredKijiweniTopId();
+                      setMixSeed(createRandomFeedSeed());
                     }
                     onChangeSort(opt.id);
+                    if (typeof window !== 'undefined') {
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }
                   }}
                   className={`min-h-[36px] rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 sm:px-3 ${
                     sortMode === opt.id
@@ -718,7 +791,9 @@ export const TopicList: React.FC<TopicListProps> = ({
               className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium whitespace-nowrap shrink-0 ${
                 activeTab === 'all' && effectiveCategory === 'all'
                   ? 'border-[#163A5F] bg-[#163A5F] text-white'
-                  : 'border-slate-300 bg-white text-slate-700'
+                  : effectiveCategory === 'Kijiweni'
+                    ? 'border-[#CFD7E1] bg-[#F3F5F8] text-slate-700'
+                    : 'border-slate-300 bg-white text-slate-700'
               }`}
             >
               <NavSectionIcon section="all" className="h-4 w-4 shrink-0" />
@@ -736,7 +811,9 @@ export const TopicList: React.FC<TopicListProps> = ({
                   className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium whitespace-nowrap shrink-0 ${
                     effectiveCategory === board.id
                       ? 'border-[#163A5F] bg-[#163A5F] text-white'
-                      : 'border-slate-300 bg-white text-slate-700'
+                      : effectiveCategory === 'Kijiweni'
+                        ? 'border-[#CFD7E1] bg-[#F3F5F8] text-slate-700'
+                        : 'border-slate-300 bg-white text-slate-700'
                   }`}
                 >
                   <NavSectionIcon
@@ -764,7 +841,9 @@ export const TopicList: React.FC<TopicListProps> = ({
                 className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium whitespace-nowrap shrink-0 ${
                   activeTab === 'votes'
                     ? 'border-[#163A5F] bg-[#163A5F] text-white'
-                    : 'border-slate-300 bg-white text-slate-700'
+                    : effectiveCategory === 'Kijiweni'
+                      ? 'border-[#CFD7E1] bg-[#F3F5F8] text-slate-700'
+                      : 'border-slate-300 bg-white text-slate-700'
                 }`}
               >
                 <NavSectionIcon section="votes" className="h-4 w-4 shrink-0" />
@@ -779,7 +858,11 @@ export const TopicList: React.FC<TopicListProps> = ({
           </div>
 
           {userUid && myPrivatePostsCount > 0 && (
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs">
+            <div className={`mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs ${
+              effectiveCategory === 'Kijiweni'
+                ? 'border-[#CFD7E1] bg-[#F3F5F8]'
+                : 'border-slate-200 bg-white'
+            }`}>
               <div className="flex items-center gap-2 text-slate-700">
                 <EyeOff className="h-3.5 w-3.5 text-slate-600" aria-hidden="true" />
                 <span>
@@ -1053,7 +1136,7 @@ export const TopicList: React.FC<TopicListProps> = ({
                   <button
                     type="button"
                     onClick={handleUnlockNextBatch}
-                    className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-xs font-bold text-slate-800 transition-colors hover:border-[#1D4E89] hover:text-[#1D4E89]"
+                    className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-[#CFD7E1] bg-[#F3F5F8] px-5 py-2.5 text-xs font-bold text-[#0F1419] transition-colors hover:border-[#1D4E89] hover:text-[#1D4E89]"
                   >
                     <span>
                       {remainingTopicsCount > 0
@@ -1215,9 +1298,9 @@ export const TopicList: React.FC<TopicListProps> = ({
                                   photoURL: topic.authorPhoto,
                                 })
                               }
-                              className="inline-flex items-center gap-1 font-medium text-slate-700 hover:text-[#1D4E89] hover:underline"
+                              className="inline-flex max-w-[240px] flex-nowrap items-center gap-1 font-medium text-slate-700 hover:text-[#1D4E89] hover:underline"
                             >
-                              <span>
+                              <span className="truncate whitespace-nowrap">
                                 <AuthorName uid={topic.authorId} fallback={topic.authorName} />
                               </span>
                               <AuthorVerificationBadge uid={topic.authorId} size="xs" />

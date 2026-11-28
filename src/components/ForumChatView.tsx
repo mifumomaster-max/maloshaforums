@@ -367,6 +367,14 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
   const [selectionMenuOpen, setSelectionMenuOpen] = useState(false);
   const [roomMenuOpen, setRoomMenuOpen] = useState(false);
   const [soundMuted, setSoundMuted] = useState(() => isChatSoundMuted());
+  const [showOlderHistory, setShowOlderHistory] = useState(false);
+  const [slideReturnState, setSlideReturnState] = useState<{
+    subTab: 'direct' | 'messages';
+    directChatId: string | null;
+    scrollTop: number;
+  } | null>(null);
+  const pendingGroupRestoreScrollRef = useRef<number | null>(null);
+  const [pendingDmRestoreScrollTop, setPendingDmRestoreScrollTop] = useState<number | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [unseenWhileScrolled, setUnseenWhileScrolled] = useState(0);
@@ -522,6 +530,26 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
     );
   }, [messages, optimisticMessages, searchQuery, user?.uid]);
 
+  const todayDateKey = formatDateKey(null);
+
+  const visibleGroupMessages = useMemo(() => {
+    if (showOlderHistory || searchQuery.trim() || chronologicalMessages.length === 0) {
+      return chronologicalMessages;
+    }
+    const todayOnly = chronologicalMessages.filter(
+      (m) => formatDateKey(m.createdAt) === todayDateKey
+    );
+    if (todayOnly.length > 0) {
+      return todayOnly;
+    }
+    return chronologicalMessages.slice(-15);
+  }, [chronologicalMessages, showOlderHistory, searchQuery, todayDateKey]);
+
+  const hiddenGroupOlderCount = Math.max(
+    0,
+    chronologicalMessages.length - visibleGroupMessages.length
+  );
+
   const activeParticipantCount = useMemo(() => {
     const ids = new Set<string>();
     chronologicalMessages.forEach((m) => {
@@ -602,12 +630,27 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
     setShowScrollBottom(false);
   };
 
-  // Scroll to bottom on initial load & when a new message arrives near bottom (or sent by self)
+  // Scroll to bottom on initial load & when a new message arrives near bottom (or restore Slide return scroll)
   useEffect(() => {
-    if (loading || chronologicalMessages.length === 0) return;
-    const newest = chronologicalMessages[chronologicalMessages.length - 1];
+    if (effectiveSubTab !== 'messages') return;
     const el = scrollBoxRef.current;
     if (!el) return;
+
+    if (pendingGroupRestoreScrollRef.current !== null) {
+      const targetScroll = pendingGroupRestoreScrollRef.current;
+      pendingGroupRestoreScrollRef.current = null;
+      initialScrolledRef.current = true;
+      if (visibleGroupMessages.length > 0) {
+        prevNewestIdRef.current = visibleGroupMessages[visibleGroupMessages.length - 1].id;
+      }
+      window.requestAnimationFrame(() => {
+        el.scrollTop = targetScroll;
+      });
+      return;
+    }
+
+    if (loading || visibleGroupMessages.length === 0) return;
+    const newest = visibleGroupMessages[visibleGroupMessages.length - 1];
 
     if (!initialScrolledRef.current) {
       initialScrolledRef.current = true;
@@ -633,7 +676,45 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
         setUnseenWhileScrolled((n) => n + 1);
       }
     }
-  }, [loading, chronologicalMessages, user?.uid]);
+  }, [loading, visibleGroupMessages, effectiveSubTab, user?.uid]);
+
+  const openSlideFromCurrentContext = useCallback(
+    (explicitDmScrollTop?: number) => {
+      if (effectiveSubTab === 'messages') {
+        setSlideReturnState({
+          subTab: 'messages',
+          directChatId: null,
+          scrollTop: scrollBoxRef.current ? scrollBoxRef.current.scrollTop : 0,
+        });
+      } else if (effectiveSubTab === 'direct') {
+        setSlideReturnState({
+          subTab: 'direct',
+          directChatId: activeDirectChatId || null,
+          scrollTop: explicitDmScrollTop ?? 0,
+        });
+      }
+      setSearchOpen(false);
+      setRoomMenuOpen(false);
+      onChangeSubTab('notes');
+    },
+    [effectiveSubTab, activeDirectChatId, onChangeSubTab]
+  );
+
+  const handleReturnFromSlide = useCallback(() => {
+    if (!slideReturnState) {
+      onChangeSubTab('direct');
+      return;
+    }
+    if (slideReturnState.subTab === 'messages') {
+      pendingGroupRestoreScrollRef.current = slideReturnState.scrollTop;
+      onChangeSubTab('messages');
+    } else {
+      setPendingDmRestoreScrollTop(slideReturnState.scrollTop);
+      onChangeSubTab('direct');
+      onChangeActiveDirectChatId(slideReturnState.directChatId);
+    }
+    setSlideReturnState(null);
+  }, [slideReturnState, onChangeSubTab, onChangeActiveDirectChatId]);
 
   // Keep latest message pinned right above composer whenever timeline resizes (keyboard / multiline draft)
   useEffect(() => {
@@ -966,13 +1047,13 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
         : `${window.location.origin}/?tab=mchart`;
     const shareTitle =
       effectiveSubTab === 'notes'
-        ? tr('Malosha Forums · Mchart Notes', 'Malosha Forums · Mchart Notes')
+        ? tr('Malosha Forums · Mchart Slide', 'Malosha Forums · Mchart Slide')
         : tr('Malosha Forums · Mchart', 'Malosha Forums · Mchart');
     const shareText =
       effectiveSubTab === 'notes'
         ? tr(
-            'Soma notes na mafaili muhimu ya Malosha Forums moja kwa moja kwenye simu yako!',
-            'Read official study notes and archive files on Malosha Forums!'
+            'Soma slide na mafaili muhimu ya Malosha Forums moja kwa moja kwenye simu yako!',
+            'Read official study slides and archive files on Malosha Forums!'
           )
         : tr(
             'Karibu tuwasiliane moja kwa moja kwenye Mchart ya Malosha Forums!',
@@ -1332,6 +1413,22 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                 <div className="flex shrink-0 items-center gap-0.5">
                   <button
                     type="button"
+                    onClick={() => openSlideFromCurrentContext()}
+                    title={tr('Fungua Slide', 'Open Slide')}
+                    aria-label={tr('Fungua Slide', 'Open Slide')}
+                    className="relative inline-flex h-9 items-center gap-1 rounded-full bg-[#E7FCEB] px-2.5 text-[11px] font-bold text-[#075E54] transition-colors hover:bg-[#D5F7DC]"
+                  >
+                    <BookOpen className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    <span>Slide</span>
+                    {unreadNotesCount > 0 && (
+                      <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-[#1DAB61] px-1 text-[9.5px] font-extrabold text-white tabular-nums">
+                        {unreadNotesCount > 99 ? '99+' : unreadNotesCount}
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={() => {
                       setSearchOpen((prev) => !prev);
                       if (searchOpen) setSearchQuery('');
@@ -1358,6 +1455,14 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
 
                     {roomMenuOpen && (
                       <div className="absolute top-11 right-0 z-50 max-h-[70vh] w-56 overflow-y-auto rounded-2xl border border-slate-200 bg-white py-1.5 text-slate-900 shadow-xl">
+                        <button
+                          type="button"
+                          onClick={() => openSlideFromCurrentContext()}
+                          className="flex min-h-[42px] w-full items-center gap-3 px-4 text-left text-xs font-semibold hover:bg-slate-50"
+                        >
+                          <BookOpen className="h-4 w-4 text-[#075E54]" />
+                          <span>{tr('Fungua Slide (Mafaili)', 'Open Slide Library')}</span>
+                        </button>
                         <button
                           type="button"
                           onClick={() => {
@@ -1456,8 +1561,8 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                       ? tr('Huduma ya Wanachama Waliosajiliwa Pekee', 'Registered Members Only')
                       : effectiveSubTab === 'notes'
                         ? tr(
-                            `Notes ${notes.length} · Mafaili ya kusoma kwenye simu`,
-                            `${notes.length} notes · Mobile reader & archive files`
+                            `Slide ${notes.length} · Mafaili ya kusoma kwenye simu`,
+                            `${notes.length} slides · Mobile reader & archive files`
                           )
                         : tr(
                             `Online ${onlineCount} · Kundi, Binafsi (DM) & Status`,
@@ -1493,7 +1598,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
               )}
             </div>
 
-            {/* Clean 2-Tab WhatsApp Bar: Chats (Group pinned #1 + DMs + Status) | Notes */}
+            {/* Clean 2-Tab WhatsApp Bar: Chats (Group pinned #1 + DMs + Status) | Slide */}
             {user && (
               <nav
                 aria-label={tr('Vipengele vya Mchart', 'Mchart sections')}
@@ -1537,7 +1642,7 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                   }`}
                 >
                   <BookOpen className="h-4 w-4 shrink-0" aria-hidden="true" />
-                  <span className="truncate">{tr('Notes', 'Notes')}</span>
+                  <span className="truncate">{tr('Slide', 'Slide')}</span>
                   {unreadNotesCount > 0 ? (
                     <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-[#25D366] px-1 text-[10px] font-extrabold text-[#064E46] tabular-nums">
                       {unreadNotesCount > 99 ? '99+' : unreadNotesCount}
@@ -1563,8 +1668,8 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
             </h2>
             <p className="mt-2 max-w-md text-xs leading-relaxed text-slate-600 sm:text-sm">
               {tr(
-                'Kwa usalama na faragha ya wanachama, huwezi kuona mazungumzo binafsi, kundi, status, wala notes bila kuingia au kufungua akaunti ya Malosha Forums.',
-                'To protect community privacy, Private chats, Group chat, Status updates, and Notes cannot be viewed or accessed without a Malosha Forums account.'
+                'Kwa usalama na faragha ya wanachama, huwezi kuona mazungumzo binafsi, kundi, status, wala slide bila kuingia au kufungua akaunti ya Malosha Forums.',
+                'To protect community privacy, Private chats, Group chat, Status updates, and Slides cannot be viewed or accessed without a Malosha Forums account.'
               )}
             </p>
             <button
@@ -1584,10 +1689,13 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
               user={user}
               userDisplayName={userDisplayName}
               isAdmin={isAdmin}
+              isSuspended={isSuspended}
               readNoteIds={readNoteIds}
               onMarkNoteRead={onMarkNoteRead}
+              onReturnFromSlide={slideReturnState ? handleReturnFromSlide : undefined}
               onSignIn={() => onSignIn('chat')}
               onToast={onToast}
+              onRequestConfirm={onRequestConfirm}
             />
           </div>
         ) : effectiveSubTab === 'direct' ? (
@@ -1603,6 +1711,10 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                 groupSettings={groupSettings}
                 canSendToGroup={canSendToGroup}
                 onBackToInbox={() => onChangeActiveDirectChatId(null)}
+                onOpenSlide={(scrollTop) => openSlideFromCurrentContext(scrollTop)}
+                unreadSlideCount={unreadNotesCount}
+                restoreScrollTop={pendingDmRestoreScrollTop}
+                onClearRestoreScroll={() => setPendingDmRestoreScrollTop(null)}
                 onToast={onToast}
               />
             ) : (
@@ -1622,6 +1734,8 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
                 groupTypingLabel={typingStatusLabel}
                 isKickedFromGroup={isKickedFromGroup}
                 onOpenGroupChat={() => onChangeSubTab('messages')}
+                onOpenSlide={() => openSlideFromCurrentContext()}
+                unreadSlideCount={unreadNotesCount}
                 onSelectThread={(thread) => onChangeActiveDirectChatId(thread.chatId)}
                 onStartPrivateChatWith={(target) => handleStartPrivateChatWith(target)}
                 onSwitchToGroup={() => onChangeSubTab('messages')}
@@ -1640,8 +1754,8 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
             </h3>
             <p className="mt-1.5 max-w-sm text-xs leading-relaxed text-slate-600">
               {tr(
-                'Msimamizi amekuondoa kwenye kundi hili kwa sasa. Bado unaweza kutumia mazungumzo binafsi (DM) na Notes.',
-                'An administrator removed you from this group. You can still use Private Chats (DM) and Notes.'
+                'Msimamizi amekuondoa kwenye kundi hili kwa sasa. Bado unaweza kutumia mazungumzo binafsi (DM) na Slide.',
+                'An administrator removed you from this group. You can still use Private Chats (DM) and Slide.'
               )}
             </p>
             <button
@@ -1679,13 +1793,31 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
               </div>
             )}
 
-            {loading ? (
+            {hiddenGroupOlderCount > 0 && !showOlderHistory && !searchQuery.trim() && (
+              <div className="mb-2.5 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => setShowOlderHistory(true)}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-slate-200/80 bg-white/95 px-3.5 py-1.5 text-[11px] font-bold text-[#075E54] shadow-xs transition-colors hover:bg-emerald-50"
+                >
+                  <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>
+                    {tr(
+                      `Onyesha mazungumzo ya siku zilizopita (${hiddenGroupOlderCount})`,
+                      `Show older history (${hiddenGroupOlderCount})`
+                    )}
+                  </span>
+                </button>
+              </div>
+            )}
+
+            {loading && visibleGroupMessages.length === 0 ? (
               <div className="space-y-3 py-6">
                 <div className="h-14 w-3/4 rounded-2xl bg-white/70 animate-pulse" />
                 <div className="ml-auto h-12 w-2/3 rounded-2xl bg-[#D9FDD3]/70 animate-pulse" />
                 <div className="h-16 w-4/5 rounded-2xl bg-white/70 animate-pulse" />
               </div>
-            ) : chronologicalMessages.length === 0 ? (
+            ) : visibleGroupMessages.length === 0 ? (
               <div className="mx-auto my-10 max-w-sm rounded-2xl bg-white/90 px-5 py-7 text-center shadow-xs">
                 <Users className="mx-auto h-8 w-8 text-[#075E54]" aria-hidden="true" />
                 <p className="mt-2.5 text-sm font-bold text-slate-900">
@@ -1702,8 +1834,8 @@ export const ForumChatView: React.FC<ForumChatViewProps> = ({
               </div>
             ) : (
               <div className="space-y-1.5">
-                {chronologicalMessages.map((msg, idx) => {
-                  const prev = idx > 0 ? chronologicalMessages[idx - 1] : null;
+                {visibleGroupMessages.map((msg, idx) => {
+                  const prev = idx > 0 ? visibleGroupMessages[idx - 1] : null;
                   const showDateDivider =
                     !prev || formatDateKey(prev.createdAt) !== formatDateKey(msg.createdAt);
                   const isOwn = Boolean(user && msg.senderId === user.uid);

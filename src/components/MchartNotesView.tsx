@@ -10,12 +10,14 @@ import {
   Download,
   Edit3,
   Eye,
+  EyeOff,
   FileCode2,
   FileDown,
   FileText,
   FileUp,
   FolderArchive,
   FolderOpen,
+  Globe,
   Image as ImageIcon,
   Loader2,
   Lock,
@@ -40,6 +42,7 @@ import {
 import {
   createMchartNote,
   deleteMchartNote,
+  deleteMchartNotesBatch,
   fetchProtectedNoteContent,
   fetchUserNoteAccess,
   formatRawTextAsStructuredNote,
@@ -77,7 +80,7 @@ import {
 } from './NoteFormattedRenderer';
 import { NoteLockManageModal } from './NoteLockManageModal';
 
-type NoteFileFilter = 'all' | 'pinned' | 'code' | 'pdf' | 'archived';
+type NoteFileFilter = 'all' | 'pinned' | 'private' | 'code' | 'pdf' | 'archived';
 
 const NOTE_DRAFT_STORAGE_KEY = 'malosha_mchart_note_draft_v1';
 
@@ -87,8 +90,10 @@ interface MchartNotesViewProps {
   user: User | null;
   userDisplayName: string;
   isAdmin: boolean;
+  isSuspended?: boolean;
   readNoteIds?: Set<string>;
   onMarkNoteRead?: (noteId: string) => void;
+  onReturnFromSlide?: () => void;
   onSignIn?: () => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
   onRequestConfirm?: (opts: {
@@ -134,26 +139,37 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
   user,
   userDisplayName,
   isAdmin,
+  isSuspended = false,
   readNoteIds,
   onMarkNoteRead,
+  onReturnFromSlide,
   onSignIn,
   onToast,
 }) => {
   const { tr, formatTime } = useLanguage();
+  const canAuthorNotes = Boolean(user && !isSuspended);
+  const draftStorageKey = user?.uid
+    ? `${NOTE_DRAFT_STORAGE_KEY}_${user.uid}`
+    : NOTE_DRAFT_STORAGE_KEY;
+
+  const canManageNote = (note: MchartNote): boolean =>
+    Boolean(user && (isAdmin || (!isSuspended && note.authorId === user.uid && !note.isLocked)));
+
   const [composerOpen, setComposerOpen] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [loadingEditNoteId, setLoadingEditNoteId] = useState<string | null>(null);
   const [rawText, setRawText] = useState('');
   const [titleInput, setTitleInput] = useState('');
   const [subtitleInput, setSubtitleInput] = useState('');
-  const [pinNote, setPinNote] = useState(true);
+  const [composerVisibility, setComposerVisibility] = useState<'public' | 'private'>('public');
+  const [pinNote, setPinNote] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [uploadingPdf, setUploadingPdf] = useState(false);
   const [pendingPdf, setPendingPdf] = useState<NotePdfUploadResult | null>(null);
   const [selectedWordCount, setSelectedWordCount] = useState(0);
 
-  // Composer lock/payment options
+  // Composer lock/payment options (Owner-only)
   const [composerLockEnabled, setComposerLockEnabled] = useState(false);
   const [composerLockMode, setComposerLockMode] = useState<NoteLockTargetMode>('all');
   const [composerLockPrice, setComposerLockPrice] = useState('5000');
@@ -166,6 +182,8 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
   const [lockModalNote, setLockModalNote] = useState<MchartNote | null>(null);
   const [pendingDeleteNote, setPendingDeleteNote] = useState<MchartNote | null>(null);
   const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
+  const [bulkDeleteMode, setBulkDeleteMode] = useState<'public' | 'all' | null>(null);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [fontStep, setFontStep] = useState<'sm' | 'md' | 'lg'>('md');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
@@ -185,40 +203,52 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
   const [paymentRefInput, setPaymentRefInput] = useState('');
   const [submittingPaymentReq, setSubmittingPaymentReq] = useState(false);
 
-  // Restore draft for new note when admin opens composer
+  // Restore draft for new note when signed-in user opens composer
   useEffect(() => {
-    if (!isAdmin || editingNoteId) return;
+    if (!canAuthorNotes || editingNoteId) return;
     try {
-      const saved = window.localStorage.getItem(NOTE_DRAFT_STORAGE_KEY);
+      const saved = window.localStorage.getItem(draftStorageKey);
       if (saved) {
-        const parsed = JSON.parse(saved) as { title?: string; subtitle?: string; rawText?: string };
+        const parsed = JSON.parse(saved) as {
+          title?: string;
+          subtitle?: string;
+          rawText?: string;
+          visibility?: 'public' | 'private';
+        };
         if (!rawText && parsed.rawText) setRawText(parsed.rawText);
         if (!titleInput && parsed.title) setTitleInput(parsed.title);
         if (!subtitleInput && parsed.subtitle) setSubtitleInput(parsed.subtitle);
+        if (parsed.visibility === 'private' || parsed.visibility === 'public') {
+          setComposerVisibility(parsed.visibility);
+        }
       }
     } catch {
       // Ignore draft restore errors
     }
-    // Only on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin]);
+  }, [canAuthorNotes, draftStorageKey]);
 
   // Autosave draft for new notes
   useEffect(() => {
-    if (!isAdmin || editingNoteId) return;
+    if (!canAuthorNotes || editingNoteId) return;
     try {
       if (!rawText.trim() && !titleInput.trim() && !subtitleInput.trim()) {
-        window.localStorage.removeItem(NOTE_DRAFT_STORAGE_KEY);
+        window.localStorage.removeItem(draftStorageKey);
       } else {
         window.localStorage.setItem(
-          NOTE_DRAFT_STORAGE_KEY,
-          JSON.stringify({ title: titleInput, subtitle: subtitleInput, rawText })
+          draftStorageKey,
+          JSON.stringify({
+            title: titleInput,
+            subtitle: subtitleInput,
+            rawText,
+            visibility: composerVisibility,
+          })
         );
       }
     } catch {
       // Ignore storage quota errors
     }
-  }, [isAdmin, editingNoteId, titleInput, subtitleInput, rawText]);
+  }, [canAuthorNotes, draftStorageKey, editingNoteId, titleInput, subtitleInput, rawText, composerVisibility]);
 
   // Keep selectedNote & lockModalNote synced with live Firestore updates
   const liveSelectedNote = useMemo(() => {
@@ -438,9 +468,11 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
     return {
       all: nonArchived.length,
       pinned: nonArchived.filter((n) => n.isPinned).length,
+      private: nonArchived.filter((n) => n.visibility === 'private').length,
       code: nonArchived.filter((n) => noteHasCodeBlock(n)).length,
       pdf: nonArchived.filter((n) => Boolean(n.pdfUrl || n.pdfFileName)).length,
       archived: archived.length,
+      publicTotal: sortedNotes.filter((n) => n.visibility !== 'private').length,
     };
   }, [sortedNotes]);
 
@@ -452,6 +484,7 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
       ? sortedNotes
       : sortedNotes.filter((n) => !n.isArchived);
     if (activeFilter === 'pinned') return base.filter((n) => n.isPinned);
+    if (activeFilter === 'private') return base.filter((n) => n.visibility === 'private');
     if (activeFilter === 'code') return base.filter((n) => noteHasCodeBlock(n));
     if (activeFilter === 'pdf') return base.filter((n) => Boolean(n.pdfUrl || n.pdfFileName));
     return base;
@@ -511,8 +544,8 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
     setRawText(formatted.body);
     onToast(
       tr(
-        'Notes zimepangwa kisomi na code/amri zimehifadhiwa kwenye kisanduku cha kunakili!',
-        'Notes structured cleanly with code & commands isolated!'
+        'Slide zimepangwa kisomi na code/amri zimehifadhiwa kwenye kisanduku cha kunakili!',
+        'Slides structured cleanly with code & commands isolated!'
       )
     );
   };
@@ -522,6 +555,7 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
     setRawText('');
     setTitleInput('');
     setSubtitleInput('');
+    setComposerVisibility('public');
     setPinNote(false);
     setPendingPdf(null);
     setShowPreview(false);
@@ -534,7 +568,7 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
   };
 
   const startEditNote = async (note: MchartNote) => {
-    if (!isAdmin || loadingEditNoteId) return;
+    if (!canManageNote(note) || loadingEditNoteId) return;
     setLoadingEditNoteId(note.id);
     try {
       const resolved = await resolveNoteWithContent(note);
@@ -542,6 +576,7 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
       setTitleInput(resolved.title);
       setSubtitleInput(resolved.subtitle || '');
       setRawText(resolved.body || '');
+      setComposerVisibility(resolved.visibility === 'private' ? 'private' : 'public');
       setPinNote(Boolean(resolved.isPinned));
       setPendingPdf(null);
       setShowPreview(false);
@@ -556,7 +591,7 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
   };
 
   const handlePdfPicked = async (file: File | undefined) => {
-    if (!file || !user || !isAdmin) return;
+    if (!file || !user || !canAuthorNotes) return;
     setUploadingPdf(true);
     try {
       const [uploaded, extractedText] = await Promise.all([
@@ -594,7 +629,7 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
 
   const handlePublishNote = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !isAdmin || publishing || uploadingPdf) return;
+    if (!user || !canAuthorNotes || publishing || uploadingPdf) return;
     if (rawText.trim().length < 5 && !pendingPdf) {
       onToast(
         tr(
@@ -613,7 +648,8 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
           title: titleInput,
           subtitle: subtitleInput,
           rawText,
-          isPinned: pinNote,
+          visibility: composerVisibility,
+          ...(isAdmin ? { isPinned: pinNote } : {}),
         });
         if (updatedBody) {
           setProtectedContentMap((prev) => {
@@ -642,16 +678,12 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
       return;
     }
 
-    const numericPrice = Math.max(
-      0,
-      Math.floor(Number(composerLockPrice.replace(/[^0-9]/g, '') || 0))
-    );
+    const allowOwnerLock = isAdmin && composerLockEnabled;
+    const numericPrice = allowOwnerLock
+      ? Math.max(0, Math.floor(Number(composerLockPrice.replace(/[^0-9]/g, '') || 0)))
+      : 0;
 
-    if (
-      composerLockEnabled &&
-      composerLockMode === 'selected' &&
-      selectedLockedUids.size === 0
-    ) {
+    if (allowOwnerLock && composerLockMode === 'selected' && selectedLockedUids.size === 0) {
       onToast(
         tr(
           'Chagua angalau mwanachama mmoja wa kufungia note hii.',
@@ -664,16 +696,19 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
 
     setPublishing(true);
     try {
-      const lockedUsers = composerMembers
-        .filter((m) => selectedLockedUids.has(m.uid))
-        .map((m) => ({ uid: m.uid, displayName: m.displayName }));
+      const lockedUsers = allowOwnerLock
+        ? composerMembers
+            .filter((m) => selectedLockedUids.has(m.uid))
+            .map((m) => ({ uid: m.uid, displayName: m.displayName }))
+        : [];
 
       await createMchartNote(user, userDisplayName, {
         rawText,
         title: titleInput,
         subtitle: subtitleInput,
-        isPinned: pinNote,
+        isPinned: isAdmin ? pinNote : false,
         isArchived: false,
+        visibility: composerVisibility,
         ...(pendingPdf
           ? {
               pdfUrl: pendingPdf.url,
@@ -681,25 +716,30 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
               pdfSize: pendingPdf.fileSize,
             }
           : {}),
-        isLocked: composerLockEnabled,
-        lockedTargetMode: composerLockMode,
+        isLocked: allowOwnerLock,
+        lockedTargetMode: allowOwnerLock ? composerLockMode : 'all',
         lockPrice: numericPrice,
         lockCurrency: composerLockCurrency,
-        paymentInstructions: composerPayInstructions,
+        paymentInstructions: allowOwnerLock ? composerPayInstructions : '',
         lockedUsers,
       });
 
       try {
-        window.localStorage.removeItem(NOTE_DRAFT_STORAGE_KEY);
+        window.localStorage.removeItem(draftStorageKey);
       } catch {
         // Ignore storage error
       }
       resetComposer();
       onToast(
-        tr(
-          'Faili jipya la notes limepangwa kisomi na kuhifadhiwa!',
-          'Study file formatted and saved!'
-        )
+        composerVisibility === 'private'
+          ? tr(
+              'Faili lako la binafsi (Private) limehifadhiwa kwa usalama!',
+              'Your private slide has been saved!'
+            )
+          : tr(
+              'Faili la Public limepangwa kisomi na kuhifadhiwa!',
+              'Public slide formatted and saved!'
+            )
       );
     } catch (err) {
       onToast(
@@ -764,8 +804,8 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
     if (isNoteLockedForViewer(note)) {
       onToast(
         tr(
-          'Note hii imefungwa na msimamizi — huwezi kunakili wala kusoma.',
-          'This note is locked — copying and reading are disabled.'
+          'Slide hii imefungwa na msimamizi — huwezi kunakili wala kusoma.',
+          'This slide is locked — copying and reading are disabled.'
         ),
         'error'
       );
@@ -779,7 +819,7 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
       await navigator.clipboard.writeText(`${header}\n\n${resolved.body}`);
       setCopiedId(note.id);
       window.setTimeout(() => setCopiedId((c) => (c === note.id ? null : c)), 2000);
-      onToast(tr('Maandishi ya note yamenakiliwa.', 'Note text copied.'));
+      onToast(tr('Maandishi ya slide yamenakiliwa.', 'Slide text copied.'));
     } catch {
       onToast(tr('Imeshindwa kunakili.', 'Could not copy.'), 'error');
     }
@@ -810,8 +850,8 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
       setPaymentRefInput('');
       onToast(
         tr(
-          'Ombi lako la kufunguliwa limetumwa kwa mmiliki! Note itafunguka punde tu akithibitisha.',
-          'Payment confirmation sent to owner! This note will unlock automatically once approved.'
+          'Ombi lako la kufunguliwa limetumwa kwa mmiliki! Slide itafunguka punde tu akithibitisha.',
+          'Payment confirmation sent to owner! This slide will unlock automatically once approved.'
         )
       );
     } catch (err) {
@@ -825,13 +865,13 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
   };
 
   const handleToggleArchive = async (note: MchartNote) => {
-    if (!isAdmin) return;
+    if (!canManageNote(note)) return;
     try {
       await updateMchartNote(note.id, { isArchived: !note.isArchived });
       onToast(
         !note.isArchived
-          ? tr('Note imehifadhiwa kwenye Mafaili ya Nyuma.', 'Note moved to Archive Files.')
-          : tr('Note imerejeshwa kwenye Notes za Sasa.', 'Note restored to Active Notes.')
+          ? tr('Slide imehifadhiwa kwenye Mafaili ya Nyuma.', 'Slide moved to Archive Files.')
+          : tr('Slide imerejeshwa kwenye Slide za Sasa.', 'Slide restored to Active Slides.')
       );
     } catch (err) {
       onToast(
@@ -847,8 +887,8 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
       await updateMchartNote(note.id, { isPinned: !note.isPinned });
       onToast(
         !note.isPinned
-          ? tr('Note imebandikwa juu.', 'Note pinned.')
-          : tr('Bandiko limeondolewa.', 'Note unpinned.')
+          ? tr('Slide imebandikwa juu.', 'Slide pinned.')
+          : tr('Bandiko limeondolewa.', 'Slide unpinned.')
       );
     } catch (err) {
       onToast(
@@ -859,25 +899,60 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
   };
 
   const handleDeleteNote = (note: MchartNote) => {
-    if (!isAdmin) return;
+    if (!canManageNote(note)) return;
     setPendingDeleteNote(note);
   };
 
   const executeDeleteNote = async (note: MchartNote) => {
-    if (!isAdmin || deletingNoteId) return;
+    if (!canManageNote(note) || deletingNoteId) return;
     setDeletingNoteId(note.id);
     try {
       await deleteMchartNote(note.id);
       if (selectedNote?.id === note.id) setSelectedNote(null);
       setPendingDeleteNote(null);
-      onToast(tr('Note imefutwa.', 'Note deleted.'));
+      onToast(tr('Slide imefutwa.', 'Slide deleted.'));
     } catch (err) {
       onToast(
-        err instanceof Error ? err.message : tr('Imeshindwa kufuta note.', 'Failed to delete note.'),
+        err instanceof Error ? err.message : tr('Imeshindwa kufuta slide.', 'Failed to delete slide.'),
         'error'
       );
     } finally {
       setDeletingNoteId(null);
+    }
+  };
+
+  const executeBulkDelete = async (mode: 'public' | 'all') => {
+    if (!isAdmin || bulkDeleting) return;
+    const targets =
+      mode === 'public'
+        ? notes.filter((n) => n.visibility !== 'private')
+        : notes;
+    if (targets.length === 0) {
+      setBulkDeleteMode(null);
+      return;
+    }
+    setBulkDeleting(true);
+    try {
+      const deletedCount = await deleteMchartNotesBatch(targets.map((n) => n.id));
+      if (selectedNote && targets.some((n) => n.id === selectedNote.id)) {
+        setSelectedNote(null);
+      }
+      setBulkDeleteMode(null);
+      onToast(
+        tr(
+          `Slide ${deletedCount} zimefutwa kabisa.`,
+          `${deletedCount} slide(s) deleted permanently.`
+        )
+      );
+    } catch (err) {
+      onToast(
+        err instanceof Error
+          ? err.message
+          : tr('Imeshindwa kufuta slide zote.', 'Failed to delete slides.'),
+        'error'
+      );
+    } finally {
+      setBulkDeleting(false);
     }
   };
 
@@ -959,71 +1034,85 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
       <div className="flex h-full flex-col overflow-hidden bg-[#FAF9F5]">
         {/* Sticky Mobile Reader Bar */}
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-3 py-2.5 sm:px-5">
-          <button
-            type="button"
-            onClick={() => setSelectedNote(null)}
-            className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-[#0E2640] hover:bg-slate-100"
-          >
-            <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-            <span>{tr('Rudi Kwenye Mafaili', 'Back to Files')}</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {onReturnFromSlide && (
+              <button
+                type="button"
+                onClick={onReturnFromSlide}
+                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-[#075E54] px-3 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-[#064E46]"
+              >
+                <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+                <span>{tr('Rudi Chat', 'Back to Chat')}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setSelectedNote(null)}
+              className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-[#0E2640] hover:bg-slate-100"
+            >
+              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+              <span>{tr('Rudi Kwenye Slide', 'Back to Slides')}</span>
+            </button>
+          </div>
 
           <div className="flex flex-wrap items-center gap-1.5">
             {isAdmin && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => void handleTogglePin(liveSelectedNote)}
-                  title={
-                    liveSelectedNote.isPinned
-                      ? tr('Ondoa Pin juu', 'Unpin file')
-                      : tr('Bandika juu (Pin)', 'Pin file to top')
-                  }
-                  className={`inline-flex min-h-[38px] items-center gap-1 rounded-xl border px-2.5 text-xs font-bold transition-colors ${
-                    liveSelectedNote.isPinned
-                      ? 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
-                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                  }`}
-                >
-                  <Pin className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span className="hidden md:inline">
-                    {liveSelectedNote.isPinned ? tr('Ime-Pin', 'Pinned') : tr('Pin', 'Pin')}
-                  </span>
-                </button>
+              <button
+                type="button"
+                onClick={() => void handleTogglePin(liveSelectedNote)}
+                title={
+                  liveSelectedNote.isPinned
+                    ? tr('Ondoa Pin juu', 'Unpin file')
+                    : tr('Bandika juu (Pin)', 'Pin file to top')
+                }
+                className={`inline-flex min-h-[38px] items-center gap-1 rounded-xl border px-2.5 text-xs font-bold transition-colors ${
+                  liveSelectedNote.isPinned
+                    ? 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                    : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                <Pin className="h-3.5 w-3.5" aria-hidden="true" />
+                <span className="hidden md:inline">
+                  {liveSelectedNote.isPinned ? tr('Ime-Pin', 'Pinned') : tr('Pin', 'Pin')}
+                </span>
+              </button>
+            )}
 
-                <button
-                  type="button"
-                  disabled={loadingEditNoteId === liveSelectedNote.id}
-                  onClick={() => void startEditNote(liveSelectedNote)}
-                  className="inline-flex min-h-[38px] items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-bold text-[#0E2640] hover:bg-slate-50"
-                >
-                  {loadingEditNoteId === liveSelectedNote.id ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                  ) : (
-                    <Edit3 className="h-3.5 w-3.5 text-[#075E54]" aria-hidden="true" />
-                  )}
-                  <span className="hidden sm:inline">{tr('Hariri', 'Edit')}</span>
-                </button>
+            {canManageNote(liveSelectedNote) && (
+              <button
+                type="button"
+                disabled={loadingEditNoteId === liveSelectedNote.id}
+                onClick={() => void startEditNote(liveSelectedNote)}
+                className="inline-flex min-h-[38px] items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-bold text-[#0E2640] hover:bg-slate-50"
+              >
+                {loadingEditNoteId === liveSelectedNote.id ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Edit3 className="h-3.5 w-3.5 text-[#075E54]" aria-hidden="true" />
+                )}
+                <span className="hidden sm:inline">{tr('Hariri', 'Edit')}</span>
+              </button>
+            )}
 
-                <button
-                  type="button"
-                  onClick={() => setLockModalNote(liveSelectedNote)}
-                  className={`inline-flex min-h-[38px] items-center gap-1 rounded-xl border px-2.5 text-xs font-bold transition-colors ${
-                    liveSelectedNote.isLocked
-                      ? 'border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100'
-                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                  }`}
-                >
-                  {liveSelectedNote.isLocked ? (
-                    <Lock className="h-3.5 w-3.5 text-amber-700" aria-hidden="true" />
-                  ) : (
-                    <LockOpen className="h-3.5 w-3.5 text-[#075E54]" aria-hidden="true" />
-                  )}
-                  <span className="hidden md:inline">
-                    {liveSelectedNote.isLocked ? tr('Kufuli', 'Lock') : tr('Funga', 'Lock')}
-                  </span>
-                </button>
-              </>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => setLockModalNote(liveSelectedNote)}
+                className={`inline-flex min-h-[38px] items-center gap-1 rounded-xl border px-2.5 text-xs font-bold transition-colors ${
+                  liveSelectedNote.isLocked
+                    ? 'border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100'
+                    : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                {liveSelectedNote.isLocked ? (
+                  <Lock className="h-3.5 w-3.5 text-amber-700" aria-hidden="true" />
+                ) : (
+                  <LockOpen className="h-3.5 w-3.5 text-[#075E54]" aria-hidden="true" />
+                )}
+                <span className="hidden md:inline">
+                  {liveSelectedNote.isLocked ? tr('Kufuli', 'Lock') : tr('Funga', 'Lock')}
+                </span>
+              </button>
             )}
 
             {!lockedForViewer && !isPdfOnly && (
@@ -1125,11 +1214,28 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                   <span aria-hidden="true">·</span>
                 </>
               )}
+              {liveSelectedNote.visibility === 'private' ? (
+                <>
+                  <span className="inline-flex items-center gap-1 rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-800">
+                    <EyeOff className="h-3 w-3" aria-hidden="true" />
+                    <span>{tr('Private (Binafsi)', 'Private')}</span>
+                  </span>
+                  <span aria-hidden="true">·</span>
+                </>
+              ) : (
+                <>
+                  <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-[#075E54]">
+                    <Globe className="h-3 w-3" aria-hidden="true" />
+                    <span>{tr('Public', 'Public')}</span>
+                  </span>
+                  <span aria-hidden="true">·</span>
+                </>
+              )}
               {liveSelectedNote.isLocked && (
                 <>
                   <span className="inline-flex items-center gap-1 font-bold text-amber-800">
                     <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>{priceLabel || tr('Note ya Kulipia', 'Paid Note')}</span>
+                    <span>{priceLabel || tr('Slide ya Kulipia', 'Paid Slide')}</span>
                   </span>
                   <span aria-hidden="true">·</span>
                 </>
@@ -1180,8 +1286,8 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                     <div>
                       <h2 className="font-display text-lg font-bold text-[#0E2640]">
                         {(liveSelectedNote.lockPrice || 0) > 0
-                          ? tr('Notes Hii Imefungwa Kwa Malipo', 'This Note Is Locked Behind Payment')
-                          : tr('Notes Hii Imefungwa na Msimamizi', 'This Note Is Locked by Admin')}
+                          ? tr('Slide Hii Imefungwa Kwa Malipo', 'This Slide Is Locked Behind Payment')
+                          : tr('Slide Hii Imefungwa na Msimamizi', 'This Slide Is Locked by Admin')}
                       </h2>
                       <p className="mt-0.5 text-xs text-slate-600">
                         {(liveSelectedNote.lockPrice || 0) > 0
@@ -1360,66 +1466,80 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
               </>
             )}
 
-            {isAdmin && (
+            {(isAdmin || canManageNote(liveSelectedNote)) && (
               <div className="mt-8 flex flex-wrap items-center gap-2 border-t border-slate-200 pt-4">
-                <button
-                  type="button"
-                  onClick={() => void handleTogglePin(liveSelectedNote)}
-                  className={`inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-bold ${
-                    liveSelectedNote.isPinned
-                      ? 'border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100'
-                      : 'border-slate-300 bg-white text-slate-800 hover:bg-slate-50'
-                  }`}
-                >
-                  <Pin className="h-4 w-4 text-amber-600" aria-hidden="true" />
-                  <span>
-                    {liveSelectedNote.isPinned
-                      ? tr('Ondoa Pin', 'Unpin File')
-                      : tr('Bandika Juu (Pin)', 'Pin File')}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  disabled={loadingEditNoteId === liveSelectedNote.id}
-                  onClick={() => void startEditNote(liveSelectedNote)}
-                  className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-[#0E2640] hover:bg-slate-50"
-                >
-                  <Edit3 className="h-4 w-4 text-[#075E54]" aria-hidden="true" />
-                  <span>{tr('Hariri Faili Hili', 'Edit File')}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setLockModalNote(liveSelectedNote)}
-                  className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-2 text-xs font-bold text-amber-900 hover:bg-amber-100"
-                >
-                  <Lock className="h-4 w-4" aria-hidden="true" />
-                  <span>{tr('Kufuli, Bei & Wanachama', 'Lock, Price & Members')}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleToggleArchive(liveSelectedNote)}
-                  className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-slate-800 hover:bg-slate-50"
-                >
-                  {liveSelectedNote.isArchived ? (
-                    <>
-                      <ArchiveRestore className="h-4 w-4 text-[#075E54]" aria-hidden="true" />
-                      <span>{tr('Rejesha Mafaili ya Sasa', 'Restore to Active')}</span>
-                    </>
-                  ) : (
-                    <>
-                      <Archive className="h-4 w-4 text-amber-600" aria-hidden="true" />
-                      <span>{tr('Hifadhi Kwenye Kumbukumbu', 'Archive File')}</span>
-                    </>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleDeleteNote(liveSelectedNote)}
-                  className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2 text-xs font-bold text-red-700 hover:bg-red-100"
-                >
-                  <Trash2 className="h-4 w-4" aria-hidden="true" />
-                  <span>{tr('Futa Faili', 'Delete')}</span>
-                </button>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => void handleTogglePin(liveSelectedNote)}
+                    className={`inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-bold ${
+                      liveSelectedNote.isPinned
+                        ? 'border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100'
+                        : 'border-slate-300 bg-white text-slate-800 hover:bg-slate-50'
+                    }`}
+                  >
+                    <Pin className="h-4 w-4 text-amber-600" aria-hidden="true" />
+                    <span>
+                      {liveSelectedNote.isPinned
+                        ? tr('Ondoa Pin', 'Unpin File')
+                        : tr('Bandika Juu (Pin)', 'Pin File')}
+                    </span>
+                  </button>
+                )}
+                {canManageNote(liveSelectedNote) && (
+                  <button
+                    type="button"
+                    disabled={loadingEditNoteId === liveSelectedNote.id}
+                    onClick={() => void startEditNote(liveSelectedNote)}
+                    className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-[#0E2640] hover:bg-slate-50"
+                  >
+                    <Edit3 className="h-4 w-4 text-[#075E54]" aria-hidden="true" />
+                    <span>{tr('Hariri Faili Hili', 'Edit File')}</span>
+                  </button>
+                )}
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => setLockModalNote(liveSelectedNote)}
+                    className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-2 text-xs font-bold text-amber-900 hover:bg-amber-100"
+                  >
+                    <Lock className="h-4 w-4" aria-hidden="true" />
+                    <span>
+                      {liveSelectedNote.visibility === 'private'
+                        ? tr('Funga / Dhibiti Slide ya Binafsi', 'Lock Private Slide')
+                        : tr('Kufuli, Bei & Wanachama', 'Lock, Price & Members')}
+                    </span>
+                  </button>
+                )}
+                {canManageNote(liveSelectedNote) && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void handleToggleArchive(liveSelectedNote)}
+                      className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-slate-800 hover:bg-slate-50"
+                    >
+                      {liveSelectedNote.isArchived ? (
+                        <>
+                          <ArchiveRestore className="h-4 w-4 text-[#075E54]" aria-hidden="true" />
+                          <span>{tr('Rejesha Mafaili ya Sasa', 'Restore to Active')}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Archive className="h-4 w-4 text-amber-600" aria-hidden="true" />
+                          <span>{tr('Hifadhi Kwenye Kumbukumbu', 'Archive File')}</span>
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteNote(liveSelectedNote)}
+                      className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2 text-xs font-bold text-red-700 hover:bg-red-100"
+                    >
+                      <Trash2 className="h-4 w-4" aria-hidden="true" />
+                      <span>{tr('Futa Faili', 'Delete')}</span>
+                    </button>
+                  </>
+                )}
               </div>
             )}
 
@@ -1457,24 +1577,36 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
   // Notes Digital File Cabinet Overview
   return (
     <div className="flex h-full flex-col overflow-hidden bg-[#F5F7FA]">
-      {/* Search, Filter Tabs & New File Action */}
+      {/* Search, Filter Tabs & New Slide Action */}
       <div className="shrink-0 border-b border-slate-200 bg-white px-3.5 py-3 sm:px-5">
         <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
-          <div className="relative flex-1">
-            <Search
-              className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400"
-              aria-hidden="true"
-            />
-            <input
-              type="search"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={tr('Tafuta faili la notes, code, au PDF...', 'Search study files, code, or PDF...')}
-              className="min-h-[42px] w-full rounded-xl border border-slate-200 bg-slate-50 py-1.5 pr-3 pl-9 text-xs text-slate-900 placeholder:text-slate-400 focus:border-[#075E54] focus:bg-white focus:outline-none sm:text-sm"
-            />
+          <div className="flex flex-1 items-center gap-2">
+            {onReturnFromSlide && (
+              <button
+                type="button"
+                onClick={onReturnFromSlide}
+                className="inline-flex min-h-[42px] shrink-0 items-center gap-1.5 rounded-xl bg-[#075E54] px-3 py-1.5 text-xs font-bold text-white shadow-xs transition-colors hover:bg-[#064E46]"
+              >
+                <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+                <span>{tr('Rudi Ulipoishia', 'Resume Chat')}</span>
+              </button>
+            )}
+            <div className="relative flex-1">
+              <Search
+                className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400"
+                aria-hidden="true"
+              />
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={tr('Tafuta faili la slide, code, au PDF...', 'Search slide files, code, or PDF...')}
+                className="min-h-[42px] w-full rounded-xl border border-slate-200 bg-slate-50 py-1.5 pr-3 pl-9 text-xs text-slate-900 placeholder:text-slate-400 focus:border-[#075E54] focus:bg-white focus:outline-none sm:text-sm"
+              />
+            </div>
           </div>
 
-          {isAdmin && (
+          {canAuthorNotes && (
             <button
               type="button"
               onClick={() => {
@@ -1495,52 +1627,112 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
               ) : (
                 <>
                   <Plus className="h-4 w-4 text-[#25D366]" aria-hidden="true" />
-                  <span>{tr('Weka Notes / Pakia PDF', 'New Study File / PDF')}</span>
+                  <span>{tr('Weka Slide / Pakia PDF', 'New Slide / PDF')}</span>
                 </>
               )}
             </button>
           )}
         </div>
 
-        {/* File Folder Filter Strip */}
-        <div className="mt-2.5 flex items-center gap-1.5 overflow-x-auto pb-0.5">
-          {(
-            [
-              { id: 'all', label: tr('Mafaili Yote', 'All Files'), count: filterCounts.all },
-              { id: 'pinned', label: tr('Yaliyo-Pin', 'Pinned'), count: filterCounts.pinned },
-              { id: 'code', label: tr('Code & Amri', 'Code & Cmd'), count: filterCounts.code },
-              { id: 'pdf', label: tr('PDF', 'PDFs'), count: filterCounts.pdf },
-              { id: 'archived', label: tr('Kumbukumbu', 'Archive'), count: filterCounts.archived },
-            ] as { id: NoteFileFilter; label: string; count: number }[]
-          ).map((tab) => {
-            const active = activeFilter === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveFilter(tab.id)}
-                className={`inline-flex min-h-[32px] shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-bold transition-colors ${
-                  active
-                    ? 'border-[#075E54] bg-[#075E54] text-white'
-                    : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                <span>{tab.label}</span>
-                <span
-                  className={`rounded px-1 text-[10px] tabular-nums ${
-                    active ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'
+        {/* File Folder Filter Strip + Owner Bulk Actions */}
+        <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+            {(
+              [
+                { id: 'all', label: tr('Mafaili Yote', 'All Files'), count: filterCounts.all },
+                { id: 'pinned', label: tr('Yaliyo-Pin', 'Pinned'), count: filterCounts.pinned },
+                { id: 'private', label: tr('Binafsi (Private)', 'Private'), count: filterCounts.private },
+                { id: 'code', label: tr('Code & Amri', 'Code & Cmd'), count: filterCounts.code },
+                { id: 'pdf', label: tr('PDF', 'PDFs'), count: filterCounts.pdf },
+                { id: 'archived', label: tr('Kumbukumbu', 'Archive'), count: filterCounts.archived },
+              ] as { id: NoteFileFilter; label: string; count: number }[]
+            ).map((tab) => {
+              const active = activeFilter === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveFilter(tab.id)}
+                  className={`inline-flex min-h-[32px] shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-bold transition-colors ${
+                    active
+                      ? 'border-[#075E54] bg-[#075E54] text-white'
+                      : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
                   }`}
                 >
-                  {tab.count}
-                </span>
+                  <span>{tab.label}</span>
+                  <span
+                    className={`rounded px-1 text-[10px] tabular-nums ${
+                      active ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'
+                    }`}
+                  >
+                    {tab.count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {isAdmin && notes.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {filterCounts.publicTotal > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setBulkDeleteMode('public')}
+                  className="inline-flex min-h-[32px] items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-bold text-red-700 hover:bg-red-100"
+                >
+                  <Trash2 className="h-3 w-3" aria-hidden="true" />
+                  <span>{tr('Futa Zote za Public', 'Delete All Public')}</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setBulkDeleteMode('all')}
+                className="inline-flex min-h-[32px] items-center gap-1 rounded-lg border border-red-300 bg-red-600 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-red-700"
+              >
+                <Trash2 className="h-3 w-3" aria-hidden="true" />
+                <span>{tr('Futa Slide Zote', 'Delete All Slides')}</span>
               </button>
-            );
-          })}
+            </div>
+          )}
         </div>
       </div>
 
       {/* Scrollable Notes File Cabinet & Composer */}
       <div className="flex-1 overflow-y-auto px-3.5 py-4 sm:px-5">
+        {isAdmin && bulkDeleteMode && (
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-red-300 bg-red-50 px-3.5 py-2.5 text-xs text-red-950">
+            <span className="font-bold">
+              {bulkDeleteMode === 'public'
+                ? tr(
+                    `Una uhakika unataka kufuta slide zote za Public (${filterCounts.publicTotal})?`,
+                    `Delete all ${filterCounts.publicTotal} public slides permanently?`
+                  )
+                : tr(
+                    `Una uhakika unataka kufuta kabisa slide ZOTE (${notes.length})?`,
+                    `Delete ALL ${notes.length} slides permanently?`
+                  )}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={bulkDeleting}
+                onClick={() => setBulkDeleteMode(null)}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1 font-bold text-slate-700"
+              >
+                {tr('Ghairi', 'Cancel')}
+              </button>
+              <button
+                type="button"
+                disabled={bulkDeleting}
+                onClick={() => void executeBulkDelete(bulkDeleteMode)}
+                className="rounded-lg bg-red-600 px-3 py-1 font-bold text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {bulkDeleting ? '...' : tr('Ndio, Futa Zote', 'Yes, Delete All')}
+              </button>
+            </div>
+          </div>
+        )}
+
         {pendingDeleteNote && (
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-900">
             <span className="font-bold">
@@ -1567,8 +1759,8 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
           </div>
         )}
 
-        {/* Owner Scholarly Notes & PDF Publisher / Editor */}
-        {isAdmin && composerOpen && (
+        {/* Scholarly Notes & PDF Publisher / Editor (Owner + Signed-in Members) */}
+        {canAuthorNotes && composerOpen && (
           <form
             onSubmit={(e) => void handlePublishNote(e)}
             className="mb-5 rounded-2xl border border-emerald-200 bg-white p-4 shadow-sm sm:p-5"
@@ -1579,8 +1771,8 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                   <Sparkles className="h-4 w-4 text-[#D97706]" aria-hidden="true" />
                   <span>
                     {editingNoteId
-                      ? tr('Hariri Faili la Notes', 'Edit Study File')
-                      : tr('Weka Faili la Notes Kitaalamu au PDF', 'Create Study File or PDF')}
+                      ? tr('Hariri Faili la Slide', 'Edit Slide File')
+                      : tr('Weka Faili la Slide Kitaalamu au PDF', 'Create Slide File or PDF')}
                   </span>
                 </h2>
                 <p className="mt-0.5 text-xs text-slate-600">
@@ -1725,8 +1917,8 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                       className="block text-xs font-semibold text-slate-700"
                     >
                       {pendingPdf
-                        ? tr('Maelezo ya Ziada ya Notes (Hiari ukishaweka PDF)', 'Additional Notes Text (Optional with PDF)')
-                        : tr('Andika au Bandika Notes & Code / Amri Hapa', 'Write or Paste Notes & Code / Commands Here')}
+                        ? tr('Maelezo ya Ziada ya Slide (Hiari ukishaweka PDF)', 'Additional Slide Text (Optional with PDF)')
+                        : tr('Andika au Bandika Slide & Code / Amri Hapa', 'Write or Paste Slides & Code / Commands Here')}
                     </label>
                     <span className="rounded bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-[#075E54] tabular-nums">
                       {tr(
@@ -1823,15 +2015,83 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                 )}
               </div>
 
-              {/* Lock / Paid Note Configuration inside Composer (for new files) */}
-              {!editingNoteId && (
+              {/* Public / Private Visibility Selector */}
+              <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5">
+                <p className="text-xs font-bold text-slate-900">
+                  {tr('Chagua Aina ya Kuhifadhi Slide Hii', 'Choose Slide Privacy Mode')}
+                </p>
+                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => setComposerVisibility('public')}
+                    className={`flex items-start gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                      composerVisibility === 'public'
+                        ? 'border-[#075E54] bg-white text-[#0E2640] ring-1 ring-[#075E54]'
+                        : 'border-slate-200 bg-white/60 text-slate-600 hover:bg-white'
+                    }`}
+                  >
+                    <Globe
+                      className={`mt-0.5 h-4 w-4 shrink-0 ${
+                        composerVisibility === 'public' ? 'text-[#075E54]' : 'text-slate-400'
+                      }`}
+                      aria-hidden="true"
+                    />
+                    <div className="min-w-0">
+                      <span className="block text-xs font-bold">
+                        {tr('Public (Hadharani)', 'Public (Visible to All)')}
+                      </span>
+                      <span className="mt-0.5 block text-[11px] leading-snug text-slate-500">
+                        {isAdmin
+                          ? tr('Wanachama wote wataiona kwenye Slide.', 'All signed-in members can see this slide.')
+                          : tr(
+                              'Wote wataiona. Mmiliki anaweza kuifunga, kuiwekea malipo au kuifuta.',
+                              'All members can see it. The owner can lock, monetize, or delete it.'
+                            )}
+                      </span>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setComposerVisibility('private')}
+                    className={`flex items-start gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                      composerVisibility === 'private'
+                        ? 'border-[#0E2640] bg-white text-[#0E2640] ring-1 ring-[#0E2640]'
+                        : 'border-slate-200 bg-white/60 text-slate-600 hover:bg-white'
+                    }`}
+                  >
+                    <EyeOff
+                      className={`mt-0.5 h-4 w-4 shrink-0 ${
+                        composerVisibility === 'private' ? 'text-[#0E2640]' : 'text-slate-400'
+                      }`}
+                      aria-hidden="true"
+                    />
+                    <div className="min-w-0">
+                      <span className="block text-xs font-bold">
+                        {tr('Private (Binafsi)', 'Private (You & Owner)')}
+                      </span>
+                      <span className="mt-0.5 block text-[11px] leading-snug text-slate-500">
+                        {isAdmin
+                          ? tr('Wewe tu utaona faili hili binafsi.', 'Only you can view this private slide.')
+                          : tr(
+                              'Wewe na mmiliki pekee mtaiona. Mmiliki anaweza kuifunga muda wowote.',
+                              'Only you and the platform owner see it. The owner can lock it anytime.'
+                            )}
+                      </span>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Lock / Paid Note Configuration inside Composer (Owner-only, new files) */}
+              {isAdmin && !editingNoteId && (
                 <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5">
                   <label className="flex cursor-pointer items-center justify-between gap-3">
                     <div className="flex items-center gap-2.5">
                       <Lock className="h-4 w-4 shrink-0 text-[#D97706]" aria-hidden="true" />
                       <div>
                         <span className="block text-xs font-bold text-slate-900">
-                          {tr('Funga Note Hii Kwa Malipo (Paid Lock)', 'Lock This Note Behind Payment')}
+                          {tr('Funga Slide Hii Kwa Malipo (Paid Lock)', 'Lock This Slide Behind Payment')}
                         </span>
                         <span className="block text-[11px] text-slate-500">
                           {tr(
@@ -1980,15 +2240,23 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
               )}
 
               <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                <label className="inline-flex min-h-[40px] cursor-pointer items-center gap-2 text-xs font-semibold text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={pinNote}
-                    onChange={(e) => setPinNote(e.target.checked)}
-                    className="h-4 w-4 rounded border-slate-300 text-[#075E54] focus:ring-[#075E54]"
-                  />
-                  <span>{tr('Bandika juu kabisa (Pin File)', 'Pin file to top')}</span>
-                </label>
+                {isAdmin ? (
+                  <label className="inline-flex min-h-[40px] cursor-pointer items-center gap-2 text-xs font-semibold text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={pinNote}
+                      onChange={(e) => setPinNote(e.target.checked)}
+                      className="h-4 w-4 rounded border-slate-300 text-[#075E54] focus:ring-[#075E54]"
+                    />
+                    <span>{tr('Bandika juu kabisa (Pin File)', 'Pin file to top')}</span>
+                  </label>
+                ) : (
+                  <span className="text-[11px] font-semibold text-slate-500">
+                    {composerVisibility === 'private'
+                      ? tr('Itahifadhiwa kama Private (Binafsi)', 'Saved as Private')
+                      : tr('Itachapishwa kama Public', 'Published as Public')}
+                  </span>
+                )}
 
                 <button
                   type="submit"
@@ -2026,29 +2294,31 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                   ? tr('Hakuna Mafaili Kwenye Kumbukumbu', 'No Archived Files')
                   : activeFilter === 'pinned'
                     ? tr('Hakuna Mafaili Yaliyo-Pin Bado', 'No Pinned Files Yet')
-                    : tr('Bado Hakuna Mafaili ya Notes', 'No Study Files Yet')}
+                    : activeFilter === 'private'
+                      ? tr('Hakuna Mafaili ya Private Bado', 'No Private Files Yet')
+                      : tr('Bado Hakuna Mafaili ya Slide', 'No Slide Files Yet')}
             </h3>
             <p className="mt-1.5 text-xs leading-relaxed text-slate-600">
-              {isAdmin
+              {canAuthorNotes
                 ? tr(
-                    'Bonyeza "Weka Notes / Pakia PDF" hapo juu ili kuunda faili jipya la kusoma.',
-                    'Click "New Study File / PDF" above to create a study file.'
+                    'Bonyeza "Weka Slide / Pakia PDF" hapo juu ili kuandaa notes zako (Public au Private) au kupakia PDF.',
+                    'Click "New Slide / PDF" above to create your study slides (Public or Private) or upload a PDF.'
                   )
                 : tr(
-                    'Mmiliki akiweka faili jipya la notes litaonekana hapa juu kabisa ili ulifungue na kusoma.',
-                    'When the owner adds a study file, it will appear at the top ready to open and read.'
+                    'Mafaili ya slide yataonekana hapa juu kabisa ili uyafungue na kusoma.',
+                    'Slide files will appear at the top ready to open and read.'
                   )}
             </p>
           </div>
         ) : (
-          <section aria-label={tr('Mafaili ya Notes', 'Study Files Cabinet')}>
+          <section aria-label={tr('Mafaili ya Slide', 'Slide Files Cabinet')}>
             <div className="mb-2.5 flex items-center justify-between">
               <h2 className="flex items-center gap-1.5 text-xs font-extrabold tracking-wide text-[#0E2640] uppercase">
                 <FolderOpen className="h-4 w-4 text-[#075E54]" aria-hidden="true" />
                 <span>
                   {activeFilter === 'archived'
-                    ? tr('Mafaili ya Kumbukumbu', 'Archived Study Files')
-                    : tr('Mafaili ya Notes (Mpya Juu)', 'Study Files (Newest First)')}
+                    ? tr('Mafaili ya Kumbukumbu', 'Archived Slide Files')
+                    : tr('Mafaili ya Slide (Mpya Juu)', 'Slide Files (Newest First)')}
                 </span>
               </h2>
               <span className="text-[11px] font-semibold text-slate-500 tabular-nums">
@@ -2131,6 +2401,17 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                               <span>{tr('Ime-Pin', 'Pinned')}</span>
                             </span>
                           )}
+                          {fileNote.visibility === 'private' ? (
+                            <span className="inline-flex items-center gap-0.5 rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-800">
+                              <EyeOff className="h-2.5 w-2.5" aria-hidden="true" />
+                              <span>{tr('Private', 'Private')}</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-0.5 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-[#075E54]">
+                              <Globe className="h-2.5 w-2.5" aria-hidden="true" />
+                              <span>{tr('Public', 'Public')}</span>
+                            </span>
+                          )}
                           {fileNote.isLocked && (
                             <span
                               className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-bold ${
@@ -2202,6 +2483,10 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                             </>
                           ) : null}
                           <span aria-hidden="true">·</span>
+                          <span className="font-semibold text-[#0E2640]">
+                            {fileNote.authorName}
+                          </span>
+                          <span aria-hidden="true">·</span>
                           <span>{formatTime(fileNote.createdAt)}</span>
                         </div>
                       </div>
@@ -2257,55 +2542,65 @@ export const MchartNotesView: React.FC<MchartNotesViewProps> = ({
                       )}
 
                       {isAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => void handleTogglePin(fileNote)}
+                          title={
+                            fileNote.isPinned
+                              ? tr('Ondoa Pin', 'Unpin file')
+                              : tr('Bandika juu (Pin)', 'Pin file to top')
+                          }
+                          className={`flex h-9 w-9 items-center justify-center rounded-xl border ${
+                            fileNote.isPinned
+                              ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                              : 'border-slate-200 text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >
+                          <Pin className="h-3.5 w-3.5" aria-hidden="true" />
+                        </button>
+                      )}
+
+                      {canManageNote(fileNote) && (
+                        <button
+                          type="button"
+                          disabled={loadingEditNoteId === fileNote.id}
+                          onClick={() => void startEditNote(fileNote)}
+                          title={tr('Hariri Faili', 'Edit File')}
+                          className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-[#0E2640] hover:bg-slate-100"
+                        >
+                          {loadingEditNoteId === fileNote.id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
+                          )}
+                        </button>
+                      )}
+
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => setLockModalNote(fileNote)}
+                          title={
+                            fileNote.visibility === 'private'
+                              ? tr('Funga / Dhibiti Slide ya Binafsi', 'Lock Private Slide')
+                              : tr('Dhibiti Kufuli / Malipo', 'Manage Lock / Payment')
+                          }
+                          className={`flex h-9 w-9 items-center justify-center rounded-xl border ${
+                            fileNote.isLocked
+                              ? 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                              : 'border-slate-200 text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >
+                          {fileNote.isLocked ? (
+                            <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+                          ) : (
+                            <LockOpen className="h-3.5 w-3.5" aria-hidden="true" />
+                          )}
+                        </button>
+                      )}
+
+                      {canManageNote(fileNote) && (
                         <>
-                          <button
-                            type="button"
-                            onClick={() => void handleTogglePin(fileNote)}
-                            title={
-                              fileNote.isPinned
-                                ? tr('Ondoa Pin', 'Unpin file')
-                                : tr('Bandika juu (Pin)', 'Pin file to top')
-                            }
-                            className={`flex h-9 w-9 items-center justify-center rounded-xl border ${
-                              fileNote.isPinned
-                                ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100'
-                                : 'border-slate-200 text-slate-600 hover:bg-slate-100'
-                            }`}
-                          >
-                            <Pin className="h-3.5 w-3.5" aria-hidden="true" />
-                          </button>
-
-                          <button
-                            type="button"
-                            disabled={loadingEditNoteId === fileNote.id}
-                            onClick={() => void startEditNote(fileNote)}
-                            title={tr('Hariri Faili', 'Edit File')}
-                            className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-[#0E2640] hover:bg-slate-100"
-                          >
-                            {loadingEditNoteId === fileNote.id ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                            ) : (
-                              <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
-                            )}
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => setLockModalNote(fileNote)}
-                            title={tr('Dhibiti Kufuli / Malipo', 'Manage Lock / Payment')}
-                            className={`flex h-9 w-9 items-center justify-center rounded-xl border ${
-                              fileNote.isLocked
-                                ? 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
-                                : 'border-slate-200 text-slate-600 hover:bg-slate-100'
-                            }`}
-                          >
-                            {fileNote.isLocked ? (
-                              <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-                            ) : (
-                              <LockOpen className="h-3.5 w-3.5" aria-hidden="true" />
-                            )}
-                          </button>
-
                           <button
                             type="button"
                             onClick={() => void handleToggleArchive(fileNote)}
