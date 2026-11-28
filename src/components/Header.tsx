@@ -18,6 +18,8 @@ import {
   Sparkles,
   User as UserIcon,
   UserPlus,
+  Volume2,
+  VolumeX,
   X,
 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
@@ -46,6 +48,7 @@ import {
 import { AuthorName, Avatar, OnlineStatusPill } from './Avatar';
 import { NavIconSection, NavSectionIcon } from './NavIcons';
 import { AuthorVerificationBadge, VerificationBadge } from './VerificationBadge';
+import { isChatSoundMuted, playIncomingMessageSound, setChatSoundMuted } from '../utils/chatSound';
 
 interface HeaderProps {
   activeTab: NavTab;
@@ -161,6 +164,7 @@ export const Header: React.FC<HeaderProps> = ({
   const menuRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
   const fixedHeaderRef = useRef<HTMLElement>(null);
+  const [bellSoundMuted, setBellSoundMuted] = useState<boolean>(() => isChatSoundMuted());
 
   useEffect(() => {
     const el = fixedHeaderRef.current;
@@ -713,6 +717,7 @@ export const Header: React.FC<HeaderProps> = ({
                 setNotifOpen((prev) => {
                   const next = !prev;
                   if (next) {
+                    setBellSoundMuted(isChatSoundMuted());
                     if (isAdmin && activeUnreadSignupCount > 0 && unreadRepliesCount === 0) {
                       setNotifFilter('signups');
                     } else if (unreadRepliesCount > 0 || (userUid && userNotifications.length > 0)) {
@@ -760,18 +765,59 @@ export const Header: React.FC<HeaderProps> = ({
                       </span>
                     )}
                   </div>
-                  {(userNotifications.length > 0 ||
-                    visibleNewsOrTopics.length > 0 ||
-                    (isAdmin && activeUnreadSignupCount > 0)) && (
+                  <div className="flex items-center gap-1.5">
                     <button
                       type="button"
-                      onClick={markAllRead}
-                      className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold text-[#1D4E89] transition-colors hover:bg-sky-50"
+                      onClick={() => {
+                        const nextMuted = !bellSoundMuted;
+                        setChatSoundMuted(nextMuted);
+                        setBellSoundMuted(nextMuted);
+                        if (!nextMuted) {
+                          playIncomingMessageSound(true);
+                        }
+                        onToast?.(
+                          nextMuted
+                            ? tr('Sauti ya arifa imezimwa.', 'Notification sound muted.')
+                            : tr('Sauti ya arifa imewashwa.', 'Notification sound enabled.')
+                        );
+                      }}
+                      title={
+                        bellSoundMuted
+                          ? tr('Washa sauti ya arifa', 'Unmute notification sound')
+                          : tr('Zima sauti ya arifa', 'Mute notification sound')
+                      }
+                      aria-label={
+                        bellSoundMuted
+                          ? tr('Washa sauti ya arifa', 'Unmute notification sound')
+                          : tr('Zima sauti ya arifa', 'Mute notification sound')
+                      }
+                      className={`inline-flex h-7 items-center gap-1 rounded-lg border px-2 text-[11px] font-semibold transition-colors ${
+                        bellSoundMuted
+                          ? 'border-slate-200 bg-white text-slate-500 hover:bg-slate-100'
+                          : 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                      }`}
                     >
-                      <CheckCheck className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>{tr('Zimesomwa zote', 'Mark all read')}</span>
+                      {bellSoundMuted ? (
+                        <VolumeX className="h-3.5 w-3.5" aria-hidden="true" />
+                      ) : (
+                        <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      )}
+                      <span>{bellSoundMuted ? tr('Kimya', 'Muted') : tr('Sauti', 'Sound')}</span>
                     </button>
-                  )}
+
+                    {(userNotifications.length > 0 ||
+                      visibleNewsOrTopics.length > 0 ||
+                      (isAdmin && activeUnreadSignupCount > 0)) && (
+                      <button
+                        type="button"
+                        onClick={markAllRead}
+                        className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold text-[#1D4E89] transition-colors hover:bg-sky-50"
+                      >
+                        <CheckCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>{tr('Zimesomwa zote', 'Mark all read')}</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Filter Tabs: Majibu (Replies) vs Habari vs Usajili (Owner) vs Zote */}

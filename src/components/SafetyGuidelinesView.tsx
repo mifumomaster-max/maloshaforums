@@ -34,21 +34,27 @@ import {
   Lock,
   Mail,
   MessageCircle,
+  Music,
   PenTool,
+  Play,
+  RotateCcw,
   Share2,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
   Trash2,
   Unlock,
+  Upload,
   UserCheck,
   UserPlus,
   Users,
   Video as VideoIcon,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 import { ADMIN_EMAIL, auth, reauthenticateWithGooglePopup } from '../firebase';
-import { uploadImageToCloudinary } from '../services/cloudinaryService';
+import { uploadAudioToCloudinary, uploadImageToCloudinary } from '../services/cloudinaryService';
 import {
   PhoneNotificationPermission,
   getNotificationPermission,
@@ -64,6 +70,7 @@ import {
   ContentRetentionSettings,
   MONETIZATION_PAYOUT_RATES,
   MONETIZATION_REQUIREMENTS,
+  NotificationSoundSettings,
   PlatformLockEmailResult,
   PlatformLockSettings,
   PrimaryBoard,
@@ -80,6 +87,11 @@ import {
   findCommunityRule,
   formatMemberCode,
 } from '../types';
+import {
+  isChatSoundMuted,
+  playIncomingMessageSound,
+  setChatSoundMuted,
+} from '../utils/chatSound';
 import { Avatar, OnlineStatusPill } from './Avatar';
 import { BreakingNewsPosterStudio } from './BreakingNewsPosterStudio';
 import { EditorialCartoonStudio } from './EditorialCartoonStudio';
@@ -150,6 +162,12 @@ interface SafetyGuidelinesViewProps {
   platformLock?: PlatformLockSettings;
   onLockPlatform?: (reason: string) => Promise<PlatformLockEmailResult>;
   onUnlockPlatform?: () => Promise<void>;
+  notificationSoundSettings?: NotificationSoundSettings;
+  onUpdateNotificationSound?: (payload: {
+    soundUrl: string;
+    soundName: string;
+    durationSec?: number;
+  }) => Promise<void>;
 }
 
 const BADGE_LEGEND_ORDER: VerificationBadgeType[] = [
@@ -207,6 +225,8 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
   platformLock,
   onLockPlatform,
   onUnlockPlatform,
+  notificationSoundSettings,
+  onUpdateNotificationSound,
 }) => {
   const { lang, setLang, tr, formatTime, getReportReasonLabel, getBadgeLabel, getBadgeDescription } =
     useLanguage();
@@ -227,6 +247,12 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
   const [pendingPhotoFile, setPendingPhotoFile] = useState<File | null>(null);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [togglingDetailsPrivacy, setTogglingDetailsPrivacy] = useState(false);
+
+  // Notification Sound State (Local Mute + Owner Database Custom Audio Upload)
+  const [appSoundMuted, setAppSoundMuted] = useState<boolean>(() => isChatSoundMuted());
+  const soundFileInputRef = useRef<HTMLInputElement>(null);
+  const [soundUploadProgress, setSoundUploadProgress] = useState<number>(0);
+  const [soundSaving, setSoundSaving] = useState<boolean>(false);
 
   // Password Update / Setup State
   const [currentPassword, setCurrentPassword] = useState('');
@@ -2442,6 +2468,66 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
                       </div>
                     </div>
                   )}
+
+                  {/* Notification & Mchart Audio Toggle + Loud Preview */}
+                  <div className="flex flex-col justify-between gap-3 rounded-lg border border-slate-200 bg-[#F8FAFC] p-3.5 sm:flex-row sm:items-center">
+                    <div className="flex items-start gap-2.5">
+                      {appSoundMuted ? (
+                        <VolumeX className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
+                      ) : (
+                        <Volume2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" aria-hidden="true" />
+                      )}
+                      <div>
+                        <p className="text-xs font-bold text-slate-900">
+                          {tr('Sauti ya Arifa (Mchart & Kengele)', 'Alert Sound (Mchart & Bell)')}
+                        </p>
+                        <p className="text-[11px] text-slate-600">
+                          {notificationSoundSettings?.soundUrl
+                            ? tr(
+                                `Sauti ya jukwaa: ${notificationSoundSettings.soundName || 'Sauti Maalum'}`,
+                                `Platform tone: ${notificationSoundSettings.soundName || 'Custom Tone'}`
+                              )
+                            : tr(
+                                'Sauti ya juu ya Malosha inatumika kwenye Mchart na Kengele ya Arifa.',
+                                'High-volume Malosha chime active on Mchart and Notification Bell.'
+                              )}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => playIncomingMessageSound(true)}
+                        className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        <Play className="h-3.5 w-3.5 text-[#1D4E89]" aria-hidden="true" />
+                        <span>{tr('Jaribu Sauti', 'Test Sound')}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = !appSoundMuted;
+                          setChatSoundMuted(next);
+                          setAppSoundMuted(next);
+                          if (!next) playIncomingMessageSound(true);
+                          onToast(
+                            next
+                              ? tr('Sauti ya arifa imezimwa.', 'Alert sound muted.')
+                              : tr('Sauti ya arifa imewashwa.', 'Alert sound enabled.')
+                          );
+                        }}
+                        className={`min-h-[38px] rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors ${
+                          !appSoundMuted
+                            ? 'border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                            : 'bg-[#0E2640] text-white hover:bg-[#163A5F]'
+                        }`}
+                      >
+                        {appSoundMuted
+                          ? tr('Imezimwa · Washa', 'Muted · Enable')
+                          : tr('Imewashwa · Zima', 'Active · Mute')}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
             </section>
@@ -2513,6 +2599,193 @@ export const SafetyGuidelinesView: React.FC<SafetyGuidelinesViewProps> = ({
                         </span>
                       </div>
                     ))}
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* Accordion 7A-0 (Owner): Global Notification Sound (Mchart & Notification Bell) */}
+          {userUid && isAdmin && onUpdateNotificationSound && (
+            <section className="overflow-hidden rounded-xl border border-indigo-200 bg-white">
+              <button
+                type="button"
+                aria-expanded={Boolean(openAccordions.admin_notification_sound)}
+                onClick={() => toggleAccordion('admin_notification_sound')}
+                className="flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-indigo-50/40 sm:px-5"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-[#1D4E89] ring-1 ring-indigo-200">
+                    <Music className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="truncate font-display text-sm font-bold text-slate-900 sm:text-base">
+                        {tr(
+                          'Sauti ya Arifa za Jukwaa (Mchart & Kengele · Mmiliki)',
+                          'Global Notification Sound (Mchart & Bell · Owner)'
+                        )}
+                      </h2>
+                      <span
+                        className={`rounded-md px-2 py-0.5 text-[10.5px] font-extrabold uppercase ${
+                          notificationSoundSettings?.soundUrl
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-sky-100 text-[#163A5F]'
+                        }`}
+                      >
+                        {notificationSoundSettings?.soundUrl
+                          ? tr('Sauti Maalum (DB)', 'Custom DB Sound')
+                          : tr('Sauti ya Juu Chaguomsingi', 'Default Loud Chime')}
+                      </span>
+                    </div>
+                    <p className="truncate text-xs text-slate-500">
+                      {tr(
+                        'Weka sauti yako kutoka kwenye kifaa ihifadhiwe kwenye database na itumike Mchart & Kengele ya Arifa',
+                        'Upload custom audio saved to database and played across Mchart & Notification Bell'
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <ChevronDown
+                  className={`h-5 w-5 shrink-0 text-slate-500 transition-transform duration-200 ${
+                    openAccordions.admin_notification_sound ? 'rotate-180 text-[#0E2640]' : ''
+                  }`}
+                  aria-hidden="true"
+                />
+              </button>
+
+              {openAccordions.admin_notification_sound && (
+                <div className="space-y-4 border-t border-slate-100 p-4 sm:p-5">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3.5 text-xs leading-relaxed text-slate-700">
+                    <p>
+                      {tr(
+                        'Sauti utakayochagua hapa itahifadhiwa moja kwa moja kwenye hifadhidata (database) na kusikika kwa sauti kubwa kwenye Mchart (group, private chat, slide) pamoja na Icon ya Arifa (Kenye kengele) kwa watumiaji wote.',
+                        'The audio selected here is saved directly in the database and plays loudly across Mchart and the Notification Bell for all members.'
+                      )}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-bold tracking-wide text-slate-500 uppercase">
+                        {tr('Sauti Inayotumika Sasa', 'Currently Active Sound')}
+                      </p>
+                      <p className="mt-0.5 truncate text-sm font-extrabold text-[#0E2640]">
+                        {notificationSoundSettings?.soundUrl
+                          ? notificationSoundSettings.soundName || tr('Sauti Maalum ya Mmiliki', 'Owner Custom Sound')
+                          : tr('Malosha Loud Chime (Sauti Kubwa ya Juu)', 'Malosha Loud Chime (Default)')}
+                      </p>
+                      {notificationSoundSettings?.soundUrl && notificationSoundSettings.durationSec > 0 && (
+                        <p className="mt-0.5 text-[11px] text-slate-500">
+                          {tr('Muda:', 'Duration:')} {notificationSoundSettings.durationSec}s
+                        </p>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => playIncomingMessageSound(true)}
+                      className="inline-flex min-h-[42px] shrink-0 items-center justify-center gap-2 rounded-xl border border-[#1D4E89] bg-sky-50 px-4 py-2 text-xs font-bold text-[#163A5F] transition-colors hover:bg-sky-100"
+                    >
+                      <Volume2 className="h-4 w-4 text-[#1D4E89]" aria-hidden="true" />
+                      <span>{tr('Sikiliza / Jaribu Sauti', 'Preview Sound')}</span>
+                    </button>
+                  </div>
+
+                  <input
+                    ref={soundFileInputRef}
+                    type="file"
+                    accept="audio/*,.mp3,.m4a,.wav,.aac,.ogg,.webm,.flac"
+                    className="hidden"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      if (!file) return;
+                      if (file.size > 10 * 1024 * 1024) {
+                        onToast(
+                          tr(
+                            'Faili la sauti ni kubwa sana. Chagua sauti fupi isiyozidi MB 10.',
+                            'Audio file is too large. Choose a notification tone under 10 MB.'
+                          ),
+                          'error'
+                        );
+                        return;
+                      }
+                      setSoundSaving(true);
+                      setSoundUploadProgress(5);
+                      try {
+                        const uploaded = await uploadAudioToCloudinary(file, (pct) =>
+                          setSoundUploadProgress(pct)
+                        );
+                        await onUpdateNotificationSound({
+                          soundUrl: uploaded.secureUrl,
+                          soundName: file.name.slice(0, 140),
+                          durationSec: uploaded.durationSec,
+                        });
+                        window.setTimeout(() => playIncomingMessageSound(true), 180);
+                      } catch (err) {
+                        onToast(
+                          err instanceof Error
+                            ? err.message
+                            : tr('Imeshindwa kupakia na kuhifadhi sauti.', 'Failed to upload and save sound.'),
+                          'error'
+                        );
+                      } finally {
+                        setSoundSaving(false);
+                        setSoundUploadProgress(0);
+                      }
+                    }}
+                  />
+
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <button
+                      type="button"
+                      disabled={soundSaving}
+                      onClick={() => soundFileInputRef.current?.click()}
+                      className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-[#0E2640] px-4 py-2 text-xs font-bold text-white shadow-sm transition-colors hover:bg-[#163A5F] disabled:opacity-60 sm:text-sm"
+                    >
+                      {soundSaving ? (
+                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <Upload className="h-4 w-4 text-amber-400" aria-hidden="true" />
+                      )}
+                      <span>
+                        {soundSaving
+                          ? tr(`Inapakia (${soundUploadProgress}%)...`, `Uploading (${soundUploadProgress}%)...`)
+                          : tr('Pakia Sauti Yako (.mp3, .m4a, .wav)', 'Upload Custom Sound (.mp3, .m4a, .wav)')}
+                      </span>
+                    </button>
+
+                    {notificationSoundSettings?.soundUrl && (
+                      <button
+                        type="button"
+                        disabled={soundSaving}
+                        onClick={async () => {
+                          setSoundSaving(true);
+                          try {
+                            await onUpdateNotificationSound({
+                              soundUrl: '',
+                              soundName: '',
+                              durationSec: 0,
+                            });
+                            window.setTimeout(() => playIncomingMessageSound(true), 150);
+                          } catch (err) {
+                            onToast(
+                              err instanceof Error
+                                ? err.message
+                                : tr('Imeshindwa kurejesha sauti ya kawaida.', 'Failed to reset sound.'),
+                              'error'
+                            );
+                          } finally {
+                            setSoundSaving(false);
+                          }
+                        }}
+                        className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-60"
+                      >
+                        <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                        <span>{tr('Rejesha Sauti ya Kawaida', 'Reset to Default Sound')}</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               )}

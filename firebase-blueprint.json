@@ -838,6 +838,18 @@
         "data": { "type": "string" }
       },
       "required": ["fileId", "uploaderId", "chunkIndex", "data"]
+    },
+    "NotificationSoundSettings": {
+      "title": "NotificationSoundSettings",
+      "description": "Owner-configured global notification audio file metadata stored in site_settings/notification_sound for Mchart and the Notification Bell.",
+      "type": "object",
+      "properties": {
+        "soundUrl": { "type": "string", "maxLength": 500 },
+        "soundName": { "type": "string", "maxLength": 140 },
+        "durationSec": { "type": "integer" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
     }
   },
   "firestore": {
@@ -939,7 +951,7 @@
     },
     "/site_settings/{settingId}": {
       "schema": { "$ref": "#/entities/SiteNavSettings" },
-      "description": "Platform navigation visibility (navigation), Mchart group config (mchart_group), stats (community_stats), retention schedules (retention), and global owner platform lock (platform_lock)."
+      "description": "Platform navigation visibility (navigation), Mchart group config (mchart_group), stats (community_stats), retention schedules (retention), global owner platform lock (platform_lock), and custom notification audio (notification_sound)."
     },
     "/owner_id_cards/{cardId}": {
       "schema": { "$ref": "#/entities/OwnerCustomIdCard" },

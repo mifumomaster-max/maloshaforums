@@ -40,6 +40,7 @@ import {
   MemberDirectoryCandidate,
   MemberIdRecord,
   MemberIdVerificationResult,
+  NotificationSoundSettings,
   OwnerCustomIdCardData,
   OwnerPhotoFolder,
   OwnerPrivatePhoto,
@@ -4339,6 +4340,73 @@ export async function updateHideVideoTabForUsers(
     hideVideoTabForUsers,
     hideMpollTabForUsers,
   });
+}
+
+export const DEFAULT_NOTIFICATION_SOUND_SETTINGS: NotificationSoundSettings = {
+  soundUrl: '',
+  soundName: '',
+  durationSec: 0,
+  updatedBy: '',
+  updatedAt: null,
+};
+
+export function subscribeNotificationSoundSettings(
+  onUpdate: (settings: NotificationSoundSettings) => void
+): () => void {
+  const ref = doc(db, 'site_settings', 'notification_sound');
+  return onSnapshot(
+    ref,
+    (snap) => {
+      if (!snap.exists()) {
+        onUpdate(DEFAULT_NOTIFICATION_SOUND_SETTINGS);
+        return;
+      }
+      const data = snap.data();
+      const rawUrl = typeof data?.soundUrl === 'string' ? data.soundUrl.trim() : '';
+      const validUrl = rawUrl.startsWith('https://') ? rawUrl.slice(0, 500) : '';
+      onUpdate({
+        soundUrl: validUrl,
+        soundName: typeof data?.soundName === 'string' ? data.soundName.slice(0, 140) : '',
+        durationSec: Math.max(0, Number(data?.durationSec || 0)),
+        updatedBy: typeof data?.updatedBy === 'string' ? data.updatedBy : '',
+        updatedAt: (data?.updatedAt as Timestamp | null) || null,
+      });
+    },
+    () => {
+      onUpdate(DEFAULT_NOTIFICATION_SOUND_SETTINGS);
+    }
+  );
+}
+
+export async function updateNotificationSoundSettings(
+  ownerUid: string,
+  payload: {
+    soundUrl: string;
+    soundName: string;
+    durationSec?: number;
+  }
+): Promise<void> {
+  const path = 'site_settings/notification_sound';
+  const cleanUrl =
+    typeof payload.soundUrl === 'string' && payload.soundUrl.trim().startsWith('https://')
+      ? payload.soundUrl.trim().slice(0, 500)
+      : '';
+  const cleanName = cleanUrl ? sanitizeTextInput(payload.soundName || 'Sauti Maalum', 140) : '';
+  const cleanDuration = cleanUrl
+    ? Math.max(0, Math.min(1200, Math.round(Number(payload.durationSec || 0))))
+    : 0;
+
+  try {
+    await setDoc(doc(db, 'site_settings', 'notification_sound'), {
+      soundUrl: cleanUrl,
+      soundName: cleanName,
+      durationSec: cleanDuration,
+      updatedBy: ownerUid,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
 }
 
 export const DEFAULT_PLATFORM_LOCK_SETTINGS: PlatformLockSettings = {

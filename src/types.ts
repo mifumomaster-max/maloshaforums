@@ -1638,4 +1638,12 @@ export interface PlatformLockEmailResult {
   errorDetail?: string;
 }
 
+export interface NotificationSoundSettings {
+  soundUrl: string;
+  soundName: string;
+  durationSec: number;
+  updatedBy: string;
+  updatedAt: Timestamp | null;
+}
+
 

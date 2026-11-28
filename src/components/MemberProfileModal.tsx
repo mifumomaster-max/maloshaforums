@@ -61,6 +61,7 @@ interface MemberProfileModalProps {
     photoURL?: string;
   }) => Promise<void> | void;
   onOpenTopic?: (topicId: string) => void;
+  onFilterOnlyMyPosts?: () => void;
   onToast: (message: string, kind?: 'success' | 'error') => void;
 }
 
@@ -79,6 +80,7 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
   onSignIn,
   onStartPrivateChat,
   onOpenTopic,
+  onFilterOnlyMyPosts,
   onToast,
 }) => {
   const { tr, formatTime, getBoardLabel, getBadgeLabel } = useLanguage();
@@ -89,8 +91,12 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
   const [startingChat, setStartingChat] = useState(false);
   const [followersDelta, setFollowersDelta] = useState(0);
   const [togglingVisibility, setTogglingVisibility] = useState(false);
+  const [activeModalTab, setActiveModalTab] = useState<'overview' | 'posts'>('overview');
+  const [postBoardFilter, setPostBoardFilter] = useState<'all' | 'Kijiweni' | 'Fursa' | 'Makala'>('all');
 
   useEffect(() => {
+    setActiveModalTab('overview');
+    setPostBoardFilter('all');
     if (!memberUid) {
       setProfile(null);
       setFollowing(false);
@@ -144,17 +150,32 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
     [topics, videos, memberUid, effectiveFollowersCount, profile, effectivePhoto]
   );
 
-  const recentPosts = useMemo(() => {
+  const isRestrictedSuspended = Boolean(isSuspended && !isAdmin);
+
+  const allMemberPosts = useMemo(() => {
     if (!memberUid) return [];
     return topics
-      .filter(
-        (t) =>
-          t.authorId === memberUid &&
-          t.status !== 'archived' &&
-          (t.status !== 'private' || isSelf)
-      )
-      .slice(0, 5);
-  }, [topics, memberUid, isSelf]);
+      .filter((t) => {
+        if (t.authorId !== memberUid || t.status === 'archived') return false;
+        if (t.status === 'private' && !isSelf) return false;
+        if (isRestrictedSuspended && normalizeBoardCategory(t.category) !== 'Kijiweni') {
+          return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        const am = a.createdAt ? a.createdAt.toMillis() : Date.now();
+        const bm = b.createdAt ? b.createdAt.toMillis() : Date.now();
+        return bm - am;
+      });
+  }, [topics, memberUid, isSelf, isRestrictedSuspended]);
+
+  const filteredMemberPosts = useMemo(() => {
+    if (postBoardFilter === 'all') return allMemberPosts;
+    return allMemberPosts.filter((t) => normalizeBoardCategory(t.category) === postBoardFilter);
+  }, [allMemberPosts, postBoardFilter]);
+
+  const recentPosts = useMemo(() => allMemberPosts.slice(0, 5), [allMemberPosts]);
 
   if (!memberUid) return null;
 
@@ -555,18 +576,57 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
                   </strong>{' '}
                   {tr('Wafuasi', 'Followers')}
                 </span>
-                <span>
+                <button
+                  type="button"
+                  onClick={() => setActiveModalTab('posts')}
+                  className="hover:text-[#1D4E89] hover:underline"
+                >
                   <strong className="font-bold text-[#0F1419] tabular-nums">
-                    {metrics.postsCount.toLocaleString()}
+                    {allMemberPosts.length.toLocaleString()}
                   </strong>{' '}
-                  {tr('Machapisho', 'Posts')}
-                </span>
+                  {isSelf ? tr('Post Zangu', 'My Posts') : tr('Machapisho', 'Posts')}
+                </button>
                 <span>
                   <strong className="font-bold text-[#0F1419] tabular-nums">
                     {metrics.totalLikesReceived.toLocaleString()}
                   </strong>{' '}
                   {tr('Likes', 'Likes')}
                 </span>
+              </div>
+            )}
+
+            {/* Modal Tab Switcher: Wasifu & Sifa za Kulipwa vs Post Zangu Tu */}
+            {canViewDetails && !loading && (
+              <div className="mt-3 grid grid-cols-2 gap-1.5 rounded-xl border border-[#D5DCE4] bg-white p-1">
+                <button
+                  type="button"
+                  onClick={() => setActiveModalTab('overview')}
+                  className={`min-h-[36px] rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+                    activeModalTab === 'overview'
+                      ? 'bg-[#0E2640] text-white shadow-xs'
+                      : 'text-[#536471] hover:bg-slate-100 hover:text-[#0F1419]'
+                  }`}
+                >
+                  {isSelf || isAdmin
+                    ? tr('Wasifu & Sifa za Kulipwa', 'Profile & Payout Criteria')
+                    : tr('Wasifu & Takwimu', 'Profile & Stats')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveModalTab('posts')}
+                  className={`inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+                    activeModalTab === 'posts'
+                      ? 'bg-[#1D4E89] text-white shadow-xs'
+                      : 'text-[#536471] hover:bg-slate-100 hover:text-[#0F1419]'
+                  }`}
+                >
+                  <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span>
+                    {isSelf
+                      ? tr(`Post Zangu Tu (${allMemberPosts.length})`, `My Posts Only (${allMemberPosts.length})`)
+                      : tr(`Machapisho (${allMemberPosts.length})`, `Posts (${allMemberPosts.length})`)}
+                  </span>
+                </button>
               </div>
             )}
           </div>
@@ -594,8 +654,150 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
             </div>
           )}
 
+          {/* Dedicated Posts Tab: View ONLY Member / Own Posts */}
+          {canViewDetails && !loading && activeModalTab === 'posts' && (
+            <div className="mt-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#CBD5E1] bg-white px-3.5 py-2.5">
+                <div className="min-w-0">
+                  <h3 className="text-xs font-extrabold text-[#0F1419]">
+                    {isSelf
+                      ? tr(
+                          `Post Zako Tu Ulizopost (${filteredMemberPosts.length})`,
+                          `Your Own Posts Only (${filteredMemberPosts.length})`
+                        )
+                      : tr(
+                          `Machapisho ya ${effectiveName} (${filteredMemberPosts.length})`,
+                          `${effectiveName}'s Posts (${filteredMemberPosts.length})`
+                        )}
+                  </h3>
+                  <p className="text-[11px] text-[#536471]">
+                    {isSelf
+                      ? tr(
+                          'Hapa unaona machapisho yako tu (pamoja na ya faragha). Gusa chapisho lolote kulifungua.',
+                          'Showing only your own posts (including private ones). Tap any post to open it.'
+                        )
+                      : tr(
+                          'Machapisho yote yaliyo wazi ya mwanachama huyu.',
+                          'All public posts published by this member.'
+                        )}
+                  </p>
+                </div>
+
+                {isSelf && onFilterOnlyMyPosts && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onFilterOnlyMyPosts();
+                      onClose();
+                    }}
+                    className="inline-flex min-h-[34px] shrink-0 items-center gap-1.5 rounded-lg bg-[#1D4E89] px-3 py-1.5 text-[11px] font-bold text-white transition-colors hover:bg-[#163A5F]"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>{tr('Chuja Kwenye Kijiweni', 'Filter on Kijiweni')}</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Board Filter Chips */}
+              {!isRestrictedSuspended && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {(['all', 'Kijiweni', 'Fursa', 'Makala'] as const).map((boardKey) => {
+                    const count =
+                      boardKey === 'all'
+                        ? allMemberPosts.length
+                        : allMemberPosts.filter(
+                            (p) => normalizeBoardCategory(p.category) === boardKey
+                          ).length;
+                    const active = postBoardFilter === boardKey;
+                    return (
+                      <button
+                        key={boardKey}
+                        type="button"
+                        onClick={() => setPostBoardFilter(boardKey)}
+                        className={`rounded-lg border px-2.5 py-1 text-[11px] font-bold transition-colors ${
+                          active
+                            ? 'border-[#1D4E89] bg-[#1D4E89] text-white'
+                            : 'border-[#D5DCE4] bg-white text-[#536471] hover:bg-slate-50 hover:text-[#0F1419]'
+                        }`}
+                      >
+                        {boardKey === 'all' ? tr('Zote', 'All') : getBoardLabel(boardKey)} ({count})
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {filteredMemberPosts.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-[#CBD5E1] bg-white px-4 py-8 text-center">
+                  <Sparkles className="mx-auto h-6 w-6 text-slate-400" aria-hidden="true" />
+                  <p className="mt-2 text-xs font-bold text-slate-700">
+                    {isSelf
+                      ? tr('Bado hujapost chapisho kwenye kipengele hiki.', 'You have no posts in this filter yet.')
+                      : tr('Hakuna machapisho kwenye kipengele hiki.', 'No posts found in this filter.')}
+                  </p>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white">
+                  {filteredMemberPosts.map((post) => {
+                    const board = normalizeBoardCategory(post.category);
+                    const thumb = post.images?.[0] || post.coverImage || '';
+                    const titleText =
+                      post.title.trim() ||
+                      post.body.trim().slice(0, 90) ||
+                      tr('Chapisho la picha', 'Photo post');
+                    const excerptText = post.title.trim() ? post.body.trim().slice(0, 110) : '';
+                    return (
+                      <button
+                        key={post.id}
+                        type="button"
+                        onClick={() => {
+                          onOpenTopic?.(post.id);
+                          onClose();
+                        }}
+                        className="flex w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-slate-50"
+                      >
+                        {thumb && (
+                          <img
+                            src={thumb}
+                            alt=""
+                            loading="lazy"
+                            className="h-12 w-12 shrink-0 rounded-lg border border-slate-200 object-cover"
+                          />
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <p className="truncate text-xs font-bold text-slate-900">
+                              {titleText}
+                            </p>
+                            {post.status === 'private' && (
+                              <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-900">
+                                <Lock className="h-2.5 w-2.5" aria-hidden="true" />
+                                <span>{tr('Binafsi', 'Private')}</span>
+                              </span>
+                            )}
+                          </div>
+                          {excerptText && (
+                            <p className="mt-0.5 truncate text-[11px] text-slate-600">
+                              {excerptText}
+                            </p>
+                          )}
+                          <p className="mt-1 text-[10.5px] text-slate-500">
+                            {getBoardLabel(board)} · {formatTime(post.createdAt)} ·{' '}
+                            {post.upvotesCount} likes · {post.repliesCount}{' '}
+                            {tr('maoni', 'comments')}
+                          </p>
+                        </div>
+                        <ExternalLink className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* KPI Summary Cards */}
-          {canViewDetails && !loading && (
+          {canViewDetails && !loading && activeModalTab === 'overview' && (
             <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-5">
               <div className="rounded-xl border border-[#D5DCE4] bg-white p-3 text-center">
                 <Users className="mx-auto h-4 w-4 text-[#1D4E89]" aria-hidden="true" />
@@ -617,15 +819,19 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
                 </p>
               </div>
 
-              <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-center">
+              <button
+                type="button"
+                onClick={() => setActiveModalTab('posts')}
+                className="rounded-xl border border-[#1D4E89]/30 bg-sky-50/60 p-3 text-center transition-colors hover:border-[#1D4E89] hover:bg-sky-50"
+              >
                 <Sparkles className="mx-auto h-4 w-4 text-amber-600" aria-hidden="true" />
                 <p className="mt-1 font-display text-lg font-bold text-slate-900 tabular-nums">
-                  {metrics.postsCount.toLocaleString()}
+                  {allMemberPosts.length.toLocaleString()}
                 </p>
-                <p className="text-[11px] font-medium text-slate-600">
-                  {tr('Post', 'Posts')}
+                <p className="text-[11px] font-bold text-[#1D4E89]">
+                  {isSelf ? tr('Post Zangu', 'My Posts') : tr('Post', 'Posts')}
                 </p>
-              </div>
+              </button>
 
               <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-center">
                 <Heart className="mx-auto h-4 w-4 text-rose-600" aria-hidden="true" />
@@ -650,7 +856,7 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
           )}
 
           {/* Creator Monetization Eligibility & Rules — Strictly Private to Profile Owner or Site Owner */}
-          {(isSelf || isAdmin) && (
+          {(isSelf || isAdmin) && activeModalTab === 'overview' && (
             <div className="mt-5 rounded-xl border border-amber-200 bg-gradient-to-br from-amber-50/80 to-white p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
@@ -768,12 +974,25 @@ export const MemberProfileModal: React.FC<MemberProfileModalProps> = ({
             </div>
           )}
 
-          {/* Recent Posts by Member */}
-          {canViewDetails && !loading && recentPosts.length > 0 && (
+          {/* Recent Posts by Member (Preview + Jump to Full Own Posts Tab) */}
+          {canViewDetails && !loading && activeModalTab === 'overview' && recentPosts.length > 0 && (
             <div className="mt-5">
-              <h3 className="text-xs font-bold tracking-wide text-slate-500 uppercase">
-                {tr('Machapisho ya Hivi Karibuni', 'Recent Posts')}
-              </h3>
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xs font-bold tracking-wide text-slate-500 uppercase">
+                  {isSelf
+                    ? tr('Machapisho Yangu ya Hivi Karibuni', 'My Recent Posts')
+                    : tr('Machapisho ya Hivi Karibuni', 'Recent Posts')}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setActiveModalTab('posts')}
+                  className="text-[11px] font-bold text-[#1D4E89] hover:underline"
+                >
+                  {isSelf
+                    ? tr(`Ona Post Zangu Zote (${allMemberPosts.length}) →`, `View All My Posts (${allMemberPosts.length}) →`)
+                    : tr(`Ona Zote (${allMemberPosts.length}) →`, `View All (${allMemberPosts.length}) →`)}
+                </button>
+              </div>
               <div className="mt-2 divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white">
                 {recentPosts.map((post) => {
                   const board = normalizeBoardCategory(post.category);

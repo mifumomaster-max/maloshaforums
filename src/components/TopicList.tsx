@@ -857,6 +857,33 @@ export const TopicList: React.FC<TopicListProps> = ({
             )}
           </div>
 
+          {userUid && onlyMine && (
+            <div
+              className={`mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs ${
+                effectiveCategory === 'Kijiweni'
+                  ? 'border-[#1D4E89]/35 bg-[#E6EEF7]'
+                  : 'border-sky-200 bg-sky-50'
+              }`}
+            >
+              <div className="flex items-center gap-2 font-semibold text-[#163A5F]">
+                <Sparkles className="h-3.5 w-3.5 text-[#1D4E89]" aria-hidden="true" />
+                <span>
+                  {tr(
+                    `Unaona Post Zako Tu (${filteredTopics.length})`,
+                    `Showing Your Own Posts Only (${filteredTopics.length})`
+                  )}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={onToggleOnlyMine}
+                className="inline-flex min-h-[32px] items-center gap-1.5 rounded-md border border-[#1D4E89] bg-[#1D4E89] px-2.5 py-1 text-xs font-bold text-white transition-colors hover:bg-[#163A5F]"
+              >
+                <span>{tr('Onyesha Zote', 'Show All Posts')}</span>
+              </button>
+            </div>
+          )}
+
           {userUid && myPrivatePostsCount > 0 && (
             <div className={`mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs ${
               effectiveCategory === 'Kijiweni'

@@ -525,6 +525,7 @@ service cloud.firestore {
         settingId == 'community_stats' ||
         settingId == 'mchart_group' ||
         settingId == 'platform_lock' ||
+        settingId == 'notification_sound' ||
         isAdmin()
       );
       allow list: if false;

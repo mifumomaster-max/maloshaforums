@@ -40,6 +40,7 @@ import {
   MemberDirectoryCandidate,
   NavTab,
   NavUnreadCounts,
+  NotificationSoundSettings,
   PlatformLockSettings,
   Poll,
   PollBallot,
@@ -65,6 +66,7 @@ import {
 import {
   DEFAULT_CONTENT_RETENTION_SETTINGS,
   DEFAULT_MCHART_GROUP_SETTINGS,
+  DEFAULT_NOTIFICATION_SOUND_SETTINGS,
   DEFAULT_PLATFORM_LOCK_SETTINGS,
   READ_NOTIFICATION_TTL_MS,
   checkUserVideoLikesBatch,
@@ -87,6 +89,7 @@ import {
   subscribeContentRetentionSettings,
   subscribeMchartGroupReadCursors,
   subscribeMchartGroupSettings,
+  subscribeNotificationSoundSettings,
   subscribePlatformLockSettings,
   subscribeSiteNavSettings,
   syncUserProfile,
@@ -95,6 +98,7 @@ import {
   unlockEntirePlatform,
   updateContentRetentionSettings,
   updateHideVideoTabForUsers,
+  updateNotificationSoundSettings,
   updatePrivatePhoneNumber,
   updateReportStatus,
   updateSiteNavSettings,
@@ -142,7 +146,11 @@ import {
   syncBackgroundSummaryNotification,
   updateAppBadgeCount,
 } from './services/notificationService';
-import { initChatAudioUnlock, playIncomingMessageSound } from './utils/chatSound';
+import {
+  initChatAudioUnlock,
+  playIncomingMessageSound,
+  setConfiguredNotificationSound,
+} from './utils/chatSound';
 import { useMobileKeyboardState } from './utils/mobileKeyboard';
 
 const CHAT_LAST_SEEN_KEY = 'malosha_chat_last_seen_ms_v1';
@@ -261,6 +269,11 @@ function ForumShell() {
   const [userNotifications, setUserNotifications] = useState<UserNotification[]>([]);
   const [hideVideoTabForUsers, setHideVideoTabForUsers] = useState(false);
   const [hideMpollTabForUsers, setHideMpollTabForUsers] = useState(false);
+  const [notificationSoundSettings, setNotificationSoundSettings] =
+    useState<NotificationSoundSettings>(() => ({
+      ...DEFAULT_NOTIFICATION_SOUND_SETTINGS,
+    }));
+  const suppressNextTopicsAlertRef = useRef(false);
   const [platformLock, setPlatformLock] = useState<PlatformLockSettings>(() => ({
     ...DEFAULT_PLATFORM_LOCK_SETTINGS,
   }));
@@ -871,6 +884,7 @@ function ForumShell() {
 
   const handleLoadMoreCloudTopics = useCallback(() => {
     if (loadingMoreCloudTopics || !hasMoreCloudTopics) return;
+    suppressNextTopicsAlertRef.current = true;
     setLoadingMoreCloudTopics(true);
     setTopicsFetchLimit((prev) => prev + 100);
   }, [loadingMoreCloudTopics, hasMoreCloudTopics]);
@@ -1358,6 +1372,7 @@ function ForumShell() {
           !document.hidden;
 
         if (!isViewingNotes) {
+          playIncomingMessageSound();
           const alertTitle = tr('Slide Mpya · Mchart (Malosha)', 'New Slide · Malosha Mchart');
           if (typeof document !== 'undefined' && !document.hidden) {
             showToast(`${alertTitle}: ${newestNote.title}`);
@@ -2159,6 +2174,37 @@ function ForumShell() {
     return () => unsub();
   }, []);
 
+  // Real-time global custom notification sound stored in Firestore (used in Mchart & Notification Bell)
+  useEffect(() => {
+    const unsub = subscribeNotificationSoundSettings((settings) => {
+      setNotificationSoundSettings(settings);
+      setConfiguredNotificationSound({
+        soundUrl: settings.soundUrl,
+        soundName: settings.soundName,
+      });
+    });
+    return () => unsub();
+  }, []);
+
+  const handleUpdateNotificationSound = useCallback(
+    async (payload: { soundUrl: string; soundName: string; durationSec?: number }) => {
+      if (!user?.uid || !isAdmin) return;
+      await updateNotificationSoundSettings(user.uid, payload);
+      showToast(
+        payload.soundUrl
+          ? tr(
+              'Sauti mpya ya arifa imehifadhiwa kwenye database na inatumika pote!',
+              'Custom notification sound saved to database and active everywhere!'
+            )
+          : tr(
+              'Sauti ya kawaida ya Malosha imerejeshwa kwenye database.',
+              'Default Malosha notification sound restored.'
+            )
+      );
+    },
+    [user?.uid, isAdmin, showToast, tr]
+  );
+
   // Auto-unlock entire platform when verified owner opens the email unlock link (?unlock_platform=...)
   useEffect(() => {
     if (!pendingPlatformUnlockToken || !authReady || !platformLockLoaded) return;
@@ -2568,6 +2614,7 @@ function ForumShell() {
         !document.hidden;
 
       if (!isViewingVideoFeed) {
+        playIncomingMessageSound();
         const alertTitle = tr('Video Mpya · Malosha Reels', 'New Video · Malosha Reels');
         const alertBody =
           newestVideo.caption.trim() ||
@@ -2638,8 +2685,12 @@ function ForumShell() {
           return;
         }
 
-        // Keep new member registration notifications exclusively in the Header Notification Bell (no popup/toast)
+        // Keep new member registration notifications exclusively in the Header Notification Bell (play bell sound on new signup)
+        const hasNewSignup = list.some((u) => !knownAdminSignupIdsRef.current.has(u.uid));
         list.forEach((u) => knownAdminSignupIdsRef.current.add(u.uid));
+        if (hasNewSignup) {
+          playIncomingMessageSound();
+        }
       },
       () => {
         // Non-fatal fallback
@@ -2767,6 +2818,7 @@ function ForumShell() {
           if (isViewingSameTopic) {
             void markUserNotificationRead(user.uid, newestUnread.id);
           } else {
+            playIncomingMessageSound();
             const actionText = isModerationAlert
               ? newestUnread.topicTitle || tr('Taarifa ya Usalama', 'Safety Moderation Notice')
               : newestUnread.type === 'comment_reply'
@@ -3574,9 +3626,18 @@ function ForumShell() {
       return;
     }
 
-    const newlyPublished = topics.find(
-      (t) => !knownTopicIdsRef.current.has(t.id) && t.status !== 'private'
-    );
+    if (suppressNextTopicsAlertRef.current) {
+      knownTopicIdsRef.current = new Set(topics.map((t) => t.id));
+      suppressNextTopicsAlertRef.current = false;
+      return;
+    }
+
+    const nowMs = Date.now();
+    const newlyPublished = topics.find((t) => {
+      if (knownTopicIdsRef.current.has(t.id) || t.status === 'private') return false;
+      const ageMs = t.createdAt ? nowMs - t.createdAt.toMillis() : 0;
+      return ageMs <= 10 * 60 * 1000;
+    });
     knownTopicIdsRef.current = new Set(topics.map((t) => t.id));
 
     if (newlyPublished && newlyPublished.authorId !== user?.uid && newlyPublished.status !== 'private') {
@@ -3584,6 +3645,7 @@ function ForumShell() {
       if (isSuspended && board !== 'Kijiweni') {
         return;
       }
+      playIncomingMessageSound();
       const alertTitle =
         board === 'Makala'
           ? tr('Habari Mpya · Malosha', 'Breaking News · Malosha')
@@ -4523,6 +4585,8 @@ function ForumShell() {
             platformLock={platformLock}
             onLockPlatform={isAdmin ? handleLockPlatform : undefined}
             onUnlockPlatform={isAdmin ? handleUnlockPlatform : undefined}
+            notificationSoundSettings={notificationSoundSettings}
+            onUpdateNotificationSound={isAdmin ? handleUpdateNotificationSound : undefined}
           />
         ) : activeTab === 'chat' && !isSuspended ? (
           <ForumChatView
@@ -4857,6 +4921,12 @@ function ForumShell() {
           setSelectedTopicId(null);
         }}
         onOpenTopic={openTopicFromFeed}
+        onFilterOnlyMyPosts={() => {
+          setSelectedTopicId(null);
+          setSelectedCategory('all');
+          setActiveTab('kijiweni');
+          setOnlyMine(true);
+        }}
         onToast={showToast}
       />
 

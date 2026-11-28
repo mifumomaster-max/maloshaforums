@@ -39,6 +39,8 @@ function fisherYatesShuffle<T>(items: T[], seed: number): T[] {
   return copy;
 }
 
+const FRESH_TOP_WINDOW_MS = 12 * 60 * 60 * 1000;
+
 export function sortTopicsList(
   list: Topic[],
   sortMode: SortMode,
@@ -75,17 +77,39 @@ export function sortTopicsList(
 
   if (sortMode !== 'mixed' || newestFirst.length <= 3) {
     if (sortMode === 'newest' && newestFirst.length > 1) {
-      const first100 = fisherYatesShuffle(newestFirst.slice(0, 100), mixSeed);
-      if (previousTopId && first100.length > 1 && first100[0]?.id === previousTopId) {
-        const rand = createMulberry32(mixSeed ^ 0x9e3779b9);
-        const swapPool = Math.min(first100.length - 1, 20);
-        const swapIdx = 1 + Math.floor(rand() * swapPool);
-        const tmp = first100[0];
-        first100[0] = first100[swapIdx];
-        first100[swapIdx] = tmp;
+      const nowMs = Date.now();
+      const fresh12h: Topic[] = [];
+      const olderThan12h: Topic[] = [];
+
+      for (const item of newestFirst) {
+        if (nowMs - getCreatedMillis(item) <= FRESH_TOP_WINDOW_MS) {
+          fresh12h.push(item);
+        } else {
+          olderThan12h.push(item);
+        }
       }
-      const restOlder = newestFirst.slice(100);
-      return [...first100, ...restOlder];
+
+      const shuffledOlderFirst100 =
+        olderThan12h.length > 1
+          ? fisherYatesShuffle(olderThan12h.slice(0, 100), mixSeed)
+          : olderThan12h.slice(0, 100);
+
+      if (
+        fresh12h.length === 0 &&
+        previousTopId &&
+        shuffledOlderFirst100.length > 1 &&
+        shuffledOlderFirst100[0]?.id === previousTopId
+      ) {
+        const rand = createMulberry32(mixSeed ^ 0x9e3779b9);
+        const swapPool = Math.min(shuffledOlderFirst100.length - 1, 20);
+        const swapIdx = 1 + Math.floor(rand() * swapPool);
+        const tmp = shuffledOlderFirst100[0];
+        shuffledOlderFirst100[0] = shuffledOlderFirst100[swapIdx];
+        shuffledOlderFirst100[swapIdx] = tmp;
+      }
+
+      const restOlder = olderThan12h.slice(100);
+      return [...fresh12h, ...shuffledOlderFirst100, ...restOlder];
     }
     return newestFirst;
   }
